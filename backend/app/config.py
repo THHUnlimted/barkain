@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     RATE_LIMIT_WRITE: int = 30
     RATE_LIMIT_AI: int = 10
 
+    # AI — Product Resolution
+    GEMINI_API_KEY: str = ""
+    UPCITEMDB_API_KEY: str = ""
+
     # App
     APP_VERSION: str = "0.1.0"
 

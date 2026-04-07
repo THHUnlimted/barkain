@@ -8,6 +8,7 @@ from app.config import settings
 from app.database import async_engine
 from app.dependencies import get_redis
 from app.middleware import setup_middleware
+from modules.m1_product.router import router as m1_product_router
 
 app = FastAPI(
     title="Barkain API",
@@ -17,6 +18,7 @@ app = FastAPI(
 )
 
 setup_middleware(app)
+app.include_router(m1_product_router)
 
 
 @app.get("/api/v1/health")

@@ -260,6 +260,7 @@ This project uses a **two-tier AI workflow:**
 **Phase 0 — Planning Complete** ✅
 **Step 0 — Infrastructure Provisioning: COMPLETE** ✅ (2026-04-06)
 **Step 1a — Database Schema + FastAPI Skeleton + Auth: COMPLETE** ✅ (2026-04-07)
+**Step 1b — M1 Product Resolution + AI Abstraction: COMPLETE** ✅ (2026-04-07)
 **Phase 1 — Foundation: IN PROGRESS**
 
 - Architecture documents: ✅
@@ -285,9 +286,12 @@ This project uses a **two-tier AI workflow:**
 - Rate limiting: ✅ (Redis sorted set sliding window, per-user, 3 tiers)
 - Retailer seed: ✅ (11 Phase 1 retailers)
 - Backend tests: ✅ (14 passing — health, auth, rate limiting, migrations, seed)
+- AI abstraction layer: ✅ (`backend/ai/abstraction.py` — Gemini API wrapper with retry logic)
+- M1 Product resolution: ✅ (POST /api/v1/products/resolve — Gemini primary, UPCitemdb backup, Redis 24hr cache)
+- M1 tests: ✅ (12 new — validation, auth, resolution chain, caching, fallback, 404)
 
-**Test counts:** 14 backend, 0 iOS unit, 0 UI, 0 snapshot
-**Build status:** Backend compiles and serves health endpoint; `ruff check` clean
+**Test counts:** 26 backend, 0 iOS unit, 0 UI, 0 snapshot
+**Build status:** Backend compiles and serves health + product resolve endpoints; `ruff check` clean
 
 ### Key Files Created (Step 1a)
 ```
@@ -305,6 +309,21 @@ infrastructure/migrations/versions/0001_initial_schema.py  # All 21 tables
 scripts/seed_retailers.py         # 11 retailer upsert
 backend/tests/conftest.py         # Test fixtures (Docker PG port 5433, fakeredis, auth bypass)
 backend/tests/test_*.py           # 5 test files, 14 tests
+```
+
+### Key Files Created (Step 1b)
+```
+backend/ai/__init__.py            # AI package init
+backend/ai/abstraction.py         # Gemini API wrapper (lazy init, retry, JSON parsing)
+backend/ai/prompts/__init__.py    # Prompts package init
+backend/ai/prompts/upc_lookup.py  # UPC→product prompt template
+backend/modules/m1_product/schemas.py   # ProductResolveRequest, ProductResponse
+backend/modules/m1_product/service.py   # ProductResolutionService (Redis→PG→Gemini→UPCitemdb→404)
+backend/modules/m1_product/router.py    # POST /api/v1/products/resolve
+backend/modules/m1_product/upcitemdb.py # UPCitemdb backup client
+backend/tests/modules/test_m1_product.py  # 12 tests
+backend/tests/fixtures/gemini_upc_response.json   # Canned Gemini response
+backend/tests/fixtures/upcitemdb_response.json     # Canned UPCitemdb response
 ```
 
 ---
