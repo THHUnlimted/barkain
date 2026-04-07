@@ -1,0 +1,40 @@
+{
+  "mcpServers": {
+    "XcodeBuildMCP": {
+      "command": "xcodebuildmcp",
+      "args": ["mcp"]
+    },
+    "postgres": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "DATABASE_URI",
+        "crystaldba/postgres-mcp",
+        "--access-mode=unrestricted"
+      ],
+      "env": {
+        "DATABASE_URI": "postgresql://app:localdev@localhost:5432/barkain"
+      }
+    },
+    "redis": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "--name",
+        "redis-mcp-server",
+        "-i",
+        "-e", "REDIS_HOST=host.docker.internal",
+        "-e", "REDIS_PORT=6379",
+        "mcp/redis"
+      ]
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    }
+  }
+}

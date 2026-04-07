@@ -1,0 +1,49 @@
+# ── Environment ───────────────────────────────────
+.env
+.env.local
+.env.production
+
+# ── Python ────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# ── iOS / Xcode ──────────────────────────────────
+Barkain.xcodeproj/xcuserdata/
+Barkain.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+*.ipa
+*.dSYM.zip
+*.dSYM
+Config/Secrets.xcconfig
+
+# ── IDE ──────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ── Docker ───────────────────────────────────────
+# Don't ignore docker-compose.yml — it's committed
+
+# ── Testing ──────────────────────────────────────
+.coverage
+htmlcov/
+.pytest_cache/
+TestResults.xcresult
+
+# ── Prompt Packages (NOT in repo) ────────────────
+prompts/
+
+# ── Misc ─────────────────────────────────────────
+*.log
+tmp/
