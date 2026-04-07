@@ -1,0 +1,68 @@
+// extract.js — DOM eval template for agent-browser.
+// Run via: agent-browser --cdp 9222 eval --stdin < extract.js
+//
+// Placeholders (replaced by base-extract.sh before execution):
+//   __ANCHOR_SELECTOR__ — CSS selector for product cards
+//   __MAX_LISTINGS__    — maximum listings to extract
+//
+// Retailer containers replace this file with site-specific extraction logic.
+
+(() => {
+  // 1. Select all product cards via a stable selector (data attribute or URL pattern)
+  const cards = document.querySelectorAll('__ANCHOR_SELECTOR__');
+
+  // 2. Deduplicate (some sites render the same product twice)
+  const seen = new Set();
+  const unique = Array.from(cards).filter(el => {
+    const key = el.href || el.getAttribute('data-id') || el.getAttribute('data-item-id') || el.innerText.slice(0, 50);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // 3. Extract fields from each card
+  const listings = unique.slice(0, __MAX_LISTINGS__).map((el, i) => {
+    const text = el.innerText.trim();
+
+    // Price extraction — use innerText of price container, regex out $X.XX
+    const priceMatch = text.match(/\$[\d,]+\.?\d*/);
+    const price = priceMatch ? parseFloat(priceMatch[0].replace(/[$,]/g, '')) : 0;
+
+    // Title — first heading or significant text
+    const titleEl = el.querySelector('h2, h3, [data-test*="title"], [class*="title"]');
+    const title = titleEl ? titleEl.innerText.trim() : text.split('\n')[0].slice(0, 120);
+
+    // URL — from anchor href
+    const linkEl = el.tagName === 'A' ? el : el.querySelector('a[href]');
+    const url = linkEl ? linkEl.href : '';
+
+    // Image — from img src
+    const imgEl = el.querySelector('img[src]');
+    const image_url = imgEl ? imgEl.src : null;
+
+    return {
+      position: i + 1,
+      title,
+      price,
+      original_price: null,
+      currency: 'USD',
+      url,
+      condition: 'new',
+      is_available: true,
+      image_url,
+      seller: null,
+      extraction_method: 'dom_eval'
+    };
+  });
+
+  // 4. Return as JSON with metadata
+  return JSON.stringify({
+    listings,
+    metadata: {
+      url: location.href,
+      extracted_at: new Date().toISOString(),
+      count: listings.length,
+      bot_detected: false
+    }
+  }, null, 2);
+})()
