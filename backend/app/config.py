@@ -37,5 +37,23 @@ class Settings(BaseSettings):
     # App
     APP_VERSION: str = "0.1.0"
 
+    # Containers (agent-browser scraper infrastructure)
+    CONTAINER_URL_PATTERN: str = "http://localhost:808{port}"
+    CONTAINER_TIMEOUT_SECONDS: int = 30
+    CONTAINER_RETRY_COUNT: int = 1
+    CONTAINER_PORTS: dict = {
+        "amazon": 1,
+        "best_buy": 2,
+        "walmart": 3,
+        "target": 4,
+        "home_depot": 5,
+        "lowes": 6,
+        "ebay_new": 7,
+        "ebay_used": 8,
+        "sams_club": 9,
+        "backmarket": 10,
+        "fb_marketplace": 11,
+    }
+
 
 settings = Settings()

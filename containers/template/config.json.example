@@ -1,0 +1,34 @@
+{
+  "retailer_id": "template",
+  "display_name": "Template Retailer",
+  "base_url": "https://www.example.com",
+  "script_version": "0.0.0",
+  "search_url_template": "https://www.example.com/search?q=",
+  "selectors": {
+    "anchor": "[data-product-id]",
+    "title": ".product-title",
+    "price": ".product-price",
+    "original_price": ".original-price",
+    "image": ".product-image img",
+    "url": "a.product-link",
+    "availability": ".stock-status"
+  },
+  "rate_limit": {
+    "requests_per_minute": 10,
+    "concurrent": 2,
+    "backoff_seconds": [5, 15, 60]
+  },
+  "anti_detection": {
+    "warm_up": true,
+    "warm_up_url": "https://www.example.com",
+    "wait_strategy": "networkidle",
+    "jitter_min_ms": 800,
+    "jitter_max_ms": 2500,
+    "scroll_passes": 5
+  },
+  "health": {
+    "consecutive_failures": 0,
+    "max_failures_before_alert": 3,
+    "status": "healthy"
+  }
+}

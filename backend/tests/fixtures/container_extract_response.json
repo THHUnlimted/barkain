@@ -1,0 +1,50 @@
+{
+  "retailer_id": "walmart",
+  "query": "Samsung 65 inch TV",
+  "extraction_time_ms": 4523,
+  "listings": [
+    {
+      "title": "Samsung 65\" Class QLED 4K Smart TV",
+      "price": 697.99,
+      "original_price": 999.99,
+      "currency": "USD",
+      "url": "https://www.walmart.com/ip/Samsung-65-Class-QLED-4K/12345",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://i5.walmartimages.com/example.jpg",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "Samsung 65\" Crystal UHD 4K TV",
+      "price": 447.99,
+      "original_price": 529.99,
+      "currency": "USD",
+      "url": "https://www.walmart.com/ip/Samsung-65-Crystal-UHD/67890",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://i5.walmartimages.com/example2.jpg",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "Samsung 65\" The Frame QLED 4K TV",
+      "price": 1497.99,
+      "original_price": 1599.99,
+      "currency": "USD",
+      "url": "https://www.walmart.com/ip/Samsung-65-The-Frame/11111",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://i5.walmartimages.com/example3.jpg",
+      "seller": "Samsung Official",
+      "extraction_method": "dom_eval"
+    }
+  ],
+  "metadata": {
+    "url": "https://www.walmart.com/search?q=Samsung+65+inch+TV",
+    "extracted_at": "2026-04-07T12:00:00Z",
+    "script_version": "0.1.0",
+    "bot_detected": false
+  },
+  "error": null
+}

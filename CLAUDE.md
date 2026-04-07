@@ -261,6 +261,7 @@ This project uses a **two-tier AI workflow:**
 **Step 0 — Infrastructure Provisioning: COMPLETE** ✅ (2026-04-06)
 **Step 1a — Database Schema + FastAPI Skeleton + Auth: COMPLETE** ✅ (2026-04-07)
 **Step 1b — M1 Product Resolution + AI Abstraction: COMPLETE** ✅ (2026-04-07)
+**Step 1c — Container Infrastructure + Backend Client: COMPLETE** ✅ (2026-04-07)
 **Phase 1 — Foundation: IN PROGRESS**
 
 - Architecture documents: ✅
@@ -289,9 +290,15 @@ This project uses a **two-tier AI workflow:**
 - AI abstraction layer: ✅ (`backend/ai/abstraction.py` — Gemini API wrapper with retry logic)
 - M1 Product resolution: ✅ (POST /api/v1/products/resolve — Gemini primary, UPCitemdb backup, Redis 24hr cache)
 - M1 tests: ✅ (12 new — validation, auth, resolution chain, caching, fallback, 404)
+- Container template: ✅ (`containers/template/` — Dockerfile, server.py, base-extract.sh, extract.js, config.json, test_fixtures.json)
+- Container Dockerfile: ✅ (builds successfully, health endpoint responds, Chromium + agent-browser + Xvfb + FastAPI)
+- Container client: ✅ (`backend/modules/m2_prices/container_client.py` — parallel dispatch, 30s timeout, 1 retry, partial failure tolerance)
+- M2 schemas: ✅ (ContainerExtractRequest, ContainerListing, ContainerResponse, ContainerHealthResponse)
+- Container config: ✅ (CONTAINER_URL_PATTERN, CONTAINER_PORTS mapping 11 retailers to ports 8081-8091)
+- Container client tests: ✅ (14 new — extract success/timeout/error/retry, extract_all parallel/partial/all-fail, health check, URL resolution, normalization)
 
-**Test counts:** 26 backend, 0 iOS unit, 0 UI, 0 snapshot
-**Build status:** Backend compiles and serves health + product resolve endpoints; `ruff check` clean
+**Test counts:** 40 backend, 0 iOS unit, 0 UI, 0 snapshot
+**Build status:** Backend compiles and serves health + product resolve endpoints; container template builds and responds to GET /health; `ruff check` clean
 
 ### Key Files Created (Step 1a)
 ```
@@ -324,6 +331,22 @@ backend/modules/m1_product/upcitemdb.py # UPCitemdb backup client
 backend/tests/modules/test_m1_product.py  # 12 tests
 backend/tests/fixtures/gemini_upc_response.json   # Canned Gemini response
 backend/tests/fixtures/upcitemdb_response.json     # Canned UPCitemdb response
+```
+
+### Key Files Created (Step 1c)
+```
+containers/template/Dockerfile         # Base image: Node 20 + Chromium + Python/FastAPI + Xvfb
+containers/template/entrypoint.sh      # Start Xvfb + uvicorn
+containers/template/server.py          # FastAPI with GET /health + POST /extract
+containers/template/base-extract.sh    # 9-step extraction skeleton with placeholders
+containers/template/extract.js.example # DOM eval JavaScript template
+containers/template/config.json.example    # Per-retailer config schema
+containers/template/test_fixtures.json.example  # Test queries with expected outputs
+containers/README.md                   # Build/run/test documentation + port assignments
+backend/modules/m2_prices/schemas.py   # Pydantic models for container communication
+backend/modules/m2_prices/container_client.py  # HTTP dispatch to scraper containers
+backend/tests/modules/test_container_client.py # 14 tests (respx mocking)
+backend/tests/fixtures/container_extract_response.json  # Canned container response
 ```
 
 ---

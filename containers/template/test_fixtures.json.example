@@ -1,0 +1,21 @@
+{
+  "retailer_id": "template",
+  "test_queries": [
+    {
+      "query": "Sony WH-1000XM5",
+      "product_name": "Sony WH-1000XM5 Wireless Headphones",
+      "upc": "027242923782",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url"],
+      "price_range": {"min": 200, "max": 500}
+    },
+    {
+      "query": "Samsung 65 inch TV",
+      "product_name": "Samsung 65\" Class QLED 4K TV",
+      "upc": "887276123456",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url", "image_url"],
+      "price_range": {"min": 400, "max": 2000}
+    }
+  ]
+}

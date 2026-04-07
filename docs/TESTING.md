@@ -38,7 +38,8 @@ backend/tests/
     ├── ebay_response.json         # Canned eBay Browse API response
     ├── keepa_response.json        # Canned Keepa API response
     ├── gemini_upc_response.json       # Canned Gemini UPC lookup response
-    └── upcitemdb_response.json        # Canned UPCitemdb backup response
+    ├── upcitemdb_response.json        # Canned UPCitemdb backup response
+    └── container_extract_response.json # Canned container extraction response
 ```
 
 ### conftest.py Pattern
@@ -367,7 +368,8 @@ Update this table after every step:
 |-----------|---------|----------|--------|----------|---------------|
 | Step 1a | 14 | 0 | 0 | 0 | 14 (health×4, auth×3, rate_limit×3, migrations×2, seed×2) |
 | Step 1b | 26 | 0 | 0 | 0 | 12 (validation×3, auth×1, redis_cache×1, postgres×1, gemini×1, upcitemdb×1, 404×1, response_shape×1, ean13×1, idempotency×1) |
-| **Total** | **26** | **0** | **0** | **0** | |
+| Step 1c | 40 | 0 | 0 | 0 | 14 (url_resolution×2, extract_success×1, extract_timeout×1, extract_conn_error×1, extract_http500×1, extract_retry×1, extract_all_succeed×1, extract_all_partial×1, extract_all_fail×1, extract_all_specific×1, health_healthy×1, health_timeout×1, response_normalization×1) |
+| **Total** | **40** | **0** | **0** | **0** | |
 
 ---
 
