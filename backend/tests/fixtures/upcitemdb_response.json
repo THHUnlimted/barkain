@@ -1,0 +1,21 @@
+{
+    "code": "OK",
+    "total": 1,
+    "offset": 0,
+    "items": [
+        {
+            "ean": "0027242923782",
+            "title": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+            "brand": "Sony",
+            "category": "Electronics > Audio > Headphones",
+            "description": "Premium wireless noise canceling headphones.",
+            "asin": "B09XS7JWHH",
+            "images": [
+                "https://m.media-amazon.com/images/I/51aXvjzcukL._AC_SL1500_.jpg"
+            ],
+            "offers": [],
+            "upc": "027242923782",
+            "elid": "305766320935"
+        }
+    ]
+}

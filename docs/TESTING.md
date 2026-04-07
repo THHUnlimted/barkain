@@ -366,7 +366,8 @@ Update this table after every step:
 | Phase/Step | Backend | iOS Unit | iOS UI | Snapshot | New This Step |
 |-----------|---------|----------|--------|----------|---------------|
 | Step 1a | 14 | 0 | 0 | 0 | 14 (health×4, auth×3, rate_limit×3, migrations×2, seed×2) |
-| **Total** | **14** | **0** | **0** | **0** | |
+| Step 1b | 26 | 0 | 0 | 0 | 12 (validation×3, auth×1, redis_cache×1, postgres×1, gemini×1, upcitemdb×1, 404×1, response_shape×1, ean13×1, idempotency×1) |
+| **Total** | **26** | **0** | **0** | **0** | |
 
 ---
 
