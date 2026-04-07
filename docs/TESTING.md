@@ -55,7 +55,7 @@ from app.main import app
 from app.dependencies import get_db, get_redis, get_current_user
 
 # ── Test Database (Docker PostgreSQL+TimescaleDB) ─────────────
-TEST_DATABASE_URL = "postgresql+asyncpg://app:localdev@localhost:5432/barkain_test"
+TEST_DATABASE_URL = "postgresql+asyncpg://app:test@localhost:5433/barkain_test"
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -365,8 +365,8 @@ Update this table after every step:
 
 | Phase/Step | Backend | iOS Unit | iOS UI | Snapshot | New This Step |
 |-----------|---------|----------|--------|----------|---------------|
-| (none yet) | 0 | 0 | 0 | 0 | — |
-| **Total** | **0** | **0** | **0** | **0** | |
+| Step 1a | 14 | 0 | 0 | 0 | 14 (health×4, auth×3, rate_limit×3, migrations×2, seed×2) |
+| **Total** | **14** | **0** | **0** | **0** | |
 
 ---
 

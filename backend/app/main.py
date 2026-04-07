@@ -1,0 +1,48 @@
+from datetime import UTC, datetime
+
+import redis.asyncio as aioredis
+import sqlalchemy
+from fastapi import Depends, FastAPI
+
+from app.config import settings
+from app.database import async_engine
+from app.dependencies import get_redis
+from app.middleware import setup_middleware
+
+app = FastAPI(
+    title="Barkain API",
+    version=settings.APP_VERSION,
+    docs_url="/api/docs" if settings.ENVIRONMENT == "development" else None,
+    redoc_url="/api/redoc" if settings.ENVIRONMENT == "development" else None,
+)
+
+setup_middleware(app)
+
+
+@app.get("/api/v1/health")
+async def health_check(redis_client: aioredis.Redis = Depends(get_redis)):
+    """Health check — no auth required."""
+    result = {
+        "status": "healthy",
+        "version": settings.APP_VERSION,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "database": "unhealthy",
+        "redis": "unhealthy",
+    }
+
+    # Check database
+    try:
+        async with async_engine.connect() as conn:
+            await conn.execute(sqlalchemy.text("SELECT 1"))
+        result["database"] = "healthy"
+    except Exception:
+        result["status"] = "degraded"
+
+    # Check Redis
+    try:
+        await redis_client.ping()
+        result["redis"] = "healthy"
+    except Exception:
+        result["status"] = "degraded"
+
+    return result

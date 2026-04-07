@@ -9,8 +9,9 @@
 ## Current Position
 
 **Phase 0 (Planning) — COMPLETE**
-**Step 0 (Infrastructure Provisioning) — NOT STARTED**
-**Phase 1 (Foundation) — NOT STARTED**
+**Step 0 (Infrastructure Provisioning) — COMPLETE** (2026-04-06)
+**Step 1a (Database Schema + FastAPI Skeleton + Auth) — COMPLETE** (2026-04-07)
+**Phase 1 (Foundation) — IN PROGRESS**
 **Tagged releases:** none yet
 
 ---
@@ -83,7 +84,7 @@
 
 | Step | Scope | Status |
 |------|-------|--------|
-| 1a | PostgreSQL schema (ALL tables from DATA_MODEL.md), Alembic setup, FastAPI skeleton, Clerk auth, Docker dev environment verification | ⬜ |
+| 1a | PostgreSQL schema (ALL tables from DATA_MODEL.md), Alembic setup, FastAPI skeleton, Clerk auth, Docker dev environment verification | ✅ |
 | 1b | M1 Product Resolution: Gemini API UPC lookup (primary) + UPCitemdb (backup), barcode → canonical product, ai/abstraction.py foundation, Redis caching (24hr TTL) | ⬜ |
 | 1c | agent-browser container infrastructure: Docker container template, Dockerfile, extraction script architecture (9-step pattern), health monitoring hooks, test fixture framework, container HTTP API (POST /extract) | ⬜ |
 | 1d | Retailer containers batch 1 (tested scripts): Amazon, Walmart, Target, Sam's Club, Facebook Marketplace — adapt existing tested scripts into container format | ⬜ |

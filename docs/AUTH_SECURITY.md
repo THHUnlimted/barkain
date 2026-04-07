@@ -30,25 +30,35 @@ iOS App                          Backend                         Clerk
                           via dependency injection
 ```
 
-### JWT Validation (Backend Middleware)
+### JWT Validation (Backend Dependency)
 
 ```python
-# middleware.py — Clerk JWT validation
+# dependencies.py — Clerk JWT validation via authenticate_request()
 from clerk_backend_api import Clerk
+from clerk_backend_api.security import AuthenticateRequestOptions
 
 clerk = Clerk(bearer_auth=os.getenv("CLERK_SECRET_KEY"))
 
-async def verify_clerk_jwt(token: str) -> dict:
-    """Validate Clerk JWT and return claims."""
-    # Clerk SDK handles:
-    # - Signature verification against Clerk's JWKS
-    # - Expiration check
-    # - Issuer validation
-    claims = clerk.verify_token(token)
+async def get_current_user(request: Request, authorization: str | None = Header(None)) -> dict:
+    """Validate Clerk JWT and return user context. Raises 401 if invalid."""
+    # Extract Bearer token from Authorization header
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, ...)
+
+    # clerk-backend-api v5.x uses authenticate_request(), NOT verify_token()
+    # SDK handles: JWKS fetching, signature verification, expiry, issuer validation
+    request_state = clerk.authenticate_request(
+        request,
+        AuthenticateRequestOptions(),
+    )
+    if not request_state.is_signed_in:
+        raise HTTPException(401, ...)
+
+    payload = request_state.payload or {}
     return {
-        "user_id": claims["sub"],         # Clerk user_id (string)
-        "email": claims.get("email"),
-        "session_id": claims.get("sid"),
+        "user_id": payload.get("sub", ""),   # Clerk user_id (string)
+        "email": payload.get("email"),
+        "session_id": payload.get("sid"),
     }
 ```
 

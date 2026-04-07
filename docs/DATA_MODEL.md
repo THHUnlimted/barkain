@@ -31,7 +31,7 @@
 
 | # | Migration | Tables | Step |
 |---|-----------|--------|------|
-| — | Not started | — | — |
+| 0001 | Initial schema — all 21 tables | users, retailers, products, prices, price_history (hypertable), user_discount_profiles, discount_programs, card_reward_programs, rotating_categories, user_cards, user_category_selections, portal_bonuses, listings, coupon_cache, receipts, receipt_items, watched_items, affiliate_clicks, prediction_cache, retailer_health, watchdog_events | 1a |
 
 ---
 

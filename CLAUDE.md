@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** April 2026 (v3 — Opus for Watchdog, Browser Use dropped, LocalStack deferred, Open Food Facts deferred, nurse/healthcare flags)
+> **Last updated:** April 2026 (v3.1 — Step 0 complete, infrastructure provisioned, Docker running, MCP servers configured)
 
 ---
 
@@ -9,8 +9,8 @@
 
 Barkain is a native iOS app (with Python backend) that finds the absolute lowest total cost of any product by combining price comparison, identity-based discounts, credit card reward optimization, coupons, secondary market listings, shopping portal bonuses, and price prediction into a single AI-powered recommendation.
 
-**Repo:** `github.com/[org]/barkain`
-**Bundle ID:** `com.[org].barkain`
+**Repo:** `github.com/molatunji3/barkain`
+**Bundle ID:** `com.molatunji3.barkain`
 **Minimum deployment:** iOS 17.0 | Xcode 16+ | Swift 5.9+
 
 ---
@@ -114,7 +114,6 @@ barkain/
 │   ├── FEATURES.md
 │   ├── COMPONENT_MAP.md
 │   ├── DATA_MODEL.md
-│   ├── DESIGN_SYSTEM.md
 │   ├── DEPLOYMENT.md
 │   ├── TESTING.md
 │   ├── AUTH_SECURITY.md
@@ -131,20 +130,25 @@ barkain/
 
 ```bash
 # 1. Start infrastructure
-docker compose up -d          # PostgreSQL+TimescaleDB, Redis
+docker compose up -d          # PostgreSQL+TimescaleDB, Redis, Test DB
 
 # 2. Backend
 cd backend
 cp ../.env.example .env       # Fill in real values
-pip install -r requirements.txt
-alembic upgrade head          # Run migrations
+pip install -r requirements.txt -r requirements-test.txt
+cd ..
+alembic upgrade head          # Run migrations (from project root, reads alembic.ini)
+python scripts/seed_retailers.py  # Seed 11 retailers
+
+# 3. Run backend
+cd backend
 uvicorn app.main:app --reload --port 8000
 
-# 3. Tests
-pytest --tb=short -q          # Backend tests (uses Docker PostgreSQL, not SQLite)
+# 4. Tests (from backend/)
+pytest --tb=short -q          # Backend tests (Docker PostgreSQL port 5433, NOT SQLite)
 ruff check .                  # Lint
 
-# 4. iOS
+# 5. iOS
 # Open Barkain.xcodeproj in Xcode
 # Or use XcodeBuildMCP for build/test from Claude Code
 ```
@@ -237,12 +241,12 @@ This project uses a **two-tier AI workflow:**
 ## Tooling
 
 ### MCP Servers (live service connections for Claude Code)
-- **PostgreSQL+TimescaleDB** (Docker) — schema inspection, query testing, migration validation
-- **Redis** (Docker) — cache key inspection, TTL verification
-- **LocalStack** (Docker) — mock SQS/S3/SNS [Phase 2 — added to docker-compose when needed]
+- **Postgres MCP Pro** (Docker, crystaldba) — schema inspection, query testing, migration validation, unrestricted access mode
+- **Redis MCP** (Docker, official mcp/redis image) — cache key inspection, TTL verification
 - **Context7** — library documentation lookup (FastAPI, SQLAlchemy, SwiftUI, Clerk SDK, etc.)
-- **Clerk** — user management, JWT inspection, session debugging
+- **Clerk** (HTTP transport, mcp.clerk.com) — user management, JWT inspection, session debugging
 - **XcodeBuildMCP** — iOS build, test, clean, scheme inspection
+- **LocalStack** (Docker) — mock SQS/S3/SNS [Phase 2 — added to docker-compose when needed]
 
 ### CLIs
 - Day 1: `gh`, `docker`, `ruff`, `alembic`, `pytest`, `swiftlint`, `jq`, `xcodes`
@@ -253,29 +257,61 @@ This project uses a **two-tier AI workflow:**
 
 ## Current State
 
-**Phase 0 — Planning Complete**
-**Step 0 — Infrastructure Provisioning: NOT STARTED**
-**Phase 1 — Foundation: NOT STARTED**
+**Phase 0 — Planning Complete** ✅
+**Step 0 — Infrastructure Provisioning: COMPLETE** ✅ (2026-04-06)
+**Step 1a — Database Schema + FastAPI Skeleton + Auth: COMPLETE** ✅ (2026-04-07)
+**Phase 1 — Foundation: IN PROGRESS**
 
 - Architecture documents: ✅
 - Questionnaire (7 phases): ✅
 - Cost analysis: ✅
-- All guiding docs: ✅ (v3 — updated April 2026)
+- All guiding docs: ✅ (12 docs in docs/, v3 — updated April 2026)
 - Specialized docs (CARD_REWARDS, IDENTITY_DISCOUNTS, SEARCH_STRATEGY, SCRAPING_AGENT_ARCHITECTURE): ✅
 - Apple Developer account: ✅
-- Clerk project: ✅
+- Clerk project: ✅ (keys in .env)
+- Gemini API: ✅ (key in .env — primary UPC resolution)
+- UPCitemdb API: NOT STARTED (fallback — nice-to-have, free tier 100/day)
 - API sign-ups (Best Buy, eBay, Keepa): NOT STARTED (production optimization — not required for demo)
-- Docker local dev environment: NOT STARTED
+- Docker local dev environment: ✅ (3 containers: barkain-db, barkain-db-test, barkain-redis)
+- TimescaleDB extension: ✅ (v2.26.1 on both PostgreSQL instances)
+- MCP servers: ✅ (5 configured: Postgres Pro, Redis, Context7, Clerk, XcodeBuildMCP)
+- GitHub repo: ✅ (github.com/molatunji3/barkain, private)
+- CLI tools: ✅ (all 16 installed — brew, git, gh, python3, pip3, node, npm, docker, compose, jq, xcodes, swiftlint, ruff, alembic, pytest, swift)
+- Xcode: ✅ (26.4, xcode-select configured)
 - Visual prototype: NOT STARTED
+- Database schema: ✅ (21 tables via Alembic migration 0001, TimescaleDB hypertable on price_history)
+- FastAPI skeleton: ✅ (health endpoint, CORS, security headers, structured error handling)
+- Clerk auth middleware: ✅ (JWT validation via clerk-backend-api, get_current_user dependency)
+- Rate limiting: ✅ (Redis sorted set sliding window, per-user, 3 tiers)
+- Retailer seed: ✅ (11 Phase 1 retailers)
+- Backend tests: ✅ (14 passing — health, auth, rate limiting, migrations, seed)
 
-**Test counts:** 0 unit, 0 UI, 0 snapshot
-**Build status:** No code yet
+**Test counts:** 14 backend, 0 iOS unit, 0 UI, 0 snapshot
+**Build status:** Backend compiles and serves health endpoint; `ruff check` clean
+
+### Key Files Created (Step 1a)
+```
+backend/app/main.py              # FastAPI app + health endpoint
+backend/app/config.py             # pydantic-settings config
+backend/app/database.py           # SQLAlchemy Base + engine
+backend/app/core_models.py        # User, Retailer, RetailerHealth, WatchdogEvent, PredictionCache
+backend/app/models.py             # Model registry (imports all models)
+backend/app/dependencies.py       # get_db, get_redis, get_current_user, get_rate_limiter
+backend/app/middleware.py         # CORS, security headers, logging, error handling
+backend/modules/m*/models.py      # 8 module model files (21 tables total)
+alembic.ini                       # Alembic config (script_location = infrastructure/migrations)
+infrastructure/migrations/env.py  # Async Alembic env
+infrastructure/migrations/versions/0001_initial_schema.py  # All 21 tables
+scripts/seed_retailers.py         # 11 retailer upsert
+backend/tests/conftest.py         # Test fixtures (Docker PG port 5433, fakeredis, auth bypass)
+backend/tests/test_*.py           # 5 test files, 14 tests
+```
 
 ---
 
 ## What's Next
 
-1. **Step 0:** Sign up for APIs (production optimization), set up Docker dev environment, create repo, build visual prototype
+1. **Visual prototype:** 6 static screens in prototype/ (Scan, Search, Savings, Profile, Recommendation Result, Loading State) — before Step 1g
 2. **Phase 1:** PostgreSQL schema, FastAPI backend, Clerk auth, product resolution (Gemini API UPC lookup), agent-browser container infrastructure, 11 retailer extraction scripts, iOS app shell with barcode scanner, price comparison UI
 3. Target: 6-8 weeks to working barcode scan → 11-retailer price comparison demo (all scraped)
 
@@ -307,3 +343,7 @@ This project uses a **two-tier AI workflow:**
 | Product cache | Redis only (24hr TTL) | Single-layer cache; PostgreSQL stores products persistently but not as a cache | Apr 2026 |
 | UPC lookup | Gemini API (primary) + UPCitemdb (backup) | OpenAI charges $10/1K calls — unacceptable. Gemini API is cost-effective for UPC→product resolution, high accuracy, 4-6s latency. UPCitemdb as fallback (free tier 100/day). YC credits cover Gemini cost | Apr 2026 |
 | user_cards.is_preferred | User-set preferred card for comparisons | Not "default" — user explicitly sets their preferred card | Apr 2026 |
+| Postgres MCP | Postgres MCP Pro (crystaldba, Docker) | Unrestricted access mode; better schema inspection than basic server | Apr 2026 |
+| Redis MCP | Official mcp/redis Docker image | No auth for local dev; Docker-based for consistency with other MCP servers | Apr 2026 |
+| Clerk MCP | HTTP transport (mcp.clerk.com) | Simplest setup; no local npm packages needed | Apr 2026 |
+| UPCitemdb priority | Nice-to-have, not blocker | Gemini API is primary for UPC resolution; UPCitemdb is fallback only | Apr 2026 |
