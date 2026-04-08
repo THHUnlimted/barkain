@@ -1,0 +1,37 @@
+{
+  "retailer_id": "target",
+  "display_name": "Target",
+  "base_url": "https://www.target.com",
+  "script_version": "0.1.0",
+  "search_url_template": "https://www.target.com/s?searchTerm=",
+  "selectors": {
+    "anchor": "[data-test=\"@web/site-top-of-funnel/ProductCardWrapper\"]",
+    "title": "[data-test=\"product-title\"]",
+    "price": "[data-test=\"current-price\"]",
+    "original_price": "[data-test=\"comparison-price\"]",
+    "image": "picture img",
+    "url": "a[href*=\"/p/\"]",
+    "rating": "[data-test=\"ratings\"]",
+    "sale_badge": "[data-test=\"product-sale-badge\"]",
+    "product_grid": "[data-test=\"product-grid\"]"
+  },
+  "rate_limit": {
+    "requests_per_minute": 8,
+    "concurrent": 1,
+    "backoff_seconds": [5, 15, 60]
+  },
+  "anti_detection": {
+    "warm_up": true,
+    "warm_up_url": "https://www.target.com",
+    "wait_strategy": "load",
+    "wait_selector": "[data-test='product-grid']",
+    "jitter_min_ms": 1000,
+    "jitter_max_ms": 3000,
+    "scroll_passes": 5
+  },
+  "health": {
+    "consecutive_failures": 0,
+    "max_failures_before_alert": 3,
+    "status": "healthy"
+  }
+}

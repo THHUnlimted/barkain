@@ -13,6 +13,8 @@
 **Step 1a (Database Schema + FastAPI Skeleton + Auth) — COMPLETE** (2026-04-07)
 **Step 1b (M1 Product Resolution + AI Abstraction) — COMPLETE** (2026-04-07)
 **Step 1c (Container Infrastructure + Backend Client) — COMPLETE** (2026-04-07)
+**Step 1d (Retailer Containers Batch 1) — COMPLETE** (2026-04-07)
+**Step 1e (Retailer Containers Batch 2) — COMPLETE** (2026-04-07)
 **Phase 1 (Foundation) — IN PROGRESS**
 **Tagged releases:** none yet
 
@@ -89,8 +91,8 @@
 | 1a | PostgreSQL schema (ALL tables from DATA_MODEL.md), Alembic setup, FastAPI skeleton, Clerk auth, Docker dev environment verification | ✅ |
 | 1b | M1 Product Resolution: Gemini API UPC lookup (primary) + UPCitemdb (backup), barcode → canonical product, ai/abstraction.py foundation, Redis caching (24hr TTL) | ✅ |
 | 1c | agent-browser container infrastructure: Docker container template, Dockerfile, extraction script architecture (9-step pattern), health monitoring hooks, test fixture framework, container HTTP API (POST /extract) | ✅ |
-| 1d | Retailer containers batch 1 (tested scripts): Amazon, Walmart, Target, Sam's Club, Facebook Marketplace — adapt existing tested scripts into container format | ⬜ |
-| 1e | Retailer containers batch 2 (new scripts): Best Buy, Home Depot, Lowe's, eBay (new + used/refurb), BackMarket — build and test new extraction scripts | ⬜ |
+| 1d | Retailer containers batch 1 (tested scripts): Amazon, Walmart, Target, Sam's Club, Facebook Marketplace — adapt existing tested scripts into container format | ✅ |
+| 1e | Retailer containers batch 2 (new scripts): Best Buy, Home Depot, Lowe's, eBay (new + used/refurb), BackMarket — build and test new extraction scripts | ✅ |
 | 1f | M2 Price Aggregation: backend service that dispatches to containers in parallel (asyncio.gather), collects results, caches in Redis (6hr TTL), records price_history | ⬜ |
 | 1g | iOS app shell: TabView navigation (Scan/Search/Savings/Profile), camera permissions, barcode scanner (AVFoundation), APIClient, design system foundation (tokens, core components) | ⬜ |
 | 1h | Price comparison UI: scan barcode → call backend → display 11 retailer prices with progressive loading (fast results first, container results stream in), SavingsBadge showing delta, tap to open retailer URL | ⬜ |

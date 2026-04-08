@@ -1,0 +1,42 @@
+{
+  "retailer_id": "home_depot",
+  "display_name": "Home Depot",
+  "base_url": "https://www.homedepot.com",
+  "script_version": "0.1.0",
+  "search_url_template": "https://www.homedepot.com/s/",
+  "anchor_status": "needs_validation",
+  "selectors": {
+    "anchor": "[data-testid=\"product-pod\"]",
+    "anchor_fallback_1": ".browse-search__pod",
+    "anchor_fallback_2": "[data-component=\"product\"]",
+    "anchor_fallback_3": ".product-pod",
+    "title": ".product-header__title",
+    "title_fallback_1": "[data-testid=\"product-header\"] a",
+    "title_fallback_2": "[data-testid=\"product-title\"]",
+    "price": "[data-testid=\"product-price\"]",
+    "price_fallback_1": ".price-format__main-price",
+    "original_price": "[data-testid=\"was-price\"]",
+    "original_price_fallback_1": ".price-format__was-price",
+    "image": ".stretchy img",
+    "url": "a[href*=\"/p/\"]",
+    "rating": "[data-testid=\"product-rating\"]"
+  },
+  "rate_limit": {
+    "requests_per_minute": 8,
+    "concurrent": 1,
+    "backoff_seconds": [5, 15, 60]
+  },
+  "anti_detection": {
+    "warm_up": true,
+    "warm_up_url": "https://www.homedepot.com",
+    "wait_strategy": "networkidle",
+    "jitter_min_ms": 1000,
+    "jitter_max_ms": 3000,
+    "scroll_passes": 5
+  },
+  "health": {
+    "consecutive_failures": 0,
+    "max_failures_before_alert": 3,
+    "status": "healthy"
+  }
+}

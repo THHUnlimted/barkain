@@ -1,0 +1,50 @@
+{
+  "retailer_id": "ebay_new",
+  "query": "Sony WH-1000XM5",
+  "extraction_time_ms": 3200,
+  "listings": [
+    {
+      "title": "Sony WH-1000XM5 Wireless Noise Canceling Headphones - Black",
+      "price": 248.00,
+      "original_price": 399.99,
+      "currency": "USD",
+      "url": "https://www.ebay.com/itm/123456789012",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://i.ebayimg.com/images/g/example1/s-l500.jpg",
+      "seller": "techdeals_pro",
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "Sony WH1000XM5/B Over-Ear Wireless Headphones Silver",
+      "price": 259.99,
+      "original_price": null,
+      "currency": "USD",
+      "url": "https://www.ebay.com/itm/987654321098",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://i.ebayimg.com/images/g/example2/s-l500.jpg",
+      "seller": "audio_warehouse",
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "Sony WH-1000XM5 Wireless Bluetooth Headphones - Midnight Blue",
+      "price": 269.99,
+      "original_price": 399.99,
+      "currency": "USD",
+      "url": "https://www.ebay.com/itm/555666777888",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://i.ebayimg.com/images/g/example3/s-l500.jpg",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    }
+  ],
+  "metadata": {
+    "url": "https://www.ebay.com/sch/i.html?_nkw=Sony+WH-1000XM5&LH_ItemCondition=1000",
+    "extracted_at": "2026-04-07T15:00:00Z",
+    "script_version": "0.1.0",
+    "bot_detected": false
+  },
+  "error": null
+}

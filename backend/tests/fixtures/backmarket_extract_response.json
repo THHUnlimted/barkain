@@ -1,0 +1,38 @@
+{
+  "retailer_id": "backmarket",
+  "query": "iPhone 14 Pro",
+  "extraction_time_ms": 3700,
+  "listings": [
+    {
+      "title": "iPhone 14 Pro 256GB - Space Black",
+      "price": 569.00,
+      "original_price": 999.00,
+      "currency": "USD",
+      "url": "https://www.backmarket.com/en-us/p/iphone-14-pro-256gb-space-black/abc123",
+      "condition": "refurbished",
+      "is_available": true,
+      "image_url": "https://www.backmarket.com/cdn-cgi/image/iphone14pro.jpg",
+      "seller": "PhoneHub Refurbished",
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "iPhone 14 Pro 128GB - Deep Purple",
+      "price": 519.00,
+      "original_price": 999.00,
+      "currency": "USD",
+      "url": "https://www.backmarket.com/en-us/p/iphone-14-pro-128gb-purple/def456",
+      "condition": "refurbished",
+      "is_available": true,
+      "image_url": "https://www.backmarket.com/cdn-cgi/image/iphone14pro-purple.jpg",
+      "seller": "GreenTech Renewals",
+      "extraction_method": "dom_eval"
+    }
+  ],
+  "metadata": {
+    "url": "https://www.backmarket.com/en-us/search?q=iPhone+14+Pro",
+    "extracted_at": "2026-04-07T15:00:00Z",
+    "script_version": "0.1.0",
+    "bot_detected": false
+  },
+  "error": null
+}

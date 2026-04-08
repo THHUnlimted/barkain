@@ -1,0 +1,29 @@
+{
+  "retailer_id": "ebay_used",
+  "test_queries": [
+    {
+      "query": "iPhone 14 Pro",
+      "product_name": "Apple iPhone 14 Pro",
+      "upc": null,
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url", "condition"],
+      "price_range": {"min": 300, "max": 900}
+    },
+    {
+      "query": "Sony WH-1000XM5",
+      "product_name": "Sony WH-1000XM5 Wireless Headphones",
+      "upc": "027242923782",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url"],
+      "price_range": {"min": 100, "max": 300}
+    },
+    {
+      "query": "MacBook Pro M3",
+      "product_name": "Apple MacBook Pro M3",
+      "upc": null,
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url"],
+      "price_range": {"min": 800, "max": 2500}
+    }
+  ]
+}

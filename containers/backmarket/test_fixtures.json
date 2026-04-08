@@ -1,0 +1,29 @@
+{
+  "retailer_id": "backmarket",
+  "test_queries": [
+    {
+      "query": "iPhone 14 Pro",
+      "product_name": "Apple iPhone 14 Pro",
+      "upc": "194253401100",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url", "condition"],
+      "price_range": {"min": 400, "max": 900}
+    },
+    {
+      "query": "MacBook Air M2",
+      "product_name": "Apple MacBook Air M2",
+      "upc": "194253289432",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url", "condition"],
+      "price_range": {"min": 600, "max": 1200}
+    },
+    {
+      "query": "Samsung Galaxy S24",
+      "product_name": "Samsung Galaxy S24",
+      "upc": "887276789012",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url", "condition"],
+      "price_range": {"min": 300, "max": 800}
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "retailer_id": "target",
+  "test_queries": [
+    {
+      "query": "Sony WH-1000XM5",
+      "product_name": "Sony WH-1000XM5 Wireless Headphones",
+      "upc": "027242923782",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url", "image_url"],
+      "price_range": {"min": 200, "max": 400}
+    },
+    {
+      "query": "KitchenAid Stand Mixer",
+      "product_name": "KitchenAid Artisan Stand Mixer",
+      "upc": "883049564876",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url"],
+      "price_range": {"min": 250, "max": 500}
+    },
+    {
+      "query": "Dyson V15",
+      "product_name": "Dyson V15 Detect Vacuum",
+      "upc": "885609024905",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url"],
+      "price_range": {"min": 500, "max": 800}
+    }
+  ]
+}

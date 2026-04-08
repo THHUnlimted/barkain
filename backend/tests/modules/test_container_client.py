@@ -30,10 +30,10 @@ def client() -> ContainerClient:
 
 @pytest.fixture(autouse=True)
 def _setup_client(client: ContainerClient):
-    client.url_pattern = "http://localhost:808{port}"
+    client.url_pattern = "http://localhost:{port}"
     client.timeout = 5
     client.retry_count = 1
-    client.ports = {"walmart": 3, "target": 4, "best_buy": 2}
+    client.ports = {"walmart": 8083, "target": 8084, "best_buy": 8082}
 
 
 # MARK: - URL Resolution
@@ -153,9 +153,9 @@ async def test_extract_all_all_succeed(
     client: ContainerClient, container_response_data: dict
 ):
     """All containers succeed — returns dict of all results."""
-    for port in [2, 3, 4]:
+    for port in [8082, 8083, 8084]:
         data = {**container_response_data, "retailer_id": f"r{port}"}
-        respx.post(f"http://localhost:808{port}/extract").mock(
+        respx.post(f"http://localhost:{port}/extract").mock(
             return_value=httpx.Response(200, json=data)
         )
 
@@ -195,8 +195,8 @@ async def test_extract_all_partial_failure(
 @respx.mock
 async def test_extract_all_all_fail(client: ContainerClient):
     """All containers fail — returns dict of error responses."""
-    for port in [2, 3, 4]:
-        respx.post(f"http://localhost:808{port}/extract").mock(
+    for port in [8082, 8083, 8084]:
+        respx.post(f"http://localhost:{port}/extract").mock(
             side_effect=httpx.ConnectError("connection refused")
         )
 

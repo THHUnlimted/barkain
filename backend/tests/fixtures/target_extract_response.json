@@ -1,0 +1,50 @@
+{
+  "retailer_id": "target",
+  "query": "Sony WH-1000XM5",
+  "extraction_time_ms": 3890,
+  "listings": [
+    {
+      "title": "Sony WH-1000XM5 Wireless Noise Canceling Headphones - Black",
+      "price": 279.99,
+      "original_price": 399.99,
+      "currency": "USD",
+      "url": "https://www.target.com/p/sony-wh-1000xm5-headphones/-/A-86978432",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://target.scene7.com/is/image/Target/GUEST_86978432",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "Sony WH-1000XM5 Wireless Headphones - Silver",
+      "price": 279.99,
+      "original_price": null,
+      "currency": "USD",
+      "url": "https://www.target.com/p/sony-wh-1000xm5-silver/-/A-86978433",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://target.scene7.com/is/image/Target/GUEST_86978433",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "Sony WH-1000XM4 Wireless Headphones",
+      "price": 198.00,
+      "original_price": 349.99,
+      "currency": "USD",
+      "url": "https://www.target.com/p/sony-wh-1000xm4/-/A-82227568",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://target.scene7.com/is/image/Target/GUEST_82227568",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    }
+  ],
+  "metadata": {
+    "url": "https://www.target.com/s?searchTerm=Sony+WH-1000XM5",
+    "extracted_at": "2026-04-07T14:30:00Z",
+    "script_version": "0.1.0",
+    "bot_detected": false
+  },
+  "error": null
+}

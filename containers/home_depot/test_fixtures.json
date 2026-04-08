@@ -1,0 +1,29 @@
+{
+  "retailer_id": "home_depot",
+  "test_queries": [
+    {
+      "query": "DeWalt Drill",
+      "product_name": "DeWalt 20V MAX Cordless Drill/Driver Kit",
+      "upc": "885911594783",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url", "image_url"],
+      "price_range": {"min": 50, "max": 300}
+    },
+    {
+      "query": "Samsung Refrigerator",
+      "product_name": "Samsung French Door Refrigerator",
+      "upc": "887276543210",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url", "image_url"],
+      "price_range": {"min": 500, "max": 3000}
+    },
+    {
+      "query": "Ring Doorbell",
+      "product_name": "Ring Video Doorbell",
+      "upc": "840080599984",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url", "image_url"],
+      "price_range": {"min": 50, "max": 300}
+    }
+  ]
+}

@@ -124,6 +124,27 @@ Each retailer runs in its own Docker container (11 containers for demo):
 
 Backend sends `POST /extract` to container → container runs extraction → returns structured JSON → backend caches in TimescaleDB (6hr TTL).
 
+#### Batch 1 Containers (Step 1d)
+
+| Retailer | Port | Directory | Key Deviations |
+|----------|------|-----------|----------------|
+| Amazon | 8081 | `containers/amazon/` | Title fallback chain (3 selectors), sponsored noise stripping |
+| Walmart | 8083 | `containers/walmart/` | **PerimeterX:** Chrome launches directly with search URL; never `agent-browser open` |
+| Target | 8084 | `containers/target/` | **Wait strategy:** `load` not `networkidle` (analytics pixels hang); wait for `[data-test='product-grid']` |
+| Sam's Club | 8089 | `containers/sams_club/` | Best-guess selectors; needs live validation |
+| Facebook Marketplace | 8091 | `containers/fb_marketplace/` | Login modal hidden with CSS `display:none` (never `.remove()`); all items condition "used" |
+
+#### Batch 2 Containers (Step 1e)
+
+| Retailer | Port | Directory | Key Notes |
+|----------|------|-----------|-----------|
+| Best Buy | 8082 | `containers/best_buy/` | `.sku-item` anchor, standard networkidle flow |
+| Home Depot | 8085 | `containers/home_depot/` | `[data-testid="product-pod"]` anchor, needs live validation |
+| Lowe's | 8086 | `containers/lowes/` | Multi-fallback selectors, needs live validation |
+| eBay (new) | 8087 | `containers/ebay_new/` | `.s-item` anchor, URL filter `LH_ItemCondition=1000` for new only |
+| eBay (used/refurb) | 8088 | `containers/ebay_used/` | `.s-item` anchor, URL filter for used+refurb, extracts condition from `.SECONDARY_INFO` |
+| BackMarket | 8090 | `containers/backmarket/` | All items condition "refurbished", seller extraction |
+
 ### Background Workers
 
 Standalone Python scripts that poll SQS queues. Not Celery.

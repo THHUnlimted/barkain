@@ -1,0 +1,38 @@
+{
+  "retailer_id": "lowes",
+  "query": "DeWalt Drill",
+  "extraction_time_ms": 4500,
+  "listings": [
+    {
+      "title": "DEWALT 20-Volt Max 1/2-in Cordless Drill",
+      "price": 99.00,
+      "original_price": null,
+      "currency": "USD",
+      "url": "https://www.lowes.com/pd/DEWALT-20-Volt-Max-Drill/5001874529",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://mobileimages.lowes.com/productimages/dewalt-drill.jpg",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "DEWALT 20-Volt Max Brushless 2-Tool Combo Kit",
+      "price": 179.00,
+      "original_price": 229.00,
+      "currency": "USD",
+      "url": "https://www.lowes.com/pd/DEWALT-2-Tool-Combo/5004567890",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://mobileimages.lowes.com/productimages/dewalt-combo.jpg",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    }
+  ],
+  "metadata": {
+    "url": "https://www.lowes.com/search?searchTerm=DeWalt+Drill",
+    "extracted_at": "2026-04-07T15:00:00Z",
+    "script_version": "0.1.0",
+    "bot_detected": false
+  },
+  "error": null
+}

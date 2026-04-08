@@ -1,0 +1,38 @@
+{
+  "retailer_id": "backmarket",
+  "display_name": "BackMarket",
+  "base_url": "https://www.backmarket.com",
+  "script_version": "0.1.0",
+  "search_url_template": "https://www.backmarket.com/en-us/search?q=",
+  "default_condition": "refurbished",
+  "anchor_status": "needs_validation",
+  "anchor_note": "Selectors are best-guess. BackMarket likely uses data-testid or data-qa attributes on product cards. Needs live testing to confirm correct anchor selector.",
+  "selectors": {
+    "anchor": "[data-testid=\"product-card\"]",
+    "anchor_fallback_1": "[data-qa=\"product-card\"]",
+    "anchor_fallback_2": "a[href*=\"/p/\"]",
+    "title": "[data-testid=\"product-title\"]",
+    "price": "[data-testid=\"product-price\"]",
+    "seller": "[data-testid=\"seller-name\"]",
+    "image": "img[src*=\"backmarket\"]",
+    "url": "a[href*=\"/p/\"]"
+  },
+  "rate_limit": {
+    "requests_per_minute": 6,
+    "concurrent": 1,
+    "backoff_seconds": [5, 15, 60]
+  },
+  "anti_detection": {
+    "warm_up": true,
+    "warm_up_url": "https://www.backmarket.com",
+    "wait_strategy": "networkidle",
+    "jitter_min_ms": 1000,
+    "jitter_max_ms": 3000,
+    "scroll_passes": 5
+  },
+  "health": {
+    "consecutive_failures": 0,
+    "max_failures_before_alert": 3,
+    "status": "healthy"
+  }
+}

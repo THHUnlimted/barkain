@@ -1,0 +1,50 @@
+{
+  "retailer_id": "ebay_used",
+  "query": "iPhone 14 Pro",
+  "extraction_time_ms": 3400,
+  "listings": [
+    {
+      "title": "Apple iPhone 14 Pro 256GB Space Black - Excellent Condition",
+      "price": 589.00,
+      "original_price": 999.00,
+      "currency": "USD",
+      "url": "https://www.ebay.com/itm/111222333444",
+      "condition": "used",
+      "is_available": true,
+      "image_url": "https://i.ebayimg.com/images/g/used1/s-l500.jpg",
+      "seller": "certified_phones",
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "Apple iPhone 14 Pro 128GB - Certified Refurbished",
+      "price": 549.00,
+      "original_price": 999.00,
+      "currency": "USD",
+      "url": "https://www.ebay.com/itm/444555666777",
+      "condition": "refurbished",
+      "is_available": true,
+      "image_url": "https://i.ebayimg.com/images/g/refurb1/s-l500.jpg",
+      "seller": "apple_refurb_store",
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "iPhone 14 Pro Max 512GB Gold - Pre-Owned",
+      "price": 720.00,
+      "original_price": null,
+      "currency": "USD",
+      "url": "https://www.ebay.com/itm/888999000111",
+      "condition": "used",
+      "is_available": true,
+      "image_url": null,
+      "seller": "gadget_resale",
+      "extraction_method": "dom_eval"
+    }
+  ],
+  "metadata": {
+    "url": "https://www.ebay.com/sch/i.html?_nkw=iPhone+14+Pro&LH_ItemCondition=3000%7C2500%7C2000",
+    "extracted_at": "2026-04-07T15:00:00Z",
+    "script_version": "0.1.0",
+    "bot_detected": false
+  },
+  "error": null
+}
