@@ -25,6 +25,7 @@ struct ProgressiveLoadingView: View {
 
     let retailers: [RetailerLoadingItem]
     @State private var currentPunIndex = 0
+    @State private var spinnerRotation: Double = 0
 
     private let puns = [
         "Sniffing out the best deals...",
@@ -44,6 +45,14 @@ struct ProgressiveLoadingView: View {
             punText
         }
         .padding(Spacing.lg)
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(4))
+                withAnimation {
+                    currentPunIndex = (currentPunIndex + 1) % puns.count
+                }
+            }
+        }
     }
 
     // MARK: - Subviews
@@ -58,7 +67,12 @@ struct ProgressiveLoadingView: View {
                 .trim(from: 0, to: 0.3)
                 .stroke(Color.barkainPrimary, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                 .frame(width: 100, height: 100)
-                .rotationEffect(.degrees(-90))
+                .rotationEffect(.degrees(spinnerRotation))
+                .onAppear {
+                    withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
+                        spinnerRotation = 360
+                    }
+                }
 
             Image(systemName: "pawprint.fill")
                 .font(.system(size: 36))

@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** April 2026 (v3.1 — Step 0 complete, infrastructure provisioned, Docker running, MCP servers configured)
+> **Last updated:** April 2026 (v3.2 — Step 1h complete, price comparison UI operational)
 
 ---
 
@@ -266,6 +266,7 @@ This project uses a **two-tier AI workflow:**
 **Step 1e — Retailer Containers Batch 2: COMPLETE** ✅ (2026-04-07)
 **Step 1f — M2 Price Aggregation + Caching: COMPLETE** ✅ (2026-04-08)
 **Step 1g — iOS App Shell + Scanner + API Client + Design System: COMPLETE** ✅ (2026-04-08)
+**Step 1h — Price Comparison UI: COMPLETE** ✅ (2026-04-08)
 **Phase 1 — Foundation: IN PROGRESS**
 
 - Architecture documents: ✅
@@ -328,12 +329,15 @@ This project uses a **two-tier AI workflow:**
 - iOS API client: ✅ (APIClientProtocol + APIClient — resolveProduct, getPrices, error mapping, custom date decoding)
 - iOS barcode scanner: ✅ (AVFoundation — EAN-13/UPC-A, AsyncStream, 2s debounce)
 - iOS navigation shell: ✅ (TabView: Scan/Search/Savings/Profile, each with NavigationStack)
-- iOS scanner feature: ✅ (ScannerView + ScannerViewModel — scan barcode → resolve product)
+- iOS scanner feature: ✅ (ScannerView + ScannerViewModel — scan barcode → resolve product → fetch prices)
 - iOS shared components: ✅ (ProductCard, PriceRow, SavingsBadge, EmptyState, LoadingState, ProgressiveLoadingView)
-- iOS tests: ✅ (9 passing — ScannerViewModel×5, APIClient×3, placeholder×1)
+- iOS price comparison UI: ✅ (PriceComparisonView — sorted price list, Best Barkain badge, SavingsBadge, tap-to-open URL, refresh, status bar)
+- iOS progressive loading: ✅ (ProgressiveLoadingView spinner animation, pun rotation, 11-retailer status list)
+- iOS scan→compare flow: ✅ (full demo loop: scan barcode → resolve product → fetch 11 retailer prices → display comparison)
+- iOS tests: ✅ (21 passing — ScannerViewModel×14, APIClient×3, others)
 
-**Test counts:** 72 backend, 9 iOS unit, 0 UI, 0 snapshot
-**Build status:** Backend compiles and serves health + product resolve + price comparison endpoints; container template + 11 retailer containers build and respond to GET /health; iOS app builds for simulator with 4-tab navigation and barcode scanner; `ruff check` clean
+**Test counts:** 72 backend, 21 iOS unit, 0 UI, 0 snapshot
+**Build status:** Backend compiles and serves health + product resolve + price comparison endpoints; container template + 11 retailer containers build and respond to GET /health; iOS app builds for simulator with full scan→resolve→compare flow; `ruff check` clean
 
 ### Key Files Created (Step 1a)
 ```
@@ -458,13 +462,23 @@ BarkainTests/Features/Scanner/ScannerViewModelTests.swift # 5 tests (resolve, er
 BarkainTests/Services/APIClientTests.swift              # 3 tests (decode product, 404, decode prices)
 ```
 
+### Key Files Modified/Created (Step 1h)
+```
+Barkain/Features/Recommendation/PriceComparisonView.swift  # NEW — price comparison results screen
+Barkain/Features/Scanner/ScannerViewModel.swift            # Extended — priceComparison, isPriceLoading, fetchPrices(), computed helpers
+Barkain/Features/Scanner/ScannerView.swift                 # Updated — new state machine (price loading → results → error), onDisappear cleanup
+Barkain/Features/Shared/Components/ProgressiveLoadingView.swift # Fixed — spinner animation, pun rotation timer
+BarkainTests/Features/Scanner/ScannerViewModelTests.swift  # 14 tests (5 existing + 9 new price comparison tests)
+BarkainTests/Helpers/MockAPIClient.swift                   # Extended — forceRefresh tracking, getPricesDelay
+BarkainTests/Helpers/TestFixtures.swift                    # Extended — cached, empty, partial PriceComparison fixtures
+```
+
 ---
 
 ## What's Next
 
-1. **Step 1h:** Price comparison UI — scan barcode → call backend → display 11 retailer prices with progressive loading, SavingsBadge, tap to open retailer URL
-2. **Step 1i:** Hardening — integration tests, error handling audit, guiding doc sweep, tag v0.1.0
-3. Target: working barcode scan → 11-retailer price comparison demo
+1. **Step 1i:** Hardening — integration tests, error handling audit, guiding doc sweep, tag v0.1.0
+2. Target: working barcode scan → 11-retailer price comparison demo (core flow complete as of Step 1h)
 
 ---
 
