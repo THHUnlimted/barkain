@@ -88,6 +88,8 @@ async def health() -> HealthResponse:
     )
 
 
+# TODO(Phase-2): Add bearer token auth for container endpoints.
+# Currently no auth — containers run on localhost only in Phase 1. (D6)
 @app.post("/extract")
 async def extract(request: ExtractRequest) -> ExtractResponse:
     start = time.perf_counter()

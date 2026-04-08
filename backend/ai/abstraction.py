@@ -1,6 +1,6 @@
 """AI abstraction layer — all LLM calls go through here.
 
-Never import google.generativeai, anthropic, or openai in module code.
+Never import google.genai, anthropic, or openai in module code.
 Use the functions in this module instead.
 """
 
@@ -9,7 +9,8 @@ import json
 import logging
 import re
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from app.config import settings
 
@@ -18,18 +19,17 @@ logger = logging.getLogger("barkain.ai")
 
 # MARK: - Configuration
 
-_gemini_configured = False
+_client: genai.Client | None = None
 
 
-def _ensure_gemini() -> None:
-    """Configure Gemini API key on first use (lazy init)."""
-    global _gemini_configured
-    if _gemini_configured:
-        return
-    if not settings.GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY is not configured")
-    genai.configure(api_key=settings.GEMINI_API_KEY)
-    _gemini_configured = True
+def _get_client() -> genai.Client:
+    """Return (and lazily create) the Gemini client."""
+    global _client
+    if _client is None:
+        if not settings.GEMINI_API_KEY:
+            raise RuntimeError("GEMINI_API_KEY is not configured")
+        _client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    return _client
 
 
 # MARK: - Gemini
@@ -61,10 +61,9 @@ async def gemini_generate(
         RuntimeError: If GEMINI_API_KEY is not configured.
         Exception: If all retries exhausted.
     """
-    _ensure_gemini()
+    client = _get_client()
 
-    gen_model = genai.GenerativeModel(model)
-    generation_config = genai.GenerationConfig(
+    config = types.GenerateContentConfig(
         temperature=temperature,
         max_output_tokens=max_output_tokens,
     )
@@ -72,10 +71,10 @@ async def gemini_generate(
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):
         try:
-            response = await asyncio.to_thread(
-                gen_model.generate_content,
-                prompt,
-                generation_config=generation_config,
+            response = await client.aio.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=config,
             )
             return response.text
         except Exception as exc:

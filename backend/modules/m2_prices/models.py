@@ -66,6 +66,10 @@ class PriceHistory(Base):
 
     __tablename__ = "price_history"
 
+    # NOTE(D4): Single-column PK on `time` is required by TimescaleDB hypertable.
+    # Composite PK (time + product_id + retailer_id) would be ideal but requires
+    # recreating the hypertable. Microsecond offset in service.py prevents
+    # collisions within a single dispatch. Deferred to Phase 2.
     time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), primary_key=True, server_default=text("NOW()")
     )

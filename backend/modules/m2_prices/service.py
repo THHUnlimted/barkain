@@ -31,7 +31,7 @@ from modules.m2_prices.schemas import ContainerResponse
 
 logger = logging.getLogger("barkain.m2")
 
-REDIS_CACHE_TTL = 21600  # 6 hours
+REDIS_CACHE_TTL = 21600  # 6 hours — no partial invalidation by design; force_refresh bypasses (D9)
 REDIS_KEY_PREFIX = "prices:product:"
 DB_FRESHNESS_HOURS = 6
 
@@ -254,7 +254,12 @@ class PriceAggregationService:
         return " ".join(parts)
 
     def _pick_best_listing(self, response: ContainerResponse):
-        """Pick the lowest-priced available listing from a container response."""
+        """Pick the lowest-priced available listing from a container response.
+
+        NOTE(D11): Keeps only the cheapest listing per retailer. All listings are
+        recorded in price_history, but only the cheapest is shown. Phase 2 may
+        expose seller-level pricing.
+        """
         available = [item for item in response.listings if item.is_available]
         if not available:
             available = response.listings

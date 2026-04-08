@@ -15,7 +15,7 @@ struct SavingsBadge: View {
         HStack(spacing: Spacing.xxs) {
             Image(systemName: "arrow.down.circle.fill")
                 .font(.caption)
-            Text("Save \(formattedAmount)")
+            Text("Save \(formattedAmount)" + (percentageOff > 0 ? " (\(percentageOff)%)" : ""))
                 .font(.barkainLabel)
                 .tracking(0.5)
         }
@@ -27,6 +27,11 @@ struct SavingsBadge: View {
     }
 
     // MARK: - Helpers
+
+    private var percentageOff: Int {
+        guard originalPrice > 0 else { return 0 }
+        return Int(round(savedAmount / originalPrice * 100))
+    }
 
     private var formattedAmount: String {
         let formatter = NumberFormatter()

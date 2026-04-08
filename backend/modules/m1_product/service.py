@@ -170,7 +170,11 @@ class ProductResolutionService:
         try:
             await self.db.flush()
         except IntegrityError:
-            # Concurrent insert for same UPC — load the existing record
+            # Concurrent insert for same UPC — load the existing record.
+            # SAFETY(D5): This rollback is safe. We use flush() (not commit()),
+            # so the outer session lifecycle in get_db() is unaffected — get_db()
+            # will still commit or rollback the full transaction. The rollback
+            # here only clears the failed flush within the same transaction.
             await self.db.rollback()
             existing = await self._check_postgres(upc)
             if existing:

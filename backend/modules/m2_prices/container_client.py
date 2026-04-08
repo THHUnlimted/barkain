@@ -127,6 +127,7 @@ class ContainerClient:
         Partial failures are tolerated — successful results are returned
         alongside error responses.
         """
+        # Phase 2: Watchdog circuit-breaker will skip unhealthy containers (D10)
         ids = retailer_ids or list(self.ports.keys())
 
         tasks = [

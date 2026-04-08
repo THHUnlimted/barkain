@@ -18,8 +18,9 @@
 **Step 1f (M2 Price Aggregation + Caching) — COMPLETE** (2026-04-08)
 **Step 1g (iOS App Shell + Scanner + API Client + Design System) — COMPLETE** (2026-04-08)
 **Step 1h (Price Comparison UI) — COMPLETE** (2026-04-08)
-**Phase 1 (Foundation) — IN PROGRESS**
-**Tagged releases:** none yet
+**Step 1i (Hardening + Doc Sweep + Tag v0.1.0) — COMPLETE** (2026-04-08)
+**Phase 1 (Foundation) — COMPLETE**
+**Tagged releases:** v0.1.0 (Phase 1)
 
 ---
 
@@ -80,7 +81,7 @@
 
 ---
 
-## Phase 1: Foundation + Scraper Infrastructure + Core Loop (Weeks 1-8) — ⬜ NOT STARTED
+## Phase 1: Foundation + Scraper Infrastructure + Core Loop (Weeks 1-8) — ✅ COMPLETE
 
 > **Goal:** User scans a barcode in-store and instantly sees prices from 11 retailers, all scraped via agent-browser containers. Prove the core value prop at scale.
 > **Tag:** v0.1.0
@@ -99,7 +100,7 @@
 | 1f | M2 Price Aggregation: backend service that dispatches to containers in parallel (asyncio.gather), collects results, caches in Redis (6hr TTL), records price_history | ✅ |
 | 1g | iOS app shell: TabView navigation (Scan/Search/Savings/Profile), camera permissions, barcode scanner (AVFoundation), APIClient, design system foundation (tokens, core components) | ✅ |
 | 1h | Price comparison UI: scan barcode → call backend → display 11 retailer prices with progressive loading, SavingsBadge showing delta, tap to open retailer URL, Best Barkain badge, refresh + scan another | ✅ |
-| 1i | Hardening: integration tests, error handling audit, guiding doc sweep, tag v0.1.0 | ⬜ |
+| 1i | Hardening: google-genai migration, integration tests, error handling audit, guiding doc sweep, tag v0.1.0 | ✅ |
 
 ### What Phase 1 Establishes
 - PostgreSQL on AWS RDS (dev: Docker) with full schema including discount/card/portal tables (empty, ready for Phase 2 seeding)

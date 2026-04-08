@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** April 2026 (v3.2 — Step 1h complete, price comparison UI operational)
+> **Last updated:** April 2026 (v3.3 — Phase 1 complete, tagged v0.1.0)
 
 ---
 
@@ -267,7 +267,8 @@ This project uses a **two-tier AI workflow:**
 **Step 1f — M2 Price Aggregation + Caching: COMPLETE** ✅ (2026-04-08)
 **Step 1g — iOS App Shell + Scanner + API Client + Design System: COMPLETE** ✅ (2026-04-08)
 **Step 1h — Price Comparison UI: COMPLETE** ✅ (2026-04-08)
-**Phase 1 — Foundation: IN PROGRESS**
+**Step 1i — Hardening + Doc Sweep + Tag v0.1.0: COMPLETE** ✅ (2026-04-08)
+**Phase 1 — Foundation: COMPLETE (tagged v0.1.0)**
 
 - Architecture documents: ✅
 - Questionnaire (7 phases): ✅
@@ -292,7 +293,7 @@ This project uses a **two-tier AI workflow:**
 - Rate limiting: ✅ (Redis sorted set sliding window, per-user, 3 tiers)
 - Retailer seed: ✅ (11 Phase 1 retailers)
 - Backend tests: ✅ (14 passing — health, auth, rate limiting, migrations, seed)
-- AI abstraction layer: ✅ (`backend/ai/abstraction.py` — Gemini API wrapper with retry logic)
+- AI abstraction layer: ✅ (`backend/ai/abstraction.py` — google-genai SDK with native async, retry logic)
 - M1 Product resolution: ✅ (POST /api/v1/products/resolve — Gemini primary, UPCitemdb backup, Redis 24hr cache)
 - M1 tests: ✅ (12 new — validation, auth, resolution chain, caching, fallback, 404)
 - Container template: ✅ (`containers/template/` — Dockerfile, server.py, base-extract.sh, extract.js, config.json, test_fixtures.json)
@@ -336,7 +337,7 @@ This project uses a **two-tier AI workflow:**
 - iOS scan→compare flow: ✅ (full demo loop: scan barcode → resolve product → fetch 11 retailer prices → display comparison)
 - iOS tests: ✅ (21 passing — ScannerViewModel×14, APIClient×3, others)
 
-**Test counts:** 72 backend, 21 iOS unit, 0 UI, 0 snapshot
+**Test counts:** 84 backend, 21 iOS unit, 0 UI, 0 snapshot
 **Build status:** Backend compiles and serves health + product resolve + price comparison endpoints; container template + 11 retailer containers build and respond to GET /health; iOS app builds for simulator with full scan→resolve→compare flow; `ruff check` clean
 
 ### Key Files Created (Step 1a)
@@ -473,12 +474,27 @@ BarkainTests/Helpers/MockAPIClient.swift                   # Extended — forceR
 BarkainTests/Helpers/TestFixtures.swift                    # Extended — cached, empty, partial PriceComparison fixtures
 ```
 
+### Key Files Modified/Created (Step 1i)
+```
+backend/ai/abstraction.py                              # Migrated google-generativeai → google-genai (native async)
+backend/requirements.txt                                # google-generativeai → google-genai
+backend/pyproject.toml                                  # Added [tool.ruff.lint] E741, pytest filterwarnings
+backend/tests/test_integration.py                       # NEW — 12 integration tests (full flow + error format audit)
+Barkain/Features/Shared/Components/SavingsBadge.swift   # Fixed: originalPrice now used for percentage display
+backend/modules/m2_prices/models.py                     # D4 comment — TimescaleDB PK documented
+backend/modules/m1_product/service.py                   # D5 comment — rollback safety documented
+backend/modules/m2_prices/service.py                    # D9, D11 comments — cache and listing selection documented
+backend/modules/m2_prices/container_client.py           # D10 comment — circuit-breaker deferred
+containers/*/server.py (12 files)                       # D6 TODO — auth deferred to Phase 2
+containers/README.md                                    # D7 note — server.py duplication documented
+```
+
 ---
 
 ## What's Next
 
-1. **Step 1i:** Hardening — integration tests, error handling audit, guiding doc sweep, tag v0.1.0
-2. Target: working barcode scan → 11-retailer price comparison demo (core flow complete as of Step 1h)
+1. **Phase 1 COMPLETE** — tagged v0.1.0. Full barcode scan → 11-retailer price comparison demo operational.
+2. **Phase 2 starts:** Step 2a (Watchdog supervisor agent for container self-healing)
 
 ---
 
@@ -512,3 +528,4 @@ BarkainTests/Helpers/TestFixtures.swift                    # Extended — cached
 | Redis MCP | Official mcp/redis Docker image | No auth for local dev; Docker-based for consistency with other MCP servers | Apr 2026 |
 | Clerk MCP | HTTP transport (mcp.clerk.com) | Simplest setup; no local npm packages needed | Apr 2026 |
 | UPCitemdb priority | Nice-to-have, not blocker | Gemini API is primary for UPC resolution; UPCitemdb is fallback only | Apr 2026 |
+| AI SDK | google-genai (from google-generativeai) | Deprecated package; new SDK has native async, no asyncio.to_thread needed | Apr 2026 |

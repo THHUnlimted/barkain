@@ -175,7 +175,7 @@ Standalone Python scripts that poll SQS queues. Not Celery.
 
 **Location:** `backend/ai/`
 
-All LLM interactions go through `abstraction.py`. No module imports `anthropic` or `openai` directly.
+All LLM interactions go through `abstraction.py`. No module imports `google.genai`, `anthropic`, or `openai` directly. The abstraction uses the `google-genai` SDK with native async (`client.aio.models.generate_content`) — no `asyncio.to_thread` wrapper needed.
 
 ### Model Routing
 

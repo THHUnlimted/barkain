@@ -10,5 +10,5 @@ clerk-backend-api>=1.0.0
 redis>=5.2.0
 python-dotenv>=1.0.1
 ruff>=0.8.0
-google-generativeai>=0.8.0
+google-genai>=1.0.0
 openai>=1.60.0
