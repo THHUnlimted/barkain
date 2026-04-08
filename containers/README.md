@@ -84,6 +84,41 @@ Each retailer runs in its own Docker container with Chromium, agent-browser CLI,
 | 8090 | BackMarket |
 | 8091 | Facebook Marketplace |
 
+## Batch 1 Retailers (Step 1d)
+
+Five containers built and ready for testing:
+
+| Retailer | Directory | Build & Run |
+|----------|-----------|-------------|
+| Amazon | `containers/amazon/` | `docker build -t barkain-amazon ./containers/amazon && docker run -p 8081:8080 -e RETAILER_ID=amazon barkain-amazon` |
+| Walmart | `containers/walmart/` | `docker build -t barkain-walmart ./containers/walmart && docker run -p 8083:8080 -e RETAILER_ID=walmart barkain-walmart` |
+| Target | `containers/target/` | `docker build -t barkain-target ./containers/target && docker run -p 8084:8080 -e RETAILER_ID=target barkain-target` |
+| Sam's Club | `containers/sams_club/` | `docker build -t barkain-sams-club ./containers/sams_club && docker run -p 8089:8080 -e RETAILER_ID=sams_club barkain-sams-club` |
+| FB Marketplace | `containers/fb_marketplace/` | `docker build -t barkain-fb-marketplace ./containers/fb_marketplace && docker run -p 8091:8080 -e RETAILER_ID=fb_marketplace barkain-fb-marketplace` |
+
+### Retailer-Specific Notes
+
+- **Walmart (PerimeterX):** NEVER use `agent-browser open` for navigation. Chrome must launch directly with the search URL as its starting page. The extract.sh skips the warm-up step entirely and passes `$SEARCH_URL` to Chromium instead of `about:blank`.
+- **Target (analytics hang):** Use `ab wait --load load` instead of `networkidle`. Target's analytics pixels fire indefinitely. After load, wait for `[data-test='product-grid']` selector.
+- **Facebook Marketplace (login modal):** Hide the login modal with `display:none` via CSS. NEVER use `.remove()` — it breaks React's virtual DOM. The DOM is fully rendered behind the CSS overlay.
+- **Sam's Club (unvalidated selectors):** Anchor selectors are best-guess based on Walmart patterns. Needs live testing to confirm. config.json has `"anchor_status": "needs_validation"`.
+
+## Batch 2 Retailers (Step 1e)
+
+Six additional containers:
+
+| Retailer | Directory | Port | Key Notes |
+|----------|-----------|------|-----------|
+| Best Buy | `containers/best_buy/` | 8082 | `.sku-item` anchor, standard flow |
+| Home Depot | `containers/home_depot/` | 8085 | `[data-testid="product-pod"]`, needs validation |
+| Lowe's | `containers/lowes/` | 8086 | Multi-fallback selectors, needs validation |
+| eBay (new) | `containers/ebay_new/` | 8087 | Same site as eBay Used but with `LH_ItemCondition=1000` filter |
+| eBay (used/refurb) | `containers/ebay_used/` | 8088 | Condition filter for used+refurb, extracts condition text (used/refurbished/open_box) |
+| BackMarket | `containers/backmarket/` | 8090 | Refurbished marketplace — all items default to condition "refurbished", includes seller/grade |
+
+### eBay Condition Separation
+eBay new and used run as **separate containers** to keep extraction simple. Each uses different URL parameters to filter by condition at the eBay search level, so the container only receives items of the correct condition.
+
 ## Environment Variables
 
 | Variable | Default | Description |

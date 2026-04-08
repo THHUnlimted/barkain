@@ -1,0 +1,36 @@
+{
+  "retailer_id": "fb_marketplace",
+  "display_name": "Facebook Marketplace",
+  "base_url": "https://www.facebook.com/marketplace",
+  "script_version": "0.1.0",
+  "search_url_template": "https://www.facebook.com/marketplace/search?query=",
+  "default_condition": "used",
+  "login_modal_handling": "hide_with_css",
+  "login_modal_note": "Hide login modal with display:none. NEVER use .remove() — it breaks React virtual DOM reconciliation.",
+  "selectors": {
+    "anchor": "a[href*=\"/marketplace/item/\"]",
+    "anchor_note": "URL pattern is the only stable selector. Class names are obfuscated.",
+    "title": "innerText heuristic (first non-price line)",
+    "price": "innerText regex",
+    "image": "img[src]",
+    "url": "anchor href"
+  },
+  "rate_limit": {
+    "requests_per_minute": 10,
+    "concurrent": 2,
+    "backoff_seconds": [5, 15, 60]
+  },
+  "anti_detection": {
+    "warm_up": true,
+    "warm_up_url": "https://www.facebook.com/marketplace",
+    "wait_strategy": "networkidle",
+    "jitter_min_ms": 800,
+    "jitter_max_ms": 2500,
+    "scroll_passes": 5
+  },
+  "health": {
+    "consecutive_failures": 0,
+    "max_failures_before_alert": 3,
+    "status": "healthy"
+  }
+}

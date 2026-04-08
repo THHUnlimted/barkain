@@ -1,0 +1,37 @@
+{
+  "retailer_id": "best_buy",
+  "display_name": "Best Buy",
+  "base_url": "https://www.bestbuy.com",
+  "script_version": "0.1.0",
+  "search_url_template": "https://www.bestbuy.com/site/searchpage.jsp?st=",
+  "selectors": {
+    "anchor": ".sku-item",
+    "anchor_fallback_1": "[data-sku-id]",
+    "anchor_fallback_2": "[class*=\"sku-item\"]",
+    "title": ".sku-title a",
+    "title_fallback_1": "h4.sku-title a",
+    "price": ".priceView-customer-price span",
+    "original_price": ".pricing-price__regular-price",
+    "image": ".product-image img",
+    "url": ".sku-title a",
+    "rating": ".c-ratings-reviews"
+  },
+  "rate_limit": {
+    "requests_per_minute": 8,
+    "concurrent": 1,
+    "backoff_seconds": [5, 15, 60]
+  },
+  "anti_detection": {
+    "warm_up": true,
+    "warm_up_url": "https://www.bestbuy.com",
+    "wait_strategy": "networkidle",
+    "jitter_min_ms": 1000,
+    "jitter_max_ms": 3000,
+    "scroll_passes": 5
+  },
+  "health": {
+    "consecutive_failures": 0,
+    "max_failures_before_alert": 3,
+    "status": "healthy"
+  }
+}

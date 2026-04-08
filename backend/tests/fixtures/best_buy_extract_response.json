@@ -1,0 +1,50 @@
+{
+  "retailer_id": "best_buy",
+  "query": "Samsung 65 inch TV",
+  "extraction_time_ms": 3890,
+  "listings": [
+    {
+      "title": "Samsung - 65\" Class QN65Q80C QLED 4K UHD Smart Tizen TV",
+      "price": 897.99,
+      "original_price": 1199.99,
+      "currency": "USD",
+      "url": "https://www.bestbuy.com/site/samsung-65-class-qn65q80c/6535108.p",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://pisces.bbystatic.com/image2/BestBuy_US/images/products/6535108.jpg",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "Samsung - 65\" Class DU8000 Crystal UHD 4K Smart Tizen TV",
+      "price": 479.99,
+      "original_price": 529.99,
+      "currency": "USD",
+      "url": "https://www.bestbuy.com/site/samsung-65-class-du8000/6576529.p",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://pisces.bbystatic.com/image2/BestBuy_US/images/products/6576529.jpg",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "Samsung - 65\" Class The Frame LS03D QLED 4K Smart Tizen TV",
+      "price": 1499.99,
+      "original_price": null,
+      "currency": "USD",
+      "url": "https://www.bestbuy.com/site/samsung-65-the-frame/6576531.p",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://pisces.bbystatic.com/image2/BestBuy_US/images/products/6576531.jpg",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    }
+  ],
+  "metadata": {
+    "url": "https://www.bestbuy.com/site/searchpage.jsp?st=Samsung+65+inch+TV",
+    "extracted_at": "2026-04-07T15:00:00Z",
+    "script_version": "0.1.0",
+    "bot_detected": false
+  },
+  "error": null
+}

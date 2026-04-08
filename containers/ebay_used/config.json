@@ -1,0 +1,38 @@
+{
+  "retailer_id": "ebay_used",
+  "display_name": "eBay (Used/Refurbished)",
+  "base_url": "https://www.ebay.com",
+  "script_version": "0.1.0",
+  "search_url_template": "https://www.ebay.com/sch/i.html?_nkw=",
+  "condition_filter": "LH_ItemCondition=3000|2500|2000",
+  "condition_note": "Used (3000), Seller Refurbished (2500), Certified Refurbished (2000)",
+  "default_condition": "used",
+  "selectors": {
+    "anchor": ".s-item",
+    "title": ".s-item__title span[role=\"heading\"]",
+    "price": ".s-item__price",
+    "original_price": ".STRIKETHROUGH",
+    "condition": ".SECONDARY_INFO",
+    "image": ".s-item__image-wrapper img",
+    "url": ".s-item__link",
+    "seller": ".s-item__seller-info-text"
+  },
+  "rate_limit": {
+    "requests_per_minute": 10,
+    "concurrent": 2,
+    "backoff_seconds": [5, 15, 60]
+  },
+  "anti_detection": {
+    "warm_up": true,
+    "warm_up_url": "https://www.ebay.com",
+    "wait_strategy": "networkidle",
+    "jitter_min_ms": 800,
+    "jitter_max_ms": 2500,
+    "scroll_passes": 5
+  },
+  "health": {
+    "consecutive_failures": 0,
+    "max_failures_before_alert": 3,
+    "status": "healthy"
+  }
+}

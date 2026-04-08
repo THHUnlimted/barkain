@@ -1,0 +1,38 @@
+{
+  "retailer_id": "home_depot",
+  "query": "DeWalt Drill",
+  "extraction_time_ms": 4200,
+  "listings": [
+    {
+      "title": "DEWALT 20V MAX Cordless Drill/Driver Kit",
+      "price": 99.00,
+      "original_price": null,
+      "currency": "USD",
+      "url": "https://www.homedepot.com/p/DEWALT-20V-MAX-Cordless-Drill/312610415",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://images.thdstatic.com/productImages/dewalt-drill.jpg",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "DEWALT ATOMIC 20V MAX Brushless Compact Drill/Driver",
+      "price": 129.00,
+      "original_price": 149.00,
+      "currency": "USD",
+      "url": "https://www.homedepot.com/p/DEWALT-ATOMIC-20V-Brushless/316789012",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://images.thdstatic.com/productImages/dewalt-atomic.jpg",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    }
+  ],
+  "metadata": {
+    "url": "https://www.homedepot.com/s/DeWalt%20Drill",
+    "extracted_at": "2026-04-07T15:00:00Z",
+    "script_version": "0.1.0",
+    "bot_detected": false
+  },
+  "error": null
+}

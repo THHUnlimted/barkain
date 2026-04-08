@@ -262,6 +262,8 @@ This project uses a **two-tier AI workflow:**
 **Step 1a — Database Schema + FastAPI Skeleton + Auth: COMPLETE** ✅ (2026-04-07)
 **Step 1b — M1 Product Resolution + AI Abstraction: COMPLETE** ✅ (2026-04-07)
 **Step 1c — Container Infrastructure + Backend Client: COMPLETE** ✅ (2026-04-07)
+**Step 1d — Retailer Containers Batch 1: COMPLETE** ✅ (2026-04-07)
+**Step 1e — Retailer Containers Batch 2: COMPLETE** ✅ (2026-04-07)
 **Phase 1 — Foundation: IN PROGRESS**
 
 - Architecture documents: ✅
@@ -294,11 +296,27 @@ This project uses a **two-tier AI workflow:**
 - Container Dockerfile: ✅ (builds successfully, health endpoint responds, Chromium + agent-browser + Xvfb + FastAPI)
 - Container client: ✅ (`backend/modules/m2_prices/container_client.py` — parallel dispatch, 30s timeout, 1 retry, partial failure tolerance)
 - M2 schemas: ✅ (ContainerExtractRequest, ContainerListing, ContainerResponse, ContainerHealthResponse)
-- Container config: ✅ (CONTAINER_URL_PATTERN, CONTAINER_PORTS mapping 11 retailers to ports 8081-8091)
+- Container config: ✅ (CONTAINER_URL_PATTERN `http://localhost:{port}`, CONTAINER_PORTS mapping 11 retailers to full port numbers 8081-8091)
 - Container client tests: ✅ (14 new — extract success/timeout/error/retry, extract_all parallel/partial/all-fail, health check, URL resolution, normalization)
+- Retailer containers batch 1: ✅ (5 containers: Amazon, Walmart, Target, Sam's Club, Facebook Marketplace)
+- Amazon container: ✅ (`containers/amazon/` — DOM eval, `[data-component-type]` + `data-asin`, title fallback chain, sponsored noise stripping)
+- Walmart container: ✅ (`containers/walmart/` — PerimeterX workaround: Chrome launches directly with search URL, never `agent-browser open`)
+- Target container: ✅ (`containers/target/` — `load` wait strategy, not `networkidle`; `[data-test]` selectors)
+- Sam's Club container: ✅ (`containers/sams_club/` — best-guess selectors, needs live validation)
+- Facebook Marketplace container: ✅ (`containers/fb_marketplace/` — login modal CSS hide, URL-pattern anchor, all items "used")
+- Retailer container tests: ✅ (10 new — response parsing per retailer, parallel dispatch, mixed success/failure, metadata validation)
+- Retailer containers batch 2: ✅ (6 containers: Best Buy, Home Depot, Lowe's, eBay New, eBay Used, BackMarket)
+- Best Buy container: ✅ (`containers/best_buy/` — `.sku-item` anchor, standard networkidle flow)
+- Home Depot container: ✅ (`containers/home_depot/` — `[data-testid="product-pod"]` anchor, needs live validation)
+- Lowe's container: ✅ (`containers/lowes/` — multi-fallback selectors, needs live validation)
+- eBay New container: ✅ (`containers/ebay_new/` — `.s-item` anchor, condition filter `LH_ItemCondition=1000`)
+- eBay Used container: ✅ (`containers/ebay_used/` — `.s-item` anchor, condition filter for used+refurb, extracts condition text)
+- BackMarket container: ✅ (`containers/backmarket/` — all items "refurbished", seller extraction)
+- Batch 2 container tests: ✅ (9 new — response parsing per retailer, all-6 parallel dispatch, partial failure, seller validation)
+- Container URL pattern fix: ✅ (changed from `http://localhost:808{port}` to `http://localhost:{port}` with full port numbers)
 
-**Test counts:** 40 backend, 0 iOS unit, 0 UI, 0 snapshot
-**Build status:** Backend compiles and serves health + product resolve endpoints; container template builds and responds to GET /health; `ruff check` clean
+**Test counts:** 59 backend, 0 iOS unit, 0 UI, 0 snapshot
+**Build status:** Backend compiles and serves health + product resolve endpoints; container template + 11 retailer containers build and respond to GET /health; `ruff check` clean
 
 ### Key Files Created (Step 1a)
 ```
@@ -347,6 +365,39 @@ backend/modules/m2_prices/schemas.py   # Pydantic models for container communica
 backend/modules/m2_prices/container_client.py  # HTTP dispatch to scraper containers
 backend/tests/modules/test_container_client.py # 14 tests (respx mocking)
 backend/tests/fixtures/container_extract_response.json  # Canned container response
+```
+
+### Key Files Created (Step 1d)
+```
+containers/amazon/                      # Amazon scraper (port 8081)
+  Dockerfile, server.py, entrypoint.sh, extract.sh, extract.js, config.json, test_fixtures.json
+containers/walmart/                     # Walmart scraper (port 8083) — PerimeterX workaround
+  Dockerfile, server.py, entrypoint.sh, extract.sh, extract.js, config.json, test_fixtures.json
+containers/target/                      # Target scraper (port 8084) — load wait strategy
+  Dockerfile, server.py, entrypoint.sh, extract.sh, extract.js, config.json, test_fixtures.json
+containers/sams_club/                   # Sam's Club scraper (port 8089)
+  Dockerfile, server.py, entrypoint.sh, extract.sh, extract.js, config.json, test_fixtures.json
+containers/fb_marketplace/              # Facebook Marketplace scraper (port 8091) — modal hide
+  Dockerfile, server.py, entrypoint.sh, extract.sh, extract.js, config.json, test_fixtures.json
+backend/tests/modules/test_container_retailers.py  # 10 tests for batch 1 retailers
+backend/tests/fixtures/amazon_extract_response.json
+backend/tests/fixtures/walmart_extract_response.json
+backend/tests/fixtures/target_extract_response.json
+backend/tests/fixtures/sams_club_extract_response.json
+backend/tests/fixtures/fb_marketplace_extract_response.json
+```
+
+### Key Files Created (Step 1e)
+```
+containers/best_buy/                    # Best Buy scraper (port 8082)
+containers/home_depot/                  # Home Depot scraper (port 8085)
+containers/lowes/                       # Lowe's scraper (port 8086)
+containers/ebay_new/                    # eBay New scraper (port 8087) — condition filter
+containers/ebay_used/                   # eBay Used/Refurb scraper (port 8088) — condition extraction
+containers/backmarket/                  # BackMarket scraper (port 8090) — all refurbished
+  Each: Dockerfile, server.py, entrypoint.sh, extract.sh, extract.js, config.json, test_fixtures.json
+backend/tests/modules/test_container_retailers_batch2.py  # 9 tests for batch 2
+backend/tests/fixtures/{best_buy,home_depot,lowes,ebay_new,ebay_used,backmarket}_extract_response.json
 ```
 
 ---

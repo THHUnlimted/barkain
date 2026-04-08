@@ -1,0 +1,29 @@
+{
+  "retailer_id": "sams_club",
+  "test_queries": [
+    {
+      "query": "Samsung 65 inch TV",
+      "product_name": "Samsung 65\" Class QLED 4K TV",
+      "upc": "887276123456",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url"],
+      "price_range": {"min": 400, "max": 2000}
+    },
+    {
+      "query": "Apple AirPods Pro",
+      "product_name": "Apple AirPods Pro (2nd Generation)",
+      "upc": "194253415060",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url"],
+      "price_range": {"min": 150, "max": 300}
+    },
+    {
+      "query": "KitchenAid Stand Mixer",
+      "product_name": "KitchenAid Professional Stand Mixer",
+      "upc": "883049564876",
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url"],
+      "price_range": {"min": 250, "max": 500}
+    }
+  ]
+}

@@ -39,7 +39,18 @@ backend/tests/
     ├── keepa_response.json        # Canned Keepa API response
     ├── gemini_upc_response.json       # Canned Gemini UPC lookup response
     ├── upcitemdb_response.json        # Canned UPCitemdb backup response
-    └── container_extract_response.json # Canned container extraction response
+    ├── container_extract_response.json # Canned container extraction response
+    ├── amazon_extract_response.json   # Canned Amazon container response
+    ├── walmart_extract_response.json  # Canned Walmart container response
+    ├── target_extract_response.json   # Canned Target container response
+    ├── sams_club_extract_response.json    # Canned Sam's Club container response
+    ├── fb_marketplace_extract_response.json # Canned Facebook Marketplace response
+    ├── best_buy_extract_response.json     # Canned Best Buy container response
+    ├── home_depot_extract_response.json   # Canned Home Depot container response
+    ├── lowes_extract_response.json        # Canned Lowe's container response
+    ├── ebay_new_extract_response.json     # Canned eBay (new) container response
+    ├── ebay_used_extract_response.json    # Canned eBay (used/refurb) container response
+    └── backmarket_extract_response.json   # Canned BackMarket container response
 ```
 
 ### conftest.py Pattern
@@ -369,7 +380,9 @@ Update this table after every step:
 | Step 1a | 14 | 0 | 0 | 0 | 14 (health×4, auth×3, rate_limit×3, migrations×2, seed×2) |
 | Step 1b | 26 | 0 | 0 | 0 | 12 (validation×3, auth×1, redis_cache×1, postgres×1, gemini×1, upcitemdb×1, 404×1, response_shape×1, ean13×1, idempotency×1) |
 | Step 1c | 40 | 0 | 0 | 0 | 14 (url_resolution×2, extract_success×1, extract_timeout×1, extract_conn_error×1, extract_http500×1, extract_retry×1, extract_all_succeed×1, extract_all_partial×1, extract_all_fail×1, extract_all_specific×1, health_healthy×1, health_timeout×1, response_normalization×1) |
-| **Total** | **40** | **0** | **0** | **0** | |
+| Step 1d | 50 | 0 | 0 | 0 | 10 (parse_amazon×1, parse_walmart×1, parse_target_sale×1, parse_sams_club×1, parse_fb_used×1, extract_all_5×1, mixed_success_failure×1, correct_retailer_ids×1, amazon_metadata×1, fb_sellers×1) |
+| Step 1e | 59 | 0 | 0 | 0 | 9 (parse_best_buy×1, parse_home_depot×1, parse_lowes×1, parse_ebay_new_condition×1, parse_ebay_used_conditions×1, parse_backmarket_refurb×1, extract_all_6_batch2×1, batch2_partial_failure×1, ebay_new_sellers×1) |
+| **Total** | **59** | **0** | **0** | **0** | |
 
 ---
 

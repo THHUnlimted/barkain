@@ -1,0 +1,29 @@
+{
+  "retailer_id": "fb_marketplace",
+  "test_queries": [
+    {
+      "query": "iPhone 15 Pro",
+      "product_name": "Apple iPhone 15 Pro",
+      "upc": null,
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url"],
+      "price_range": {"min": 400, "max": 1200}
+    },
+    {
+      "query": "PS5",
+      "product_name": "Sony PlayStation 5",
+      "upc": null,
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url"],
+      "price_range": {"min": 200, "max": 600}
+    },
+    {
+      "query": "Herman Miller Aeron",
+      "product_name": "Herman Miller Aeron Chair",
+      "upc": null,
+      "expected_min_listings": 1,
+      "expected_fields": ["title", "price", "url"],
+      "price_range": {"min": 300, "max": 1500}
+    }
+  ]
+}

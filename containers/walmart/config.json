@@ -1,0 +1,36 @@
+{
+  "retailer_id": "walmart",
+  "display_name": "Walmart",
+  "base_url": "https://www.walmart.com",
+  "script_version": "0.1.0",
+  "search_url_template": "https://www.walmart.com/search?q=",
+  "navigation_note": "NEVER use agent-browser open for navigation. PerimeterX blocks it 100%. Launch Chrome directly with search URL.",
+  "selectors": {
+    "anchor": "[data-item-id]",
+    "title": "[data-automation-id=\"product-title\"]",
+    "price": "[data-automation-id=\"product-price\"]",
+    "original_price": "[data-automation-id=\"product-was-price\"]",
+    "image": "img[data-testid=\"productTileImage\"]",
+    "url": "a[href*=\"/ip/\"]",
+    "availability": "[data-automation-id=\"fulfillment-badge\"]"
+  },
+  "rate_limit": {
+    "requests_per_minute": 6,
+    "concurrent": 1,
+    "backoff_seconds": [10, 30, 120]
+  },
+  "anti_detection": {
+    "warm_up": false,
+    "warm_up_url": null,
+    "wait_strategy": "networkidle",
+    "jitter_min_ms": 1000,
+    "jitter_max_ms": 3000,
+    "scroll_passes": 5,
+    "direct_chrome_launch": true
+  },
+  "health": {
+    "consecutive_failures": 0,
+    "max_failures_before_alert": 3,
+    "status": "healthy"
+  }
+}

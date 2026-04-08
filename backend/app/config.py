@@ -38,21 +38,21 @@ class Settings(BaseSettings):
     APP_VERSION: str = "0.1.0"
 
     # Containers (agent-browser scraper infrastructure)
-    CONTAINER_URL_PATTERN: str = "http://localhost:808{port}"
+    CONTAINER_URL_PATTERN: str = "http://localhost:{port}"
     CONTAINER_TIMEOUT_SECONDS: int = 30
     CONTAINER_RETRY_COUNT: int = 1
     CONTAINER_PORTS: dict = {
-        "amazon": 1,
-        "best_buy": 2,
-        "walmart": 3,
-        "target": 4,
-        "home_depot": 5,
-        "lowes": 6,
-        "ebay_new": 7,
-        "ebay_used": 8,
-        "sams_club": 9,
-        "backmarket": 10,
-        "fb_marketplace": 11,
+        "amazon": 8081,
+        "best_buy": 8082,
+        "walmart": 8083,
+        "target": 8084,
+        "home_depot": 8085,
+        "lowes": 8086,
+        "ebay_new": 8087,
+        "ebay_used": 8088,
+        "sams_club": 8089,
+        "backmarket": 8090,
+        "fb_marketplace": 8091,
     }
 
 

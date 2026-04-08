@@ -1,0 +1,50 @@
+{
+  "retailer_id": "fb_marketplace",
+  "query": "iPhone 15 Pro",
+  "extraction_time_ms": 3450,
+  "listings": [
+    {
+      "title": "iPhone 15 Pro 256GB Natural Titanium - Like New",
+      "price": 850.00,
+      "original_price": null,
+      "currency": "USD",
+      "url": "https://www.facebook.com/marketplace/item/1234567890123",
+      "condition": "used",
+      "is_available": true,
+      "image_url": "https://scontent.xx.fbcdn.net/v/t45.1600-4/example1.jpg",
+      "seller": "John D.",
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "Apple iPhone 15 Pro Max 512GB - Excellent Condition",
+      "price": 1050.00,
+      "original_price": null,
+      "currency": "USD",
+      "url": "https://www.facebook.com/marketplace/item/9876543210987",
+      "condition": "used",
+      "is_available": true,
+      "image_url": "https://scontent.xx.fbcdn.net/v/t45.1600-4/example2.jpg",
+      "seller": "Maria S.",
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "iPhone 15 Pro 128GB Blue - Cracked Screen",
+      "price": 500.00,
+      "original_price": null,
+      "currency": "USD",
+      "url": "https://www.facebook.com/marketplace/item/5555566666777",
+      "condition": "used",
+      "is_available": true,
+      "image_url": null,
+      "seller": "Tech Deals LLC",
+      "extraction_method": "dom_eval"
+    }
+  ],
+  "metadata": {
+    "url": "https://www.facebook.com/marketplace/search?query=iPhone+15+Pro",
+    "extracted_at": "2026-04-07T14:30:00Z",
+    "script_version": "0.1.0",
+    "bot_detected": false
+  },
+  "error": null
+}

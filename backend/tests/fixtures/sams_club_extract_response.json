@@ -1,0 +1,38 @@
+{
+  "retailer_id": "sams_club",
+  "query": "Samsung 65 inch TV",
+  "extraction_time_ms": 4100,
+  "listings": [
+    {
+      "title": "Samsung 65\" Class QLED 4K Smart TV",
+      "price": 679.00,
+      "original_price": null,
+      "currency": "USD",
+      "url": "https://www.samsclub.com/p/samsung-65-qled-4k/prod28400123",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://scene7.samsclub.com/is/image/samsclub/0088727612345",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    },
+    {
+      "title": "Samsung 65\" Crystal UHD 4K TV",
+      "price": 428.00,
+      "original_price": 479.00,
+      "currency": "USD",
+      "url": "https://www.samsclub.com/p/samsung-65-crystal-uhd/prod28400456",
+      "condition": "new",
+      "is_available": true,
+      "image_url": "https://scene7.samsclub.com/is/image/samsclub/0088727612346",
+      "seller": null,
+      "extraction_method": "dom_eval"
+    }
+  ],
+  "metadata": {
+    "url": "https://www.samsclub.com/s/Samsung%2065%20inch%20TV",
+    "extracted_at": "2026-04-07T14:30:00Z",
+    "script_version": "0.1.0",
+    "bot_detected": false
+  },
+  "error": null
+}
