@@ -1,11 +1,6 @@
-//
-//  BarkainApp.swift
-//  Barkain
-//
-//  Created by Michael Olatunji on 4/6/26.
-//
-
 import SwiftUI
+
+// MARK: - BarkainApp
 
 @main
 struct BarkainApp: App {

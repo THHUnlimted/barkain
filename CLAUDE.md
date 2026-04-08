@@ -265,6 +265,7 @@ This project uses a **two-tier AI workflow:**
 **Step 1d — Retailer Containers Batch 1: COMPLETE** ✅ (2026-04-07)
 **Step 1e — Retailer Containers Batch 2: COMPLETE** ✅ (2026-04-07)
 **Step 1f — M2 Price Aggregation + Caching: COMPLETE** ✅ (2026-04-08)
+**Step 1g — iOS App Shell + Scanner + API Client + Design System: COMPLETE** ✅ (2026-04-08)
 **Phase 1 — Foundation: IN PROGRESS**
 
 - Architecture documents: ✅
@@ -321,9 +322,18 @@ This project uses a **two-tier AI workflow:**
 - M2 Price upsert: ✅ (ON CONFLICT DO UPDATE on product_id+retailer_id+condition)
 - M2 Price history: ✅ (append-only to TimescaleDB hypertable, source=agent_browser)
 - M2 tests: ✅ (13 new — cache hit/miss, force_refresh, sorting, partial failure, upsert, is_on_sale, 404, 422, auth)
+- iOS Xcode project: ✅ (Barkain.xcodeproj — bundle ID `com.molatunji3.barkain`, iOS 17.6+, Swift 5.0, xcconfig Debug/Release)
+- iOS design system: ✅ (Colors, Spacing, Typography from HTML prototype)
+- iOS data models: ✅ (Product, PriceComparison, RetailerPrice — Codable with snake_case decoding)
+- iOS API client: ✅ (APIClientProtocol + APIClient — resolveProduct, getPrices, error mapping, custom date decoding)
+- iOS barcode scanner: ✅ (AVFoundation — EAN-13/UPC-A, AsyncStream, 2s debounce)
+- iOS navigation shell: ✅ (TabView: Scan/Search/Savings/Profile, each with NavigationStack)
+- iOS scanner feature: ✅ (ScannerView + ScannerViewModel — scan barcode → resolve product)
+- iOS shared components: ✅ (ProductCard, PriceRow, SavingsBadge, EmptyState, LoadingState, ProgressiveLoadingView)
+- iOS tests: ✅ (9 passing — ScannerViewModel×5, APIClient×3, placeholder×1)
 
-**Test counts:** 72 backend, 0 iOS unit, 0 UI, 0 snapshot
-**Build status:** Backend compiles and serves health + product resolve + price comparison endpoints; container template + 11 retailer containers build and respond to GET /health; `ruff check` clean
+**Test counts:** 72 backend, 9 iOS unit, 0 UI, 0 snapshot
+**Build status:** Backend compiles and serves health + product resolve + price comparison endpoints; container template + 11 retailer containers build and respond to GET /health; iOS app builds for simulator with 4-tab navigation and barcode scanner; `ruff check` clean
 
 ### Key Files Created (Step 1a)
 ```
@@ -414,13 +424,47 @@ backend/modules/m2_prices/router.py     # GET /api/v1/prices/{product_id} with a
 backend/tests/modules/test_m2_prices.py # 13 tests (cache, dispatch, upsert, sorting, errors)
 ```
 
+### Key Files Created (Step 1g)
+```
+Config/Debug.xcconfig                                  # API_BASE_URL = http://localhost:8000
+Config/Release.xcconfig                                # API_BASE_URL = https://api.barkain.ai
+Barkain/Services/Networking/AppConfig.swift             # #if DEBUG URL switching
+Barkain/Services/Networking/APIError.swift              # Error types matching backend format
+Barkain/Services/Networking/Endpoints.swift             # URL builder for resolve + prices + health
+Barkain/Services/Networking/APIClient.swift             # APIClientProtocol + APIClient (async, typed)
+Barkain/Services/Scanner/BarcodeScanner.swift           # AVFoundation EAN-13/UPC-A scanner with AsyncStream
+Barkain/Features/Shared/Extensions/Colors.swift         # Color palette from HTML prototype
+Barkain/Features/Shared/Extensions/Spacing.swift        # Spacing + corner radius constants
+Barkain/Features/Shared/Extensions/Typography.swift     # Font styles (system approximations)
+Barkain/Features/Shared/Extensions/EnvironmentKeys.swift # APIClient environment injection
+Barkain/Features/Shared/Models/Product.swift            # Product (Codable, snake_case CodingKeys)
+Barkain/Features/Shared/Models/PriceComparison.swift    # PriceComparison + RetailerPrice + APIErrorResponse
+Barkain/Features/Shared/Components/ProductCard.swift    # Product display card (image, name, brand)
+Barkain/Features/Shared/Components/PriceRow.swift       # Retailer price row (name, price, sale badge)
+Barkain/Features/Shared/Components/SavingsBadge.swift   # Savings pill badge
+Barkain/Features/Shared/Components/EmptyState.swift     # Generic empty/error state
+Barkain/Features/Shared/Components/LoadingState.swift   # Spinner + message
+Barkain/Features/Shared/Components/ProgressiveLoadingView.swift # 11-retailer progressive status list
+Barkain/Features/Scanner/ScannerView.swift              # Camera preview + scan overlay + results
+Barkain/Features/Scanner/ScannerViewModel.swift         # @Observable — scan → resolveProduct
+Barkain/Features/Scanner/CameraPreviewView.swift        # UIViewRepresentable for AVCaptureVideoPreviewLayer
+Barkain/Features/Search/SearchPlaceholderView.swift     # Placeholder (coming soon)
+Barkain/Features/Savings/SavingsPlaceholderView.swift   # Placeholder (coming soon)
+Barkain/Features/Profile/ProfilePlaceholderView.swift   # Placeholder (coming soon)
+BarkainTests/Helpers/MockAPIClient.swift                # Protocol-based mock with Result configuration
+BarkainTests/Helpers/MockURLProtocol.swift              # URLProtocol subclass for API client tests
+BarkainTests/Helpers/TestFixtures.swift                 # Sample Product, PriceComparison, JSON payloads
+BarkainTests/Features/Scanner/ScannerViewModelTests.swift # 5 tests (resolve, error, loading, clear, reset)
+BarkainTests/Services/APIClientTests.swift              # 3 tests (decode product, 404, decode prices)
+```
+
 ---
 
 ## What's Next
 
-1. **Visual prototype:** 6 static screens in prototype/ (Scan, Search, Savings, Profile, Recommendation Result, Loading State) — before Step 1g
-2. **Phase 1:** PostgreSQL schema, FastAPI backend, Clerk auth, product resolution (Gemini API UPC lookup), agent-browser container infrastructure, 11 retailer extraction scripts, iOS app shell with barcode scanner, price comparison UI
-3. Target: 6-8 weeks to working barcode scan → 11-retailer price comparison demo (all scraped)
+1. **Step 1h:** Price comparison UI — scan barcode → call backend → display 11 retailer prices with progressive loading, SavingsBadge, tap to open retailer URL
+2. **Step 1i:** Hardening — integration tests, error handling audit, guiding doc sweep, tag v0.1.0
+3. Target: working barcode scan → 11-retailer price comparison demo
 
 ---
 

@@ -94,7 +94,7 @@
 | 1d | Retailer containers batch 1 (tested scripts): Amazon, Walmart, Target, Sam's Club, Facebook Marketplace — adapt existing tested scripts into container format | ✅ |
 | 1e | Retailer containers batch 2 (new scripts): Best Buy, Home Depot, Lowe's, eBay (new + used/refurb), BackMarket — build and test new extraction scripts | ✅ |
 | 1f | M2 Price Aggregation: backend service that dispatches to containers in parallel (asyncio.gather), collects results, caches in Redis (6hr TTL), records price_history | ✅ |
-| 1g | iOS app shell: TabView navigation (Scan/Search/Savings/Profile), camera permissions, barcode scanner (AVFoundation), APIClient, design system foundation (tokens, core components) | ⬜ |
+| 1g | iOS app shell: TabView navigation (Scan/Search/Savings/Profile), camera permissions, barcode scanner (AVFoundation), APIClient, design system foundation (tokens, core components) | ✅ |
 | 1h | Price comparison UI: scan barcode → call backend → display 11 retailer prices with progressive loading (fast results first, container results stream in), SavingsBadge showing delta, tap to open retailer URL | ⬜ |
 | 1i | Hardening: integration tests, error handling audit, guiding doc sweep, tag v0.1.0 | ⬜ |
 
