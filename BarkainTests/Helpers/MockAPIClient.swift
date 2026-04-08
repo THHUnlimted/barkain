@@ -16,10 +16,12 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     var resolveProductLastUPC: String?
     var getPricesCallCount = 0
     var getPricesLastProductId: UUID?
+    var getPricesLastForceRefresh: Bool?
 
     // MARK: - Delay simulation
 
     var resolveProductDelay: TimeInterval = 0
+    var getPricesDelay: TimeInterval = 0
 
     // MARK: - APIClientProtocol
 
@@ -35,6 +37,10 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     func getPrices(productId: UUID, forceRefresh: Bool) async throws -> PriceComparison {
         getPricesCallCount += 1
         getPricesLastProductId = productId
+        getPricesLastForceRefresh = forceRefresh
+        if getPricesDelay > 0 {
+            try await Task.sleep(for: .seconds(getPricesDelay))
+        }
         return try getPricesResult.get()
     }
 }

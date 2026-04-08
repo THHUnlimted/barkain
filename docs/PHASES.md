@@ -15,6 +15,9 @@
 **Step 1c (Container Infrastructure + Backend Client) — COMPLETE** (2026-04-07)
 **Step 1d (Retailer Containers Batch 1) — COMPLETE** (2026-04-07)
 **Step 1e (Retailer Containers Batch 2) — COMPLETE** (2026-04-07)
+**Step 1f (M2 Price Aggregation + Caching) — COMPLETE** (2026-04-08)
+**Step 1g (iOS App Shell + Scanner + API Client + Design System) — COMPLETE** (2026-04-08)
+**Step 1h (Price Comparison UI) — COMPLETE** (2026-04-08)
 **Phase 1 (Foundation) — IN PROGRESS**
 **Tagged releases:** none yet
 
@@ -95,7 +98,7 @@
 | 1e | Retailer containers batch 2 (new scripts): Best Buy, Home Depot, Lowe's, eBay (new + used/refurb), BackMarket — build and test new extraction scripts | ✅ |
 | 1f | M2 Price Aggregation: backend service that dispatches to containers in parallel (asyncio.gather), collects results, caches in Redis (6hr TTL), records price_history | ✅ |
 | 1g | iOS app shell: TabView navigation (Scan/Search/Savings/Profile), camera permissions, barcode scanner (AVFoundation), APIClient, design system foundation (tokens, core components) | ✅ |
-| 1h | Price comparison UI: scan barcode → call backend → display 11 retailer prices with progressive loading (fast results first, container results stream in), SavingsBadge showing delta, tap to open retailer URL | ⬜ |
+| 1h | Price comparison UI: scan barcode → call backend → display 11 retailer prices with progressive loading, SavingsBadge showing delta, tap to open retailer URL, Best Barkain badge, refresh + scan another | ✅ |
 | 1i | Hardening: integration tests, error handling audit, guiding doc sweep, tag v0.1.0 | ⬜ |
 
 ### What Phase 1 Establishes

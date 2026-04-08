@@ -70,6 +70,58 @@ enum TestFixtures {
         fetchedAt: Date()
     )
 
+    // MARK: - Cached PriceComparison
+
+    static let cachedPriceComparison = PriceComparison(
+        productId: sampleProductId,
+        productName: "Sony WH-1000XM5",
+        prices: samplePriceComparison.prices,
+        totalRetailers: 11,
+        retailersSucceeded: 3,
+        retailersFailed: 0,
+        cached: true,
+        fetchedAt: Date()
+    )
+
+    // MARK: - Empty PriceComparison
+
+    static let emptyPriceComparison = PriceComparison(
+        productId: sampleProductId,
+        productName: "Sony WH-1000XM5",
+        prices: [],
+        totalRetailers: 11,
+        retailersSucceeded: 0,
+        retailersFailed: 11,
+        cached: false,
+        fetchedAt: Date()
+    )
+
+    // MARK: - Partial PriceComparison
+
+    static let partialPriceComparison = PriceComparison(
+        productId: sampleProductId,
+        productName: "Sony WH-1000XM5",
+        prices: [
+            RetailerPrice(
+                retailerId: "amazon",
+                retailerName: "Amazon",
+                price: 298.00,
+                originalPrice: 349.99,
+                currency: "USD",
+                url: "https://amazon.com/dp/B0BSHF7WHN",
+                condition: "new",
+                isAvailable: true,
+                isOnSale: true,
+                lastChecked: Date()
+            ),
+        ],
+        totalRetailers: 11,
+        retailersSucceeded: 1,
+        retailersFailed: 5,
+        cached: false,
+        fetchedAt: Date()
+    )
+
     // MARK: - JSON Payloads
 
     static let productJSON = """

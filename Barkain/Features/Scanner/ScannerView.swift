@@ -29,6 +29,9 @@ struct ScannerView: View {
             viewModel = vm
             await startScanner(vm)
         }
+        .onDisappear {
+            scanner.stopScanning()
+        }
     }
 
     // MARK: - Content
@@ -37,8 +40,16 @@ struct ScannerView: View {
     private func scannerContent(_ viewModel: ScannerViewModel) -> some View {
         if viewModel.isLoading {
             LoadingState(message: "Resolving product...")
-        } else if let product = viewModel.product {
-            productResult(product, viewModel: viewModel)
+        } else if viewModel.isPriceLoading, let product = viewModel.product {
+            priceLoadingView(product: product)
+        } else if let comparison = viewModel.priceComparison, let product = viewModel.product {
+            PriceComparisonView(
+                product: product,
+                comparison: comparison,
+                viewModel: viewModel
+            )
+        } else if viewModel.priceError != nil, let product = viewModel.product {
+            priceErrorView(product: product, viewModel: viewModel)
         } else if let error = viewModel.error {
             errorView(error, viewModel: viewModel)
         } else if let scannerError {
@@ -77,33 +88,56 @@ struct ScannerView: View {
         }
     }
 
-    // MARK: - Results
+    // MARK: - Price Loading
 
-    private func productResult(_ product: Product, viewModel: ScannerViewModel) -> some View {
+    private func priceLoadingView(product: Product) -> some View {
+        ScrollView {
+            VStack(spacing: Spacing.lg) {
+                ProductCard(product: product)
+                ProgressiveLoadingView(retailers: loadingRetailerItems)
+            }
+            .padding(Spacing.lg)
+        }
+    }
+
+    private var loadingRetailerItems: [RetailerLoadingItem] {
+        [
+            ("amazon", "Amazon"),
+            ("best_buy", "Best Buy"),
+            ("walmart", "Walmart"),
+            ("target", "Target"),
+            ("home_depot", "Home Depot"),
+            ("lowes", "Lowe's"),
+            ("ebay_new", "eBay (New)"),
+            ("ebay_used", "eBay (Used)"),
+            ("sams_club", "Sam's Club"),
+            ("backmarket", "BackMarket"),
+            ("fb_marketplace", "Facebook Marketplace"),
+        ].map { RetailerLoadingItem(id: $0.0, name: $0.1, status: .loading) }
+    }
+
+    // MARK: - Price Error
+
+    private func priceErrorView(product: Product, viewModel: ScannerViewModel) -> some View {
         ScrollView {
             VStack(spacing: Spacing.lg) {
                 ProductCard(product: product)
 
-                if let upc = viewModel.scannedUPC {
-                    HStack {
-                        Image(systemName: "barcode")
-                            .foregroundStyle(Color.barkainOutline)
-                        Text("UPC: \(upc)")
-                            .font(.barkainCaption)
-                            .foregroundStyle(Color.barkainOnSurfaceVariant)
-                    }
+                EmptyState(
+                    icon: "exclamationmark.triangle",
+                    title: "Couldn't fetch prices",
+                    subtitle: viewModel.priceError?.errorDescription ?? "An unknown error occurred.",
+                    actionTitle: "Retry"
+                ) {
+                    Task { await viewModel.fetchPrices() }
                 }
 
                 Button {
                     viewModel.reset()
                 } label: {
                     Text("Scan Another")
-                        .font(.barkainHeadline)
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, Spacing.sm)
-                        .background(Color.barkainPrimaryGradient)
-                        .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadiusLarge))
+                        .font(.barkainBody)
+                        .foregroundStyle(Color.barkainOnSurfaceVariant)
                 }
             }
             .padding(Spacing.lg)
