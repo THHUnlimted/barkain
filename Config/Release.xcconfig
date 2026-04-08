@@ -1,0 +1,3 @@
+// Release configuration for Barkain
+// API base URL for production
+API_BASE_URL = https:$()/$()/api.barkain.ai

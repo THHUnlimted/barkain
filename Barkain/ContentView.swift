@@ -1,23 +1,46 @@
-//
-//  ContentView.swift
-//  Barkain
-//
-//  Created by Michael Olatunji on 4/6/26.
-//
-
 import SwiftUI
 
+// MARK: - ContentView
+
 struct ContentView: View {
+
+    // MARK: - Body
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        TabView {
+            NavigationStack {
+                ScannerView()
+            }
+            .tabItem {
+                Label("Scan", systemImage: "barcode.viewfinder")
+            }
+
+            NavigationStack {
+                SearchPlaceholderView()
+            }
+            .tabItem {
+                Label("Search", systemImage: "magnifyingglass")
+            }
+
+            NavigationStack {
+                SavingsPlaceholderView()
+            }
+            .tabItem {
+                Label("Savings", systemImage: "chart.line.uptrend.xyaxis")
+            }
+
+            NavigationStack {
+                ProfilePlaceholderView()
+            }
+            .tabItem {
+                Label("Profile", systemImage: "person.circle")
+            }
         }
-        .padding()
+        .tint(.barkainPrimary)
     }
 }
+
+// MARK: - Preview
 
 #Preview {
     ContentView()
