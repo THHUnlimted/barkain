@@ -1,4 +1,7 @@
-"""Pydantic request/response schemas for M2 Prices — container communication."""
+"""Pydantic request/response schemas for M2 Prices — container communication + API response."""
+
+import uuid
+from datetime import datetime
 
 from pydantic import BaseModel, field_validator
 
@@ -86,3 +89,34 @@ class ContainerHealthResponse(BaseModel):
     retailer_id: str
     script_version: str
     chromium_ready: bool
+
+
+# MARK: - API Response
+
+
+class PriceResponse(BaseModel):
+    """Single retailer price in the comparison response."""
+
+    retailer_id: str
+    retailer_name: str
+    price: float
+    original_price: float | None = None
+    currency: str = "USD"
+    url: str | None = None
+    condition: str = "new"
+    is_available: bool = True
+    is_on_sale: bool = False
+    last_checked: datetime
+
+
+class PriceComparisonResponse(BaseModel):
+    """Full price comparison response across all retailers."""
+
+    product_id: uuid.UUID
+    product_name: str
+    prices: list[PriceResponse]
+    total_retailers: int
+    retailers_succeeded: int
+    retailers_failed: int
+    cached: bool
+    fetched_at: datetime

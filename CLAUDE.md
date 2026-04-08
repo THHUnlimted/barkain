@@ -264,6 +264,7 @@ This project uses a **two-tier AI workflow:**
 **Step 1c — Container Infrastructure + Backend Client: COMPLETE** ✅ (2026-04-07)
 **Step 1d — Retailer Containers Batch 1: COMPLETE** ✅ (2026-04-07)
 **Step 1e — Retailer Containers Batch 2: COMPLETE** ✅ (2026-04-07)
+**Step 1f — M2 Price Aggregation + Caching: COMPLETE** ✅ (2026-04-08)
 **Phase 1 — Foundation: IN PROGRESS**
 
 - Architecture documents: ✅
@@ -314,9 +315,15 @@ This project uses a **two-tier AI workflow:**
 - BackMarket container: ✅ (`containers/backmarket/` — all items "refurbished", seller extraction)
 - Batch 2 container tests: ✅ (9 new — response parsing per retailer, all-6 parallel dispatch, partial failure, seller validation)
 - Container URL pattern fix: ✅ (changed from `http://localhost:808{port}` to `http://localhost:{port}` with full port numbers)
+- M2 Price Aggregation Service: ✅ (`backend/modules/m2_prices/service.py` — full pipeline: cache check → container dispatch → normalize → upsert → cache → return)
+- M2 Price endpoint: ✅ (GET /api/v1/prices/{product_id} — auth, rate limiting, force_refresh, sorted ascending)
+- M2 Redis caching: ✅ (6hr TTL, key pattern `prices:product:{product_id}`, 3-tier cache: Redis → DB → containers)
+- M2 Price upsert: ✅ (ON CONFLICT DO UPDATE on product_id+retailer_id+condition)
+- M2 Price history: ✅ (append-only to TimescaleDB hypertable, source=agent_browser)
+- M2 tests: ✅ (13 new — cache hit/miss, force_refresh, sorting, partial failure, upsert, is_on_sale, 404, 422, auth)
 
-**Test counts:** 59 backend, 0 iOS unit, 0 UI, 0 snapshot
-**Build status:** Backend compiles and serves health + product resolve endpoints; container template + 11 retailer containers build and respond to GET /health; `ruff check` clean
+**Test counts:** 72 backend, 0 iOS unit, 0 UI, 0 snapshot
+**Build status:** Backend compiles and serves health + product resolve + price comparison endpoints; container template + 11 retailer containers build and respond to GET /health; `ruff check` clean
 
 ### Key Files Created (Step 1a)
 ```
@@ -398,6 +405,13 @@ containers/backmarket/                  # BackMarket scraper (port 8090) — all
   Each: Dockerfile, server.py, entrypoint.sh, extract.sh, extract.js, config.json, test_fixtures.json
 backend/tests/modules/test_container_retailers_batch2.py  # 9 tests for batch 2
 backend/tests/fixtures/{best_buy,home_depot,lowes,ebay_new,ebay_used,backmarket}_extract_response.json
+```
+
+### Key Files Created (Step 1f)
+```
+backend/modules/m2_prices/service.py    # PriceAggregationService (cache→dispatch→normalize→upsert→cache→return)
+backend/modules/m2_prices/router.py     # GET /api/v1/prices/{product_id} with auth + rate limiting
+backend/tests/modules/test_m2_prices.py # 13 tests (cache, dispatch, upsert, sorting, errors)
 ```
 
 ---

@@ -30,9 +30,9 @@
 
 | Feature | Status | Phase | Class | Data Source | Notes |
 |---------|--------|-------|-------|-------------|-------|
-| Price comparison (11 retailers — all scraped) | ⬜ | 1 | T | agent-browser containers for all retailers: Amazon, Best Buy, Walmart, Target, Home Depot, Lowe's, eBay (new), eBay (used/refurb), Sam's Club, BackMarket, Facebook Marketplace | Demo uses scrapers for everything. Free APIs (Best Buy, eBay Browse, Keepa) added as production speed optimization in Phase 4 |
+| Price comparison (11 retailers — all scraped) | 🚧 | 1 | T | agent-browser containers for all retailers: Amazon, Best Buy, Walmart, Target, Home Depot, Lowe's, eBay (new), eBay (used/refurb), Sam's Club, BackMarket, Facebook Marketplace | Demo uses scrapers for everything. Free APIs (Best Buy, eBay Browse, Keepa) added as production speed optimization in Phase 4 |
 | Price comparison (production API optimization) | ⬜ | 4 | T | Best Buy Products API (free), eBay Browse API (free), Keepa API ($15/mo) layered on top of scraper containers | API results return ~500ms vs 3-8s for containers. Fallback: API → container → skip |
-| Price caching (6hr TTL, TimescaleDB) | ⬜ | 1 | T | TimescaleDB hypertable | First query triggers live scrape; subsequent queries read from cache |
+| Price caching (6hr TTL, TimescaleDB) | 🚧 | 1 | T | TimescaleDB hypertable | First query triggers live scrape; subsequent queries read from cache |
 | Background price ingestion workers | ⬜ | 2 | T | SQS + scheduled fetchers per retailer container | Keeps cache warm for popular products |
 | Coupon discovery (top sources) | ⬜ | 3 | T | agent-browser batch scraping of coupon sites | Deprioritized from Phase 2 — focus on price + identity + cards first |
 | Coupon validation engine | ⬜ | 3 | H | Crawlers fetch codes (T); AI validates stacking compatibility (AI) | Confidence scoring pipeline |
