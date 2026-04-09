@@ -1,3 +1,4 @@
+import os
 import time
 from collections.abc import AsyncGenerator
 
@@ -9,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import AsyncSessionLocal
+
+_DEMO_MODE = os.getenv("BARKAIN_DEMO_MODE") == "1"
 
 
 # MARK: - Database
@@ -43,6 +46,10 @@ async def get_current_user(
     authorization: str | None = Header(None),
 ) -> dict:
     """Extract and validate Clerk JWT. Raises 401 if invalid."""
+    # Demo mode: bypass auth for local testing (BARKAIN_DEMO_MODE=1)
+    if _DEMO_MODE:
+        return {"user_id": "demo_user", "email": "demo@barkain.local", "session_id": "demo"}
+
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=401,

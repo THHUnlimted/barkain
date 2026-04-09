@@ -175,12 +175,15 @@ Standalone Python scripts that poll SQS queues. Not Celery.
 
 **Location:** `backend/ai/`
 
-All LLM interactions go through `abstraction.py`. No module imports `google.genai`, `anthropic`, or `openai` directly. The abstraction uses the `google-genai` SDK with native async (`client.aio.models.generate_content`) — no `asyncio.to_thread` wrapper needed.
+All LLM interactions go through `abstraction.py`. No module imports `google.genai`, `anthropic`, or `openai` directly. The abstraction uses the `google-genai` SDK with native async (`client.aio.models.generate_content`).
+
+**Gemini config:** Thinking enabled (`ThinkingConfig(thinking_budget=-1)` — model decides), Google Search grounding (`Tool(google_search=GoogleSearch())`), temperature=1.0, max_output_tokens=4096. Response parsing via `_extract_text()` skips thinking parts (`.thought == True`) and only returns model text output. JSON extraction has regex fallback for truncated responses.
 
 ### Model Routing
 
 | Task | Model | Rationale | Phase |
 |---|---|---|---|
+| UPC product resolution | Gemini 3.1 Flash Lite Preview | Fast, cost-effective UPC lookup with thinking + Google Search grounding. System instruction (9-step reasoning, cached by Gemini); user prompt (bare UPC + output format). Returns `device_name` only | 1 |
 | Full-stack recommendation | Claude Sonnet | Multi-variable reasoning across all 9 layers | 3 |
 | Image product identification | Claude Sonnet (vision) | Best vision quality in testing | 3 |
 | Receipt OCR interpretation | Claude Sonnet (vision) | Structured data extraction from text | 3 |
@@ -191,7 +194,7 @@ All LLM interactions go through `abstraction.py`. No module imports `google.gena
 
 ### Prompt Templates
 
-Stored in `backend/ai/prompts/` as Python string templates with variable injection. Each module that uses AI has a corresponding prompt file.
+Stored in `backend/ai/prompts/` as Python string templates with variable injection. Each module that uses AI has a corresponding prompt file. The UPC lookup prompt uses a two-part architecture: `UPC_LOOKUP_SYSTEM_INSTRUCTION` contains full 9-step reasoning instructions (cached by Gemini across calls), while the user prompt is just the bare UPC string + output format constraint (`device_name` only). The service parses only `device_name` from the response (mapped to `name`), setting `source=gemini_upc`. Brand, category, ASIN, and description are left as None — populated by UPCitemdb fallback or future enrichment.
 
 ### Structured Outputs
 

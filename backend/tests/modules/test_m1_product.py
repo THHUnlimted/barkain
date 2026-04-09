@@ -143,8 +143,8 @@ async def test_resolve_calls_gemini_on_cache_miss(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["name"] == gemini_fixture["name"]
-    assert data["source"] == "gemini"
+    assert data["name"] == gemini_fixture["device_name"]
+    assert data["source"] == "gemini_upc"
     mock_gemini.assert_called_once()
 
 

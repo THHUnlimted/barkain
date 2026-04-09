@@ -66,6 +66,11 @@ final class BarcodeScanner: NSObject {
         continuation?.finish()
     }
 
+    func clearLastScan() {
+        lastScannedCode = nil
+        lastScanTime = .distantPast
+    }
+
     // MARK: - Configuration
 
     private func configureSession() throws {
@@ -106,13 +111,18 @@ extension BarcodeScanner: AVCaptureMetadataOutputObjectsDelegate {
             return
         }
 
+        // AVFoundation reports UPC-A as EAN-13 with a leading 0 — strip it
+        let normalized = (code.count == 13 && code.hasPrefix("0"))
+            ? String(code.dropFirst())
+            : code
+
         let now = Date()
-        if code == lastScannedCode && now.timeIntervalSince(lastScanTime) < debounceInterval {
+        if normalized == lastScannedCode && now.timeIntervalSince(lastScanTime) < debounceInterval {
             return
         }
 
-        lastScannedCode = code
+        lastScannedCode = normalized
         lastScanTime = now
-        continuation?.yield(code)
+        continuation?.yield(normalized)
     }
 }

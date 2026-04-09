@@ -71,12 +71,7 @@ def _make_error_response(retailer_id: str) -> ContainerResponse:
 
 
 GEMINI_PRODUCT_DATA = {
-    "name": "Sony WH-1000XM5",
-    "brand": "Sony",
-    "category": "headphones",
-    "description": "Wireless noise-cancelling headphones",
-    "image_url": "https://example.com/xm5.jpg",
-    "asin": "B0BSHPJHJ4",
+    "device_name": "Sony WH-1000XM5",
 }
 
 ALL_RETAILER_IDS = [
@@ -140,9 +135,7 @@ async def test_full_flow_empty_product_name(client, db_session):
     await _seed_retailers(db_session, ["amazon"])
 
     gemini_data = {
-        "name": "Unknown Gadget",
-        "brand": None,
-        "category": None,
+        "device_name": "Unknown Gadget",
     }
 
     with patch(
@@ -179,9 +172,7 @@ async def test_full_flow_missing_asin(client, db_session):
     await _seed_retailers(db_session, ["walmart"])
 
     gemini_data = {
-        "name": "Generic Speaker",
-        "brand": "Acme",
-        "category": "speakers",
+        "device_name": "Generic Speaker",
     }
 
     with patch(

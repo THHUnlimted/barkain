@@ -29,6 +29,7 @@
 		B1E6048E2F83FE9D00951147 /* BarkainUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BarkainUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1A000012F84000000000001 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		C1A000022F84000000000002 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
+		C1A000042F84000000000004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -78,6 +79,7 @@
 			isa = PBXGroup;
 			children = (
 				C1A000032F84000000000003 /* Config */,
+				C1A000042F84000000000004 /* Info.plist */,
 				B1E604792F83FE9C00951147 /* Barkain */,
 				B1E604872F83FE9D00951147 /* BarkainTests */,
 				B1E604912F83FE9D00951147 /* BarkainUITests */,
@@ -416,6 +418,7 @@
 				DEVELOPMENT_TEAM = 25FHZZNQNW;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Barkain needs camera access to scan product barcodes";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -450,6 +453,7 @@
 				DEVELOPMENT_TEAM = 25FHZZNQNW;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Barkain needs camera access to scan product barcodes";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

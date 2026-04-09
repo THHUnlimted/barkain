@@ -165,7 +165,7 @@ ruff check .                  # Lint
 
 **Scrapers:** Per-retailer Docker containers, each running: Chrome + agent-browser CLI + extraction script (DOM eval pattern) + AI health agent (Watchdog). Backend sends requests to containers; containers return structured JSON.
 
-**AI Layer:** All LLM calls go through `backend/ai/abstraction.py`. Never call Claude/GPT directly from a module. The abstraction handles model routing, retry logic, and structured output parsing via Instructor. Watchdog self-healing uses Claude Opus (YC credits); recommendation synthesis uses Claude Sonnet.
+**AI Layer:** All LLM calls go through `backend/ai/abstraction.py`. Never call Claude/GPT directly from a module. The abstraction handles model routing, retry logic, and structured output parsing. Gemini calls use thinking (ThinkingConfig), Google Search grounding, and temperature=1.0 for maximum UPC resolution accuracy. Response parsing extracts text parts only, skipping thinking chunks. Watchdog self-healing uses Claude Opus (YC credits); recommendation synthesis uses Claude Sonnet.
 
 **Data flow:**
 ```
@@ -293,8 +293,9 @@ This project uses a **two-tier AI workflow:**
 - Rate limiting: ✅ (Redis sorted set sliding window, per-user, 3 tiers)
 - Retailer seed: ✅ (11 Phase 1 retailers)
 - Backend tests: ✅ (14 passing — health, auth, rate limiting, migrations, seed)
-- AI abstraction layer: ✅ (`backend/ai/abstraction.py` — google-genai SDK with native async, retry logic)
-- M1 Product resolution: ✅ (POST /api/v1/products/resolve — Gemini primary, UPCitemdb backup, Redis 24hr cache)
+- AI abstraction layer: ✅ (`backend/ai/abstraction.py` — google-genai SDK with native async, retry logic, thinking (budget=-1), Google Search grounding, temperature=1.0, text-part extraction skipping thinking chunks)
+- UPC lookup prompt: ✅ (`backend/ai/prompts/upc_lookup.py` — system instruction with 9-step reasoning (cached), user prompt is bare UPC + output format constraint, returns `device_name` only, maps to `name` in service with `source=gemini_upc`)
+- M1 Product resolution: ✅ (POST /api/v1/products/resolve — Gemini `gemini-3.1-flash-lite-preview` with thinking+grounding primary, UPCitemdb backup, Redis 24hr cache. Gemini returns `device_name` only; brand/category/asin populated by UPCitemdb or future enrichment)
 - M1 tests: ✅ (12 new — validation, auth, resolution chain, caching, fallback, 404)
 - Container template: ✅ (`containers/template/` — Dockerfile, server.py, base-extract.sh, extract.js, config.json, test_fixtures.json)
 - Container Dockerfile: ✅ (builds successfully, health endpoint responds, Chromium + agent-browser + Xvfb + FastAPI)
@@ -328,7 +329,7 @@ This project uses a **two-tier AI workflow:**
 - iOS design system: ✅ (Colors, Spacing, Typography from HTML prototype)
 - iOS data models: ✅ (Product, PriceComparison, RetailerPrice — Codable with snake_case decoding)
 - iOS API client: ✅ (APIClientProtocol + APIClient — resolveProduct, getPrices, error mapping, custom date decoding)
-- iOS barcode scanner: ✅ (AVFoundation — EAN-13/UPC-A, AsyncStream, 2s debounce)
+- iOS barcode scanner: ✅ (AVFoundation — EAN-13/UPC-A, AsyncStream, 2s debounce, UPC-A normalization strips leading 0 from EAN-13)
 - iOS navigation shell: ✅ (TabView: Scan/Search/Savings/Profile, each with NavigationStack)
 - iOS scanner feature: ✅ (ScannerView + ScannerViewModel — scan barcode → resolve product → fetch prices)
 - iOS shared components: ✅ (ProductCard, PriceRow, SavingsBadge, EmptyState, LoadingState, ProgressiveLoadingView)
@@ -474,6 +475,24 @@ BarkainTests/Helpers/MockAPIClient.swift                   # Extended — forceR
 BarkainTests/Helpers/TestFixtures.swift                    # Extended — cached, empty, partial PriceComparison fixtures
 ```
 
+### Key Files Modified/Created (Post-Phase 1 — Demo + Hardening)
+```
+Info.plist                                                 # NEW — ATS local networking exception + API_BASE_URL from xcconfig
+Config/Debug.xcconfig                                      # API_BASE_URL (change to Mac IP for physical device testing)
+Barkain/Services/Networking/AppConfig.swift                 # Reads API_BASE_URL from Info.plist with hardcoded fallback
+Barkain/Services/Scanner/BarcodeScanner.swift               # UPC-A normalization (strip leading 0 from EAN-13), clearLastScan()
+Barkain/Features/Scanner/ScannerView.swift                  # onChange(of: scannedUPC) clears scanner on reset, scanner.clearLastScan in error view
+backend/app/dependencies.py                                 # BARKAIN_DEMO_MODE=1 auth bypass for local testing
+backend/ai/abstraction.py                                   # Thinking (budget=-1), Google Search grounding, temperature=1.0, _extract_text() skips thinking parts, JSON fallback regex extraction
+backend/ai/prompts/upc_lookup.py                            # System instruction: full 9-step reasoning (cached). User prompt: bare UPC + output format only
+backend/modules/m1_product/service.py                       # Simplified: parses device_name only, source=gemini_upc, brand/category/asin=None
+backend/tests/fixtures/gemini_upc_response.json             # Simplified to {"device_name": "..."}
+backend/tests/test_integration.py                           # Updated GEMINI_PRODUCT_DATA to device_name only
+backend/tests/modules/test_m1_product.py                    # Updated assertions for gemini_upc source
+Barkain.xcodeproj/project.pbxproj                           # Added INFOPLIST_FILE=Info.plist to Debug+Release target configs
+prompts/DEMO_GUIDE.md                                       # NEW — comprehensive demo walkthrough with physical device instructions
+```
+
 ### Key Files Modified/Created (Step 1i)
 ```
 backend/ai/abstraction.py                              # Migrated google-generativeai → google-genai (native async)
@@ -529,3 +548,10 @@ containers/README.md                                    # D7 note — server.py 
 | Clerk MCP | HTTP transport (mcp.clerk.com) | Simplest setup; no local npm packages needed | Apr 2026 |
 | UPCitemdb priority | Nice-to-have, not blocker | Gemini API is primary for UPC resolution; UPCitemdb is fallback only | Apr 2026 |
 | AI SDK | google-genai (from google-generativeai) | Deprecated package; new SDK has native async, no asyncio.to_thread needed | Apr 2026 |
+| UPC lookup model | gemini-3.1-flash-lite-preview | Faster and cheaper for UPC resolution; thinking + Google Search grounding for accuracy | Apr 2026 |
+| UPC prompt architecture | System instruction (reasoning, cached) + user prompt (UPC + format constraint) | System instruction is cached by Gemini, minimizing per-call tokens. User prompt is just the UPC + output format | Apr 2026 |
+| Gemini output | `device_name` only (no reasoning/brand/category in output) | Simpler parsing, faster responses. Brand/category populated by UPCitemdb fallback or future enrichment | Apr 2026 |
+| Container scraping on ARM | Not viable for local demo | x86 emulation too slow (60-180s); containers work on native x86 cloud instances (5-8s). Demo relies on Gemini product resolution only | Apr 2026 |
+| App Transport Security | NSAllowsLocalNetworking=true | Permits HTTP to LAN IPs for physical device testing against local backend | Apr 2026 |
+| API base URL | Configurable via xcconfig → Info.plist → AppConfig.swift | Debug.xcconfig sets localhost; change to Mac IP for physical device testing. Runtime reads from Bundle.main.infoDictionary | Apr 2026 |
+| Demo mode auth bypass | BARKAIN_DEMO_MODE=1 env var | Bypasses Clerk JWT in dependencies.py for local testing. NOT for production | Apr 2026 |

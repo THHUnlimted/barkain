@@ -29,6 +29,11 @@ struct ScannerView: View {
             viewModel = vm
             await startScanner(vm)
         }
+        .onChange(of: viewModel?.scannedUPC) { _, newValue in
+            if newValue == nil {
+                scanner.clearLastScan()
+            }
+        }
         .onDisappear {
             scanner.stopScanning()
         }
@@ -153,6 +158,7 @@ struct ScannerView: View {
             subtitle: error.errorDescription ?? "An unknown error occurred.",
             actionTitle: "Try Again"
         ) {
+            scanner.clearLastScan()
             viewModel.reset()
         }
     }

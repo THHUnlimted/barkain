@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai.abstraction import gemini_generate_json
-from ai.prompts.upc_lookup import build_upc_lookup_prompt
+from ai.prompts.upc_lookup import UPC_LOOKUP_SYSTEM_INSTRUCTION, build_upc_lookup_prompt
 from modules.m1_product.models import Product
 from modules.m1_product.upcitemdb import lookup_upc as upcitemdb_lookup
 
@@ -116,17 +116,18 @@ class ProductResolutionService:
         """Call Gemini API to resolve UPC, persist to DB, cache to Redis."""
         try:
             prompt = build_upc_lookup_prompt(upc)
-            data = await gemini_generate_json(prompt)
+            raw = await gemini_generate_json(
+                prompt,
+                system_instruction=UPC_LOOKUP_SYSTEM_INSTRUCTION,
+            )
 
-            if data.get("error") == "unknown_upc":
+            device_name = raw.get("device_name")
+            if not device_name:
                 logger.info("Gemini could not identify UPC %s", upc)
                 return None
 
-            if not data.get("name"):
-                logger.warning("Gemini returned no name for UPC %s", upc)
-                return None
-
-            return await self._persist_product(upc, data, "gemini")
+            data = {"name": device_name}
+            return await self._persist_product(upc, data, "gemini_upc")
         except Exception:
             logger.warning(
                 "Gemini resolution failed for UPC %s", upc, exc_info=True

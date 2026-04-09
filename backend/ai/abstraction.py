@@ -11,6 +11,7 @@ import re
 
 from google import genai
 from google.genai import types
+from google.genai.types import GoogleSearch, ThinkingConfig, Tool
 
 from app.config import settings
 
@@ -32,17 +33,42 @@ def _get_client() -> genai.Client:
     return _client
 
 
+# MARK: - Helpers
+
+
+def _extract_text(response) -> str:
+    """Extract only the model's text output, skipping thinking/grounding parts."""
+    if not response.candidates:
+        return response.text  # fallback to default
+
+    parts = response.candidates[0].content.parts
+    text_parts = []
+    for part in parts:
+        # Skip thinking parts (have a "thought" attribute set to True)
+        if getattr(part, "thought", False):
+            continue
+        if part.text:
+            text_parts.append(part.text)
+
+    if text_parts:
+        return "\n".join(text_parts)
+
+    # Fallback if no text parts found
+    return response.text
+
+
 # MARK: - Gemini
 
 
 async def gemini_generate(
     prompt: str,
     *,
-    model: str = "gemini-2.0-flash",
+    model: str = "gemini-3.1-flash-lite-preview",
     temperature: float = 0.1,
-    max_output_tokens: int = 1024,
+    max_output_tokens: int = 4096,
     max_retries: int = 1,
     retry_delay: float = 1.0,
+    system_instruction: str | None = None,
 ) -> str:
     """Send a prompt to Gemini and return the text response.
 
@@ -53,6 +79,7 @@ async def gemini_generate(
         max_output_tokens: Maximum response length.
         max_retries: Number of retries on transient failures.
         retry_delay: Base delay in seconds between retries (doubles each retry).
+        system_instruction: Optional system instruction for the model.
 
     Returns:
         Raw text response from Gemini.
@@ -64,8 +91,11 @@ async def gemini_generate(
     client = _get_client()
 
     config = types.GenerateContentConfig(
-        temperature=temperature,
+        temperature=1.0,
         max_output_tokens=max_output_tokens,
+        system_instruction=system_instruction,
+        thinking_config=ThinkingConfig(thinking_budget=-1),
+        tools=[Tool(google_search=GoogleSearch())],
     )
 
     last_error: Exception | None = None
@@ -76,7 +106,8 @@ async def gemini_generate(
                 contents=prompt,
                 config=config,
             )
-            return response.text
+            # Extract only text parts, skipping thinking and grounding chunks
+            return _extract_text(response)
         except Exception as exc:
             last_error = exc
             if attempt < max_retries:
@@ -96,11 +127,12 @@ async def gemini_generate(
 async def gemini_generate_json(
     prompt: str,
     *,
-    model: str = "gemini-2.0-flash",
+    model: str = "gemini-3.1-flash-lite-preview",
     temperature: float = 0.1,
-    max_output_tokens: int = 1024,
+    max_output_tokens: int = 4096,
     max_retries: int = 1,
     retry_delay: float = 1.0,
+    system_instruction: str | None = None,
 ) -> dict:
     """Send a prompt to Gemini and parse the response as JSON.
 
@@ -120,6 +152,7 @@ async def gemini_generate_json(
         max_output_tokens=max_output_tokens,
         max_retries=max_retries,
         retry_delay=retry_delay,
+        system_instruction=system_instruction,
     )
 
     # Strip markdown code fences
@@ -128,6 +161,15 @@ async def gemini_generate_json(
 
     try:
         return json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        logger.error("Failed to parse Gemini response as JSON: %s", raw[:200])
-        raise ValueError(f"Gemini response is not valid JSON: {exc}") from exc
+    except json.JSONDecodeError:
+        # Response may be truncated or contain extra fields — try to extract
+        # the first complete JSON object from the text
+        match = re.search(r"\{[^{}]*\}", cleaned)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+
+        logger.error("Failed to parse Gemini response as JSON: %s", raw[:500])
+        raise ValueError(f"Gemini response is not valid JSON: {raw[:200]}")
