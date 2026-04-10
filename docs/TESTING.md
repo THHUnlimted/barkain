@@ -387,7 +387,8 @@ Update this table after every step:
 | Step 1h | 72 | 21 | 0 | 0 | 9 iOS (resolve_and_prices×1, loading_states×1, price_error×1, force_refresh×1, partial_results×1, savings_calc×1, best_price×1, reset_price_state×1, resolve_fail_skips_prices×1) + existing test updated |
 | Step 1i | 84 | 21 | 0 | 0 | 12 backend integration (full_flow×7, error_format×5) |
 | Step 2a | 104 | 21 | 0 | 0 | 20 (ai_abstraction×4, health_monitor×5, watchdog×8, pre_fix_verifications×3) |
-| **Total** | **104** | **21** | **0** | **0** | |
+| Walmart adapter routing (post-2a) | 128 | 21 | 0 | 0 | 24 (walmart_http×15: proxy URL builder×4, happy path×2, challenge retry×2, http/parse/timeout/missing-creds errors×4, parser edge cases×3 + walmart_firecrawl×9: happy path×1, request shape×1, 6 error surfaces, + 2 existing fixture updates) |
+| **Total** | **128** | **21** | **0** | **0** | |
 
 ---
 

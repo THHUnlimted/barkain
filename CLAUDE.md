@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** April 2026 (v3.4 — Phase 2 Step 2a complete)
+> **Last updated:** April 2026 (v3.6 — Phase 2 Step 2a complete + walmart_http adapter with Decodo/Firecrawl routing)
 
 ---
 
@@ -356,7 +356,7 @@ This project uses a **two-tier AI workflow:**
 - iOS scan→compare flow: ✅ (full demo loop: scan barcode → resolve product → fetch 11 retailer prices → display comparison)
 - iOS tests: ✅ (21 passing — ScannerViewModel×14, APIClient×3, others)
 
-**Test counts:** 104 backend, 21 iOS unit, 0 UI, 0 snapshot
+**Test counts:** 128 backend (104 + 24 new walmart adapter tests), 21 iOS unit, 0 UI, 0 snapshot
 **Build status:** Backend compiles and serves health + product resolve + price comparison + retailer health endpoints; container template + 11 retailer containers build and respond to GET /health; iOS app builds for simulator with full scan→resolve→compare flow; `ruff check` clean
 
 ### Key Files Created (Step 1a)
@@ -542,12 +542,30 @@ backend/modules/m1_product/service.py                  # Updated — Gemini null
 backend/modules/m2_prices/service.py                   # Updated — shorter Redis TTL (30min for 0-result)
 ```
 
+### Key Files Created/Modified (Walmart Adapter Routing, post-Step-2a)
+```
+backend/modules/m2_prices/adapters/__init__.py         # NEW — adapters subpackage marker
+backend/modules/m2_prices/adapters/_walmart_parser.py  # NEW — shared __NEXT_DATA__ → ContainerResponse logic (challenge detection, itemStacks walker, sponsored filter, condition inference, price shape coercion)
+backend/modules/m2_prices/adapters/walmart_http.py     # NEW — Decodo residential proxy adapter (httpx, Chrome 132 headers, username auto-prefix, password URL-encode, 1-retry on challenge, per-request wire_bytes logging)
+backend/modules/m2_prices/adapters/walmart_firecrawl.py # NEW — Firecrawl managed API adapter (demo default; same parser)
+backend/modules/m2_prices/container_client.py          # Updated — added `_extract_one` router, `_resolve_walmart_adapter`, `walmart_adapter_mode` attr, `_cfg` hold
+backend/app/config.py                                  # Updated — added WALMART_ADAPTER, FIRECRAWL_API_KEY, DECODO_PROXY_USER, DECODO_PROXY_PASS, DECODO_PROXY_HOST
+.env.example                                           # Updated — documented each new env var with comments describing when it's required and how to obtain
+backend/tests/fixtures/walmart_next_data_sample.html   # NEW — realistic __NEXT_DATA__ fixture (4 real products + 1 sponsored placement)
+backend/tests/fixtures/walmart_challenge_sample.html   # NEW — minimal "Robot or human?" PX challenge page
+backend/tests/modules/test_walmart_http_adapter.py     # NEW — 15 tests (proxy URL builder, happy path, challenge retry semantics, error surfaces, parser edge cases)
+backend/tests/modules/test_walmart_firecrawl_adapter.py # NEW — 9 tests (happy path, request-shape, error surfaces)
+backend/tests/modules/test_container_client.py         # Updated — `_setup_client` fixture sets `walmart_adapter_mode = "container"`
+backend/tests/modules/test_container_retailers.py      # Updated — same fixture update (walmart in ports dict triggers router)
+```
+
 ---
 
 ## What's Next
 
 1. **Phase 1 COMPLETE** — tagged v0.1.0. Full barcode scan → 11-retailer price comparison demo operational.
-2. **Step 2a COMPLETE.** Phase 2 continues: Step 2b (M5 Identity Profile)
+2. **Step 2a COMPLETE.** Walmart adapter routing (walmart_http + walmart_firecrawl) landed dormant with `WALMART_ADAPTER=container` default — flip to `firecrawl` for demo, `decodo_http` for production.
+3. Phase 2 continues: Step 2b (M5 Identity Profile)
 
 ---
 
@@ -590,3 +608,8 @@ backend/modules/m2_prices/service.py                   # Updated — shorter Red
 | API base URL | Configurable via xcconfig → Info.plist → AppConfig.swift | Debug.xcconfig sets localhost; change to Mac IP for physical device testing. Runtime reads from Bundle.main.infoDictionary | Apr 2026 |
 | Demo mode auth bypass | BARKAIN_DEMO_MODE=1 env var | Bypasses Clerk JWT in dependencies.py for local testing. NOT for production | Apr 2026 |
 | AI SDK (Anthropic) | anthropic SDK (async) | Same lazy singleton + retry pattern as Gemini. YC credits cover Opus cost for Watchdog | Apr 2026 |
+| HTTP-only retailer adapters | amazon, target, ebay_new can drop browser containers | 10-retailer AWS EC2 probe (2026-04-10): these 3 pass curl+Chrome-headers 5/5 from datacenter IPs with `__NEXT_DATA__` or direct HTML product data. 14-35× faster, ~490 MB RAM saved per retailer, ~1 050 LOC net deleted. See `docs/SCRAPING_AGENT_ARCHITECTURE.md` Appendix A | Apr 2026 |
+| Firecrawl for 7 tough retailers | walmart, best_buy, sams_club, backmarket, ebay_used, home_depot, lowes via Firecrawl managed service | Firecrawl probe (2026-04-10): 10/10 retailers pass including all 5 that failed AWS direct-HTTP and both "inconclusive" ones. HD + Lowe's now known to have `__APOLLO_STATE__` SSR data. ~1.5 credits per scrape, ~$0.0088 per 10-retailer comparison on Standard tier ($83/mo). ~31s P50 cold, ~1s hot-cached. See Appendix B | Apr 2026 |
+| Production scraping architecture | Collapse browser containers to local-dev-only; use Firecrawl for production | Containers don't work from any cloud (IP blocks at edge). Firecrawl solves all 10 retailers from anywhere. Hybrid plan: direct HTTP for amazon/target/ebay_new ($0), Firecrawl for the other 7 ($0.0088/comparison). Containers become local-dev + emergency fallback. Adapter interface in M2 with per-retailer mode config. See Appendix B.7-B.8 | Apr 2026 |
+| Decodo residential proxy for walmart-only production path | Decodo rotating residential (US-targeted) as post-demo walmart path | 5/5 Walmart scrapes PASS via Decodo US residential pool (Verizon Fios). Wire body ~121 KB/scrape → 8,052 scrapes/GB. $0.000466/scrape at $3.75/GB (3 GB tier) → **2.7× cheaper than Firecrawl** per request, no concurrency cap. See Appendix C. Username auto-prefixed with `user-` and suffixed with `-country-us` by the adapter | Apr 2026 |
+| walmart_http adapter lands now, dormant until launch | `WALMART_ADAPTER={container,firecrawl,decodo_http}` feature flag | Demo default = `firecrawl`; flip to `decodo_http` post-demo. All 3 paths return `ContainerResponse`, routed by `ContainerClient._extract_one`. Other 10 retailers still use the container dispatch unchanged. 24 new tests (15 walmart_http + 9 firecrawl), 128 total passing. See Appendix C.6–C.8 | Apr 2026 |

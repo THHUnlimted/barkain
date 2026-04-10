@@ -1,5 +1,7 @@
 # Building E-Commerce Scraping Scripts with agent-browser
 
+> **⚠️ WALMART EXCEPTION (2026-04-10 paradigm shift):** Walmart is no longer scraped via agent-browser in any deployed environment. PerimeterX's client-side JS fingerprints headless Chromium regardless of IP or workaround, and we discovered the full product catalog is server-rendered into a `<script id="__NEXT_DATA__">` blob — so a plain HTTP request through a residential IP (Firecrawl for demo, Decodo for production) skips the JS layer entirely. Walmart now routes through `backend/modules/m2_prices/adapters/walmart_http.py` (or `walmart_firecrawl.py`) via the `WALMART_ADAPTER` env flag. See `docs/ARCHITECTURE.md#walmart-adapter-routing-post-step-2a-paradigm-shift` and `docs/SCRAPING_AGENT_ARCHITECTURE.md` Appendices A–C. **The remaining 10 retailers still use agent-browser containers and all content in this guide still applies to them.**
+
 A field guide documenting how `agent-browser` CLI is being used to build extraction scripts across major retail sites. Based on hands-on testing of 5 sites (Walmart, Amazon, Target, Facebook Marketplace, Costco) with 6-7 extraction methods each, totaling 35+ individual method tests and 100+ live requests.
 
 ---

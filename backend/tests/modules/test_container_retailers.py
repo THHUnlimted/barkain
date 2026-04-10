@@ -65,6 +65,10 @@ def _setup_client(client: ContainerClient):
         "sams_club": 8089,
         "fb_marketplace": 8091,
     }
+    # Route walmart through the legacy container path so these tests exercise
+    # the same dispatch as they did before adapter routing was introduced.
+    client.walmart_adapter_mode = "container"
+    client._cfg = None
 
 
 # MARK: - Response Parsing

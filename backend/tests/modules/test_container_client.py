@@ -34,6 +34,11 @@ def _setup_client(client: ContainerClient):
     client.timeout = 5
     client.retry_count = 1
     client.ports = {"walmart": 8083, "target": 8084, "best_buy": 8082}
+    # Default to container path so existing tests exercise the legacy route.
+    # Adapter routing is covered in test_walmart_http_adapter.py /
+    # test_walmart_firecrawl_adapter.py.
+    client.walmart_adapter_mode = "container"
+    client._cfg = None
 
 
 # MARK: - URL Resolution

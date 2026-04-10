@@ -60,5 +60,22 @@ class Settings(BaseSettings):
         "fb_marketplace": 8091,
     }
 
+    # Walmart adapter routing — selects which path handles walmart scrapes.
+    # Valid values: "container" (legacy browser container, default), "firecrawl"
+    # (demo path via Firecrawl managed API), "decodo_http" (production path via
+    # Decodo residential proxy). See docs/SCRAPING_AGENT_ARCHITECTURE.md App. A–C.
+    WALMART_ADAPTER: str = "container"
+
+    # Firecrawl — managed scraping service (demo path for walmart).
+    FIRECRAWL_API_KEY: str = ""
+
+    # Decodo — residential proxy (production path for walmart).
+    # Username will be automatically prefixed with "user-" and suffixed with
+    # "-country-us" if not already present, so you can set DECODO_PROXY_USER to
+    # the bare username from your Decodo dashboard.
+    DECODO_PROXY_USER: str = ""
+    DECODO_PROXY_PASS: str = ""
+    DECODO_PROXY_HOST: str = "gate.decodo.com:7000"
+
 
 settings = Settings()

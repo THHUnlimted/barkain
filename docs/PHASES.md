@@ -21,6 +21,7 @@
 **Step 1i (Hardening + Doc Sweep + Tag v0.1.0) — COMPLETE** (2026-04-08)
 **Phase 1 (Foundation) — COMPLETE**
 **Step 2a (Watchdog Supervisor Agent + Health Monitoring + Shared Base Image) — COMPLETE** (2026-04-10)
+**Walmart HTTP Adapter + Firecrawl/Decodo Routing — COMPLETE** (2026-04-10) — paradigm shift: walmart now uses `WALMART_ADAPTER={container,firecrawl,decodo_http}` routing instead of the browser container. Demo runs through Firecrawl, production flips to Decodo residential proxy with one env var change. 10 other retailers unchanged. See `docs/ARCHITECTURE.md#walmart-adapter-routing-post-step-2a-paradigm-shift` and `docs/SCRAPING_AGENT_ARCHITECTURE.md` Appendices A–C.
 **Tagged releases:** v0.1.0 (Phase 1)
 
 ---

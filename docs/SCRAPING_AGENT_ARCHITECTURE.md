@@ -1145,3 +1145,567 @@ async def batch_coupon_cleanup():
 3. **Phase 2 (Weeks 11-12):** Probe template library — identity discount probes + portal rate checks. Nightly batch jobs. Background workers (SQS via LocalStack).
 4. **Phase 3 (Weeks 13-14):** Coupon discovery + validation agents. Confidence scoring pipeline.
 5. **Phase 3 (Weeks 15-16):** Claude synthesis layer — combines all data sources into personalized recommendation.
+
+---
+
+## Appendix A — Datacenter-IP HTTP-only Scraping Probe (2026-04-10)
+
+> Motivation: investigate whether retailer search pages can be scraped via plain HTTP (no browser, no JS execution) from a production cloud environment, skipping the browser-container fingerprint layer entirely. Prompted by the discovery that Walmart's search page server-renders its full product list into `__NEXT_DATA__` — meaning the data we need is in the raw HTML response, and the "Robot or human?" page we hit in containers was a client-side JS replacement that only runs when JS executes.
+
+### A.1 Methodology
+
+**Test run:** 2026-04-10, 16:39:41Z → 16:43:19Z. Wall-clock 3 min 38 s for 50 requests across 5 parallel EC2 instances.
+
+**Instances:** 5 × `t4g.nano` (ARM, AL2023) launched into `us-east-1b`, no subnet pinning. Cost: ~$0.0001 total.
+
+**Source IPs (all `AS14618 Amazon.com, Inc.`):**
+- `3.83.24.192`
+- `18.212.29.146`
+- `44.211.131.75`
+- `34.238.240.166`
+- `18.233.225.77`
+
+**Client configuration:**
+- `curl` from Debian OpenSSL stack with `--compressed`, `-L --max-redirs 3`
+- Full Chrome 132 browser header set: `User-Agent`, `Accept`, `Accept-Language`, `Accept-Encoding: gzip, deflate, br`, `Sec-Ch-Ua`, `Sec-Ch-Ua-Mobile`, `Sec-Ch-Ua-Platform`, `Sec-Fetch-Dest/Mode/Site/User`, `Upgrade-Insecure-Requests`
+- 1-3 s jitter between retailers
+
+**Query:** `"Apple AirPods Pro"` — universal for the electronics subset. Home Depot / Lowe's may yield 0-result pages, which is still a valid signal for bot-detection testing (the search page itself should load).
+
+**Retailers tested:** 10 of 11 Phase 1 retailers. Facebook Marketplace excluded — requires authenticated session, not HTTP-testable.
+
+### A.2 Results — per-retailer matrix (5 IPs each)
+
+| Retailer | Pass/5 | Avg time | Avg size | SSR marker | HTTP code(s) | Verdict |
+|---|---:|---:|---:|---|---|---|
+| **amazon** | **5/5** | 1.03 s | 965 KB | — (direct HTML) | 200 | ✅ **HTTP viable** |
+| **target** | **5/5** | 0.50 s | 165 KB | `__NEXT_DATA__` | 200 | ✅ **HTTP viable** |
+| **ebay_new** | **5/5** | 1.25 s | 1 624 KB | — (direct HTML) | 200 | ✅ **HTTP viable** |
+| sams_club | 1/5 | 0.50 s | 97 KB (pass) / 16 KB (fail) | `__NEXT_DATA__` | 200 | ⚠️ flaky — "Let us know you're not a robot" on 4/5 |
+| walmart | 0/5 | 0.50 s | 15 KB | — | 200 | ❌ "Robot or human?" PerimeterX challenge |
+| ebay_used | 0/5 | 0.31 s | 14 KB | — | 200 | ❌ "Pardon Our Interruption" interstitial |
+| backmarket | 0/5 | 0.42 s | 0 KB | — | **403** | ❌ explicit IP block |
+| best_buy | 0/5 | 0.05 s | 0 KB | — | **000** | ❌ Akamai edge rejects TCP/TLS |
+| home_depot | 0/5 | 0.25 s | 2.4 KB | — | 200 | ❓ small response, URL format likely wrong — inconclusive |
+| lowes | 0/5 | 0.18 s | 2.4 KB | — | 200 | ❓ small response, URL format likely wrong — inconclusive |
+
+> **Correction note:** the initial auto-classifier marked `ebay_used` as PASS because the response contained the substring "airpods" (template text in the interstitial). Manual inspection of the title (`"Pardon Our Interruption..."`) shows it was actually blocked on all 5. Classifier has been updated locally but raw probe data preserved.
+
+### A.3 Anomaly: Walmart's "first IP was clean" result
+
+An earlier single-instance AWS probe at 16:27Z from IP `3.227.243.49` returned the full Walmart page (921 KB, `__NEXT_DATA__` present, real product prices). The 5-instance stability run 12 minutes later from 5 different IPs in the same region and ASN failed 5/5 with "Robot or human?".
+
+**Interpretation:** Walmart / PerimeterX's IP reputation feed on AWS `us-east-1` IPs is **majority-burned** (5/6 tested IPs flagged). A single lucky IP is not production-viable. **Do not architect around Walmart HTTP scraping from AWS without a residential-proxy fallback.**
+
+### A.4 Cross-environment comparison
+
+Combining this test with the earlier two probes:
+
+| Environment | IP / ASN | Walmart HTTP + headers outcome |
+|---|---|---|
+| User's home (residential ISP) | residential | ✅ 200, 926 KB, full `__NEXT_DATA__`, real prices |
+| AWS EC2 us-east-1 (single) | `3.227.243.49` / AS14618 | ✅ 200, 921 KB (lucky IP) |
+| AWS EC2 us-east-1 (5-IP pool) | 5 × AS14618 | ❌ 5/5 challenge |
+| GitHub Actions runner | `57.151.137.148` / Azure | ❌ all 4 variations blocked at layer 1 (307 / challenge) |
+| Container Chromium on home IP | residential (same as above) | ❌ "Robot or human?" — JS-layer fingerprint block |
+
+**Walmart layered defenses confirmed:**
+- **Layer 1 (edge):** IP reputation + header sanity. Cleanly passes residential. Most AWS IPs flagged. Azure/GitHub Actions IPs fully flagged.
+- **Layer 2 (JS challenge):** Fingerprints canvas/WebGL/timing when JS runs. Detects headless Chromium / Xvfb / missing `/sys/cpu` even on a clean residential IP.
+- **Skip layer 2:** Only possible by not executing JS (curl or httpx, not a browser). Requires passing layer 1 first.
+
+**curl_cffi with perfect Chrome TLS fingerprint did NOT help on datacenter IPs** (tested in earlier probe). IP reputation dominates over TLS/fingerprint when scoring from AWS/Azure ranges.
+
+### A.5 Per-retailer verdicts & recommendations
+
+**HTTP-only viable (drop browser container):**
+
+| Retailer | Parser strategy | Est. LOC |
+|---|---|---|
+| **amazon** | HTML parse via `selectolax` — products are in `[data-component-type="s-search-result"]` divs (same anchor as current DOM-eval container) | ~60 |
+| **target** | JSON parse — extract `__NEXT_DATA__` → `props.pageProps.__PRELOADED_STATE__.*.items` (or similar Target shape, needs verification) | ~40 |
+| **ebay_new** | HTML parse via `selectolax` — products in `.s-item` divs (same anchor as current DOM-eval container) | ~60 |
+
+Each replaces an entire `containers/<retailer>/` subdirectory (Dockerfile + `server.py` + `entrypoint.sh` + `extract.sh` + `extract.js` + `config.json` + `test_fixtures.json` ≈ 400 LOC + 900 MB image) with a single Python adapter (~50 LOC, no image, no browser).
+
+**Browser container still required (for now):**
+
+| Retailer | Reason | Future mitigation |
+|---|---|---|
+| walmart | PerimeterX challenge on most datacenter IPs | Residential proxy pool; revisit if pool expands / reputation changes |
+| sams_club | "Not a robot" challenge on 4/5 IPs (same pattern as Walmart) | Same as walmart |
+| best_buy | Akamai edge rejects TCP/TLS from AWS IPs (HTTP 000) | Residential proxy required; or use Best Buy Products API (free, keyed) in production |
+| backmarket | Explicit 403 on all 5 IPs | Residential proxy required; or API partnership |
+| ebay_used | "Pardon Our Interruption" bot interstitial on all 5 IPs (eBay PX-style) | Residential proxy for scraping; or use eBay Browse API (free, OAuth) for both ebay_new and ebay_used |
+
+**Inconclusive — needs re-test with different URL format:**
+
+| Retailer | Issue | Follow-up |
+|---|---|---|
+| home_depot | 2.4 KB response on path-URL template `/s/Apple+AirPods+Pro` — likely URL format rejected, not a challenge | Retry with `?keyword=` or `?NCNI-5` format; inspect the 2.4 KB body for clues |
+| lowes | 2.4 KB response on `/search?searchTerm=` — same pattern as HD | Same — retry with alternate URL format and inspect body |
+
+### A.6 Time & resource savings — if 3 HTTP adapters replace 3 browser containers
+
+**Per-extraction latency (single request):**
+
+| Path | P50 | P95 | Notes |
+|---|---:|---:|---|
+| Browser container (current) | ~17.9 s | ~25 s | Chromium boot + navigate + wait + DOM eval + close |
+| HTTP adapter (measured) | **0.5 – 1.3 s** | ~1.8 s | curl + parse |
+
+**~14–35× faster per request on the 3 viable retailers.**
+
+**End-to-end M2 price aggregation latency:**
+
+M2 currently dispatches all 11 containers in parallel (`m2_prices/container_client.py`), so total latency is gated by the slowest retailer. With 3 retailers dropped to sub-2s HTTP, **P50 stays at ~18 s** (slowest browser container still gates the pipeline). **Direct latency savings: ~0.** The latency win only materializes if the dispatcher short-circuits once the price ceiling is confirmed, which is not the current design.
+
+**Resource footprint (per concurrent extraction batch):**
+
+| Resource | Browser container | HTTP adapter | Savings per replaced retailer |
+|---|---:|---:|---:|
+| RAM | ~512 MB | ~20 MB | **~490 MB** |
+| CPU | Chromium + Xvfb | negligible | ~1 vCPU peak |
+| Docker image | ~900 MB (base) + 10 MB | 0 | ~910 MB disk |
+| Container count | 1 | 0 | −1 |
+
+For 3 retailers dropped: **~1.5 GB RAM, ~3 vCPU peak, ~2.7 GB disk, 3 fewer containers** on the host.
+
+**Reliability & maintainability:**
+- curl output is inspectable on failure; Chromium DOM eval is not
+- No selector drift in the HTTP path (the parser binds to `__NEXT_DATA__` JSON keys or HTML anchors, not CSS paths that change weekly)
+- No Watchdog self-healing needed for HTTP adapters (no selectors to drift)
+- No Xvfb, no dbus errors, no "Chrome exited early" debugging
+- ~400 LOC per retailer deleted, ~50 LOC added = **~1 050 LOC net deleted** across 3 retailers
+
+**Production deployment implication:**
+
+The current container fleet only works because the user runs it on a residential ISP. **Moving to Railway / AWS breaks the 5 tough retailers (walmart, sams_club, best_buy, backmarket, ebay_used) regardless of whether they use HTTP or browser containers** — the block is on the IP layer, which is identical between the two approaches. Both paths need the same solution: residential proxies or a scraping service for those retailers. The HTTP adapters for amazon, target, ebay_new will work from AWS without a proxy.
+
+### A.7 Recommended next actions
+
+1. **Write HTTP adapters for amazon, target, ebay_new** (Phase 2 optimization, not blocking). Located at `backend/modules/m2_prices/adapters/<retailer>_http.py`. Register in M2 dispatcher as an alternative to the container path. Wire via `RETAILER_ADAPTER_MODE={"amazon":"http","target":"http","ebay_new":"http", "...":"container"}` config. Retire containers once adapters pass integration tests for 1 week.
+2. **Re-test home_depot and lowes** with alternate URL formats (`?keyword=`, `?searchTerm=`, etc.) from one EC2 instance. ~30 s test. Upgrade to HTTP adapters if clean, else keep containers.
+3. **Production proxy decision for the 5 tough retailers.** Evaluate:
+   - IPRoyal / Bright Data residential pools (~$5–15/GB, ~$0.0001 per search request at 50 KB)
+   - ScrapingBee / ScraperAPI managed ($0.002 – $0.005 per request) — includes fingerprinting + rotation
+   - Free-tier retailer APIs where available (Best Buy Products API, eBay Browse API) — zero bot risk
+4. **Document in `docs/DEPLOYMENT.md`** that the Phase 1 local demo and production AWS deployment have **different retailer coverage** until the proxy story is resolved.
+5. **Classifier fix:** add `"pardon our interruption"` to the challenge marker list in any future HTTP probe scripts.
+
+### A.8 Artifacts
+
+- EC2 user-data probe script: `.tmp/ec2-multi-probe.sh` (local, not committed)
+- Raw console outputs (50 `PROBE_RESULT` lines + IP/ASN per instance): `.tmp/probe_results/i-*.txt`
+- Aggregation script: `.tmp/aggregate.py`
+- Earlier single-request probes (home IP, GH Actions, AWS single-instance): curl/urllib/curl_cffi variants documented inline in the session log, not archived
+
+---
+
+## Appendix B — Firecrawl Managed-Service Probe (2026-04-10)
+
+> Motivation: after confirming in Appendix A that 7 of 10 retailers reject direct HTTP requests from AWS datacenter IPs at the network layer, test whether a managed scraping service (Firecrawl) passes those same blocks and how it compares on latency, cost, and operational simplicity. Firecrawl is a SaaS scraper with its own proxy pool, browser rendering, and anti-bot handling; from the caller's perspective it's a single HTTP API: give it a URL, receive rendered HTML back.
+
+### B.1 Methodology
+
+**Test run:** 2026-04-10, 17:08:28Z → 17:09:00Z. Wall-clock **32 s for all 10 retailers scraped concurrently** via one `firecrawl scrape` CLI invocation. Plus one follow-up at 17:10:49Z for eBay-new (which had been clobbered by eBay-used in the batch — both saved to the same filename `ebay.com-sch-i.html.md`).
+
+**Client configuration:**
+- Firecrawl CLI v1.12.2, authenticated, credits 101,050 available at start
+- `--format rawHtml` — returns unmodified server HTML including script tags (so `__NEXT_DATA__`, `__APOLLO_STATE__`, etc. are preserved)
+- `--country US` — geo-targeted scrape via US-region proxy pool
+- All retailers in a single batched CLI call → Firecrawl handles concurrency server-side
+
+**Query:** `"Apple AirPods Pro"` — same as Appendix A for apples-to-apples comparison.
+
+**Retailers tested:** same 10 as Appendix A. Facebook Marketplace excluded (auth-gated).
+
+### B.2 Results — full success across all tough retailers
+
+| Retailer | Verdict | Size | SSR marker | Title | Firecrawl duration |
+|---|---|---:|---|---|---:|
+| amazon | ✅ PASS | 1 026 KB | direct HTML | "Amazon.com : Apple AirPods Pro" | (concurrent) |
+| best_buy | ✅ PASS | 1 501 KB | direct HTML | "Apple AirPods Pro - Best Buy" | **31.2 s** (slowest) |
+| **walmart** | ✅ **PASS** | 1 281 KB | `__NEXT_DATA__`, `itemStacks` | "Apple AirPods Pro - Walmart.com" | ~7 s |
+| target | ✅ PASS | 921 KB | `__NEXT_DATA__` | '"Apple AirPods Pro" : Target' | 18.4 s |
+| home_depot | ✅ PASS | 850 KB | **`__APOLLO_STATE__`** | (empty title, 850 KB content present) | 14.3 s |
+| lowes | ✅ PASS | 1 213 KB | **`__APOLLO_STATE__`**, **`__PRELOADED__`** | "Apple AirPods Pro at Lowes.com: Search Results" | 24.5 s |
+| ebay_new | ✅ PASS | 2 644 KB | direct HTML | "Apple Airpods Pro for sale \| eBay" | 28.0 s / 1.0 s cached |
+| ebay_used | ✅ PASS | 2 647 KB | direct HTML | "Apple Airpods Pro for sale \| eBay" | 21.7 s |
+| sams_club | ✅ PASS | 763 KB | `__NEXT_DATA__`, `itemStacks` | "Apple+AirPods+Pro - Samsclub.com" | ~5 s |
+| backmarket | ✅ PASS | 447 KB | direct HTML | "Apple AirPods Pro \| Back Market" | ~4 s |
+
+**10 / 10 retailers pass — including all 5 that hit hard network-layer blocks from AWS in Appendix A, and the 2 that were "inconclusive" with small-response issues.**
+
+Sample of Walmart products extracted directly from `__NEXT_DATA__` in the Firecrawl response:
+
+```
+$224     Apple AirPods Pro 3
+$109.39  Restored Apple AirPods Pro White with Magsafe Charging Case
+$118     Pre-Owned Apple AirPods Pro 2 White With USB-C Charging Case
+$180     Pre-Owned Apple AirPods Pro (2nd Gen) Wireless Earbuds
+$117.49  Pre-Owned Restored Apple AirPods Pro with Magsafe Charging
+$139.95  Pre-Owned Restored Apple AirPods Pro with Wireless MagSafe
+$145     Pre-Owned Apple AirPods Pro 3
+$117.49  Pre-Owned Restored AirPod Pro 1st. generation
+```
+
+43 total products in the `itemStacks` array — identical shape to the home-IP direct scrape in Appendix A.
+
+### B.3 Discoveries that invalidate prior "inconclusive" verdicts
+
+**Home Depot and Lowe's are NOT URL-format issues.** When Firecrawl retrieves the full rendered pages, they contain:
+
+- Home Depot: `__APOLLO_STATE__` — a GraphQL Apollo client state blob with the full product catalog embedded
+- Lowe's: `__APOLLO_STATE__` **and** `__PRELOADED__` — dual SSR state markers
+
+The 2.4 KB responses we got from direct AWS HTTP in Appendix A were the anti-bot interstitials / stub pages that HD and Lowe's serve to suspicious clients before escalating. Firecrawl's proxy + rendering pipeline bypassed that gate. Both retailers are actually **rich SSR sites with structured product data** — excellent candidates for JSON-based parsing.
+
+### B.4 Cost and throughput
+
+**Credit consumption:**
+- Starting credits: 101,050
+- Ending credits: 101,031
+- **Total credits used: 19** across 13 total scrapes (1 smoke test + 1 raw-HTML test + 10-retailer batch + 1 eBay-new re-scrape)
+- **Average: ~1.5 credits per scrape**
+- Remaining: 101,031 ≈ **~6,700 full 10-retailer price comparisons available on free credits**
+
+**Pricing at Firecrawl's published tiers:**
+
+| Tier | Monthly cost | Credits | Cost per credit | Cost per 10-retailer comparison (15 credits) |
+|---|---:|---:|---:|---:|
+| Free (current) | $0 | 101 050* | — | $0 |
+| Hobby | $16 | 3 000 | $0.00533 | $0.080 |
+| Standard | $83 | 100 000 | $0.00083 | $0.0125 |
+| Growth | $333 | 500 000 | $0.00067 | $0.010 |
+
+*Current free tier is unusually high — may be a promotional / YC partnership tier. Verify before planning around it.
+
+**Per-user monthly cost projection (Standard tier, $83/mo):**
+
+| Scenario | Comparisons / user / day | Cost / user / month |
+|---|---:|---:|
+| Light user | 2 | $0.75 |
+| Average user | 5 | $1.88 |
+| Power user | 20 | $7.50 |
+| Demo period (no users) | 0 | $0 — use free tier |
+
+### B.5 Latency comparison — Firecrawl vs browser containers vs HTTP
+
+| Path | P50 for full 10-retailer comparison | Hot-cache P50 | Works from AWS? |
+|---|---:|---:|---|
+| Current browser containers (home IP) | ~18 s | ~18 s | ❌ No |
+| Direct HTTP adapters (AWS) | N/A — only 3 retailers viable | — | ⚠️ Partial (3/10) |
+| **Firecrawl (all 10)** | **~31 s** (gated by slowest: Best Buy) | **~1-5 s** (Firecrawl caches) | ✅ Yes |
+| Hybrid (3 HTTP + 7 Firecrawl) | ~31 s first call | ~1-5 s cached | ✅ Yes |
+
+**Key observations:**
+
+1. **Firecrawl is ~1.7× slower than local containers on a cold request**, because it routes through Firecrawl's infrastructure, runs its own browser, and returns HTML. For demo loops and fresh lookups this is worse latency.
+2. **Firecrawl caches server-side by URL**, so the second hit within ~5 minutes returned eBay in 1.0 s vs 28 s on the first call. Our M2 Redis cache (6 hr TTL) would also absorb most cold hits in a real deployment — users rarely search the same product twice in 5 minutes, but across all users the cache hit rate on common products is high.
+3. **Hybrid approach is the best of both worlds**: use direct HTTP for amazon/target/ebay_new (fast, free, zero credits), use Firecrawl for the other 7 (works from AWS, single integration, single bill). Same `31 s` P50 gated by the slowest Firecrawl call, but 3 of 10 cost $0 and are sub-second.
+
+### B.6 Operational simplicity comparison
+
+| Concern | Browser containers | Firecrawl |
+|---|---|---|
+| Docker images to build + maintain | 11 (~900 MB each) | 0 |
+| Selector drift handling | Watchdog agent + Opus heal prompts (ongoing) | None — Firecrawl abstracts |
+| Host RAM for full fleet | ~5.5 GB (11 × 512 MB) | ~20 MB (just the caller) |
+| Host CPU for full fleet | 11 × Chromium | negligible |
+| Fingerprint / TLS / JA3 maintenance | Ours to solve | Firecrawl's problem |
+| IP reputation management | Ours to solve (proxies) | Firecrawl's problem |
+| Works from any cloud | ❌ (IP-gated) | ✅ |
+| Cost model | Fixed (infra) + high eng maintenance | Per-request, linear with usage |
+| Dependency on third party | None (but you own the ops burden) | Firecrawl outage = your outage |
+| Debuggability | curl/DOM eval inspectable | Black box (you see input + output only) |
+| Data freshness (no caching) | real-time | Firecrawl may return server-cached HTML up to X minutes old — verify |
+
+### B.7 Recommended production architecture
+
+Supersedes Appendix A.7 with the Firecrawl data in hand.
+
+**Demo period (now – Phase 2):**
+- Use Firecrawl for ALL 10 retailers. Drop the 11 browser containers from production deployment (keep them in the repo as a fallback). ~19 credits for each full 10-retailer price comparison × free 101K credits = ~5,300 free comparisons available for dev/demo/early beta.
+- Keep the local browser-container stack for offline development and as a cost-zero fallback when Firecrawl is rate-limited or down.
+
+**Phase 3 — optimization:**
+- Port amazon, target, ebay_new to direct `backend/modules/m2_prices/adapters/<retailer>_http.py`. These cost $0 per request and are sub-2-s. Register via `RETAILER_ADAPTER_MODE` config so Firecrawl is still the fallback if the HTTP path starts failing.
+- After this change: 3 retailers at $0 + 7 at Firecrawl Standard → **~$0.0088 per full price comparison**, still gated at ~31 s P50 by slowest Firecrawl call.
+
+**Phase 4 — scale optimization (only if cost pressure):**
+- Evaluate Bright Data / IPRoyal residential pools for the 7 tough retailers. At $5–15/GB residential + ~60 KB per response, per-request cost drops to ~$0.000001 — **~1000× cheaper than Firecrawl** at volume. Cost: 7 per-retailer scrapers reintroduced (Docker or Python), each with its own fingerprint + retry logic. Worth it only at 10K+ comparisons/day.
+
+**Retailers that should use free APIs instead (Phase 4, if ever):**
+- Best Buy → Best Buy Products API (free, keyed) — zero bot risk, Firecrawl savings
+- eBay new + eBay used → eBay Browse API (free, OAuth) — zero bot risk, handles both conditions
+
+### B.8 Architectural implications — rewriting the scraping stack
+
+With Firecrawl proven to work for all 10 retailers, the question flips: **do we even need the container-based scraping stack in production, or is the browser-container architecture in `containers/*` now a local-dev-only tool?**
+
+**Arguments for collapsing `containers/` to local-only:**
+- 11 Dockerfiles, ~4,400 LOC of bash/JS per container, Watchdog self-heal loop — all exist to solve a problem (bot detection + selector drift) that Firecrawl solves for us
+- None of the containers work from production clouds anyway (Appendix A)
+- Maintenance cost: every retailer UI redesign currently triggers a Watchdog escalation + Opus heal run. With Firecrawl, the adapter breaks only if the underlying JSON/HTML schema changes — far less frequent than CSS selector churn
+- Phase 2 Watchdog supervisor (`workers/watchdog.py`) can be simplified to a lightweight "Firecrawl response shape validator" rather than a full-featured self-heal agent
+
+**Arguments for keeping the containers:**
+- Cost at scale (see B.4 — ~$2/user/month at 5 comparisons/day)
+- Vendor independence — Firecrawl is a startup, SLA/outage risk
+- Real-time data freshness (containers scrape live, Firecrawl may cache server-side)
+- Control — we can tune retry, backoff, user-agent, etc. in our own containers
+
+**Recommendation: collapse to Firecrawl for production, preserve containers as a local-dev + emergency-fallback stack.** Move container orchestration out of the M2 critical path entirely. Rewrite `backend/modules/m2_prices/service.py` to dispatch to an adapter interface:
+
+```python
+class RetailerAdapter(Protocol):
+    async def fetch(self, query: str, max_listings: int) -> list[Listing]: ...
+
+# Implementations:
+class FirecrawlAdapter(RetailerAdapter): ...   # production default
+class HttpAdapter(RetailerAdapter): ...        # amazon, target, ebay_new after Phase 3
+class ContainerAdapter(RetailerAdapter): ...   # local-dev only, existing code path
+```
+
+Configuration-driven per-retailer selection, with sensible production defaults (`firecrawl` everywhere) and override for local dev (`container` everywhere).
+
+### B.9 Risks to investigate before committing
+
+Before ripping out the container stack, validate:
+
+1. **Firecrawl server-side cache freshness.** How long does Firecrawl hold a URL's response? If it's >1 hour, we may serve stale prices even without our Redis cache. Test: scrape walmart for a product, wait varying intervals, scrape again, compare `price` vs the live walmart page. Set Firecrawl `--max-age` explicitly if needed.
+2. **Rate limiting at the Firecrawl API level.** The 2 concurrent jobs limit shown in `firecrawl --status` would cap our M2 pipeline at 2 concurrent retailer calls — our current container dispatch does 10 in parallel. Would degrade total latency from ~31 s to ~2.5 minutes. Verify the actual concurrency ceiling on Standard/Growth tiers.
+3. **SLA + outage history.** Check Firecrawl's status page history. If they have multi-hour outages, our entire price comparison goes down when they do.
+4. **Response schema stability.** Firecrawl's `rawHtml` today returns source HTML. If they silently change to `html` (cleaned) our JSON extraction breaks. Pin the API format in a regression test.
+5. **`country` targeting effectiveness.** `--country US` routes through US IPs — but does it also pass other regional signals (timezone, Accept-Language) that some retailers check? Walmart worked today with US; some other retailer may need more.
+6. **Per-retailer Firecrawl stability.** Today we saw 10/10 on one batch. Run the same batch 10 times over 24 hours and measure stability. Target: ≥95% success rate per retailer. Flag any <95% for contingency.
+
+### B.10 Artifacts
+
+- Firecrawl probe directory: `.tmp/firecrawl_test/`
+- Raw JSON-wrapped HTML responses (10 files, ~12 MB total): `.tmp/firecrawl_test/.firecrawl/`
+- Plain raw eBay-new HTML: `.tmp/firecrawl_test/ebay_new_raw.html` (2.6 MB)
+- Analysis script: `.tmp/firecrawl_test/analyze.py`
+- Timestamps: `.tmp/firecrawl_test/fc_start.txt`, `.tmp/firecrawl_test/fc_end.txt`
+
+---
+
+## Appendix C — Decodo Residential-Proxy Probe and walmart_http Adapter (2026-04-10)
+
+> Motivation: Firecrawl (Appendix B) solves all 10 retailers from any cloud but costs ~$0.00125 per Walmart scrape and has concurrency caps that punish bursty workloads. Decodo sells raw residential proxies as a separate SKU for bandwidth — if we already have a parser for Walmart's `__NEXT_DATA__` blob, we can bypass the managed-scraper markup and pay only for wire bytes. This appendix measures whether Decodo's pool beats Walmart's PerimeterX layer-1 check and computes the actual $/scrape at every tier.
+
+### C.1 Methodology
+
+**Test run:** 2026-04-10, ~16:52Z (sanity check) → ~17:11Z (probe). 5 sequential scrapes through a rotating residential proxy.
+
+**Proxy configuration:**
+- Endpoint: `gate.decodo.com:7000`
+- Authentication: `--proxy-user user-<username>-country-us:<password>` (Decodo requires URL-encoding or `--proxy-user` form due to `=` chars in the password)
+- Geo-targeting: **US only** (critical — the base pool landed a Movistar Peru IP in the sanity check; `country-us` suffix routed through Verizon Fios in Staten Island, NY)
+- Session type: rotating (fresh IP per request, default)
+
+**Client configuration:** same Chrome 132 header set as Appendix A.1 / A.2. Plain `curl` via `--proxy-user` + `-x`.
+
+**Query:** `"Apple AirPods Pro"` (consistent with Appendix A/B for cross-comparison).
+
+### C.2 Sanity check — geo-targeting matters
+
+| Auth | Resolved IP / ASN | Location | Verdict |
+|---|---|---|---|
+| Base (`spviclvc9n`) | AS6147 Movistar Peru | Lima, Peru | ❌ wrong geography for Walmart |
+| US-targeted (`user-spviclvc9n-country-us`) | AS701 Verizon Fios | Staten Island, NY | ✅ clean US residential |
+
+Decodo's pool defaults to the global distribution — a Peru IP would be immediately suspicious to a US retailer's bot-detection feed. The `country-us` suffix is **required**, not optional.
+
+### C.3 Walmart probe results — 5/5 PASS
+
+| Run | HTTP | Wire body bytes | Wall-time | Title | `__NEXT_DATA__` | `itemStacks` | Challenge markers |
+|---:|---:|---:|---:|---|---|---|---:|
+| 1 | 200 | 115,529 | 2.73 s | "Apple AirPods Pro - Walmart.com" | ✅ | ✅ | 0 |
+| 2 | 200 | 116,356 | 3.49 s | "Apple AirPods Pro - Walmart.com" | ✅ | ✅ | 0 |
+| 3 | 200 | 115,913 | 3.10 s | "Apple AirPods Pro - Walmart.com" | ✅ | ✅ | 0 |
+| 4 | 200 | 115,636 | 4.08 s | "Apple AirPods Pro - Walmart.com" | ✅ | ✅ | 0 |
+| 5 | 200 | 114,970 | 3.63 s | "Apple AirPods Pro - Walmart.com" | ✅ | ✅ | 0 |
+
+- **Success rate: 5/5 (100%)**, **zero retries needed** across rotating IPs
+- **Avg wire body: 115,681 bytes ≈ 113 KB** — low std-dev (±0.6%)
+- **Avg wall-time: 3.4 s** — faster than Firecrawl's ~7 s average, slower than home-IP's 2.3 s (proxy hop overhead)
+- **Avg decompressed HTML: ~905 KB** — matches Appendix A home-IP scrape shape
+- **All 5 responses contain full `__NEXT_DATA__` with 43 products** parseable from `props.pageProps.initialData.searchResult.itemStacks[0].items`
+
+Sample products extracted from run 1:
+
+```
+$224.00  Apple AirPods Pro 3
+$68.00   Restored Apple AirPods Pro White with Magsafe Charging Case
+$118.00  Pre-Owned Apple AirPods Pro 2 White With USB-C Charging Case
+$145.00  Pre-Owned Apple AirPods Pro 3
+$99.95   Pre-Owned Apple AirPods Pro with Wireless MagSafe Charging Case
+$159.00  Pre-Owned Apple AirPods Pro 3 White In Ear Headphones MFHP4L
+$87.96   Pre-Owned Apple AirPods Pro with MagSafe Charging Case (1st gen)
+$99.95   Pre-Owned Apple AirPods Pro with Wireless Charging Case
+```
+
+### C.4 Bandwidth per scrape and cost tables
+
+**Per-scrape bandwidth calculation** (rotating IP = fresh TLS handshake per request, no session reuse):
+
+```
+measured body          115,681 bytes   (5-run avg)
+TLS handshake          ~5,500 bytes
+request headers        ~1,000 bytes
+response headers       ~1,500 bytes
+HTTP/2 framing / TCP   ~500 bytes
+─────────────────────────────────────
+total per scrape       ~124,181 bytes  ≈ 121 KB
+scrapes per decimal GB  ~8,052
+```
+
+**Cost per Walmart scrape at every Decodo residential tier** (verified from `decodo.com/proxies/residential-proxies/pricing` on 2026-04-10):
+
+| Tier | $/GB | $/scrape | Monthly $ | Walmart scrapes/mo |
+|---|---:|---:|---:|---:|
+| Pay-As-You-Go | $4.00 | $0.000497 | one-time | — |
+| 3 GB | $3.75 | $0.000466 | **$11.25** | **24,158** |
+| 10 GB | $3.50 | $0.000435 | $35.00 | 80,527 |
+| 25 GB | $3.25 | $0.000404 | $81.25 | 201,319 |
+| 50 GB | $3.00 | $0.000373 | $150.00 | 402,638 |
+| 100 GB | $2.75 | $0.000341 | $275.00 | 805,277 |
+| 250 GB | $2.50 | $0.000310 | $625.00 | 2,013,193 |
+| 500 GB | $2.25 | $0.000279 | $1,125.00 | 4,026,387 |
+| 1000 GB | $2.00 | $0.000248 | $2,000.00 | 8,052,774 |
+
+**Comparison to Firecrawl for Walmart-only** (from Appendix B.4):
+
+| Service | $/mo | Walmart scrapes | $/scrape | Relative to Decodo 3 GB |
+|---|---:|---:|---:|---|
+| Firecrawl Hobby | $16.00 | 2,000 | $0.008000 | **17× more expensive** |
+| Firecrawl Standard | $83.00 | 66,666 | $0.001245 | **2.7× more expensive** |
+| **Decodo 3 GB** | **$11.25** | **24,158** | **$0.000466** | — baseline |
+| Decodo 10 GB | $35.00 | 80,527 | $0.000435 | 6% cheaper / request |
+| Decodo 100 GB | $275.00 | 805,277 | $0.000341 | 27% cheaper / request |
+
+At the $11–$35 tier range, Decodo gives 12–40× more Walmart scrapes than Firecrawl for less money.
+
+### C.5 Firecrawl concurrency limits — why we care
+
+Firecrawl's published tiers cap **concurrent in-flight requests**: Free/Hobby 2–5, Standard 50, Growth 100, Scale 150. At ~7 s per Walmart scrape and the bursty M2 query pattern (many users hit the pipeline concurrently), Firecrawl Standard caps effective throughput to ~7 req/s.
+
+Decodo has no concurrency cap per-se; you rate-limit yourself by bandwidth budget and concurrent socket count on your side. For bursty workloads this is a significant operational win — the price-comparison pipeline doesn't queue users behind a managed-service cap.
+
+### C.6 Production architecture — feature-flagged adapter pattern
+
+Implemented in this session. The M2 dispatch layer (`backend/modules/m2_prices/container_client.py::ContainerClient._extract_one`) now routes `walmart` requests via a pluggable adapter selected by the `WALMART_ADAPTER` env var. All other retailers continue through the existing container dispatch.
+
+**Adapter modes:**
+
+| Mode | Code path | Use case |
+|---|---|---|
+| `container` (legacy) | `ContainerClient.extract("walmart", …)` | Local dev with walmart container. **Broken for production (PX fingerprints Chromium).** |
+| `firecrawl` | `adapters/walmart_firecrawl.py::fetch_walmart` | **Demo default.** Managed scraping via Firecrawl API. Works from anywhere. ~$0.00125/scrape at Standard tier. |
+| `decodo_http` | `adapters/walmart_http.py::fetch_walmart` | **Production default once launched.** Raw residential proxy via Decodo. ~2.7× cheaper than Firecrawl, no concurrency cap. |
+
+**Shared HTML parser** (`adapters/_walmart_parser.py`):
+
+- Single source of truth for `<script id="__NEXT_DATA__">` extraction + `itemStacks` → `ContainerListing` mapping
+- Detects challenge markers (`robot or human`, `px-captcha`, `press & hold`, `access denied`)
+- Filters sponsored placements (`isSponsoredFlag`)
+- Maps `Restored/Pre-Owned/Refurbished` to `condition=used`
+- Resolves relative `canonicalUrl` to absolute `https://www.walmart.com/…`
+- Handles both flat `price` and nested `priceInfo.{linePrice,currentPrice,wasPrice}` shapes
+- Extracts availability from `availabilityStatusV2.value` (`IN_STOCK`/`OUT_OF_STOCK`) or legacy bool field
+
+**Switch mechanics:**
+
+```bash
+# Demo phase — Firecrawl handles walmart
+WALMART_ADAPTER=firecrawl
+FIRECRAWL_API_KEY=fc-xxxxx
+
+# Production — Decodo residential proxy
+WALMART_ADAPTER=decodo_http
+DECODO_PROXY_USER=spviclvc9n                  # bare username, adapter adds "user-" + "-country-us"
+DECODO_PROXY_PASS=zg6QwOaqbQah6Sg49=          # literal; adapter URL-encodes
+DECODO_PROXY_HOST=gate.decodo.com:7000
+```
+
+Rollback from Decodo to Firecrawl = change one env var, redeploy. Code is identical.
+
+### C.7 Implementation details
+
+**Decodo adapter (`walmart_http.py`):**
+- `httpx.AsyncClient(proxy=<url>, timeout=30, follow_redirects=True)`
+- Chrome 132 header set (matches the successful probe)
+- **Username munging**: accepts bare username from dashboard; adapter prefixes with `user-` and suffixes with `-country-us` if missing so operators don't have to remember the full syntax
+- **Password URL-encoding** (`urllib.parse.quote_plus`) so special characters like `=`, `@`, `:` don't break URL parsing
+- **Retry policy**: 1 retry (2 total attempts) on challenge / HTTP error / timeout / parse failure. Rotating IPs mean the retry lands on a fresh IP, which is the whole point of using a residential pool
+- **No retry on empty results** — a clean 200 with zero parseable listings is a niche-query signal, not a bot-block
+- Per-request bandwidth logged at INFO level (`walmart_http attempt=N status=200 wire_bytes=123456 elapsed_ms=3400`) for cost observability
+- Fails fast with `ADAPTER_NOT_CONFIGURED` if creds are missing (rather than silently trying the pool without auth)
+
+**Firecrawl adapter (`walmart_firecrawl.py`):**
+- `POST https://api.firecrawl.dev/v1/scrape` with `formats=["rawHtml"]` and `country="US"`
+- Bearer-token auth via `FIRECRAWL_API_KEY`
+- 45 s timeout (Firecrawl is slower — 7–30 s typical on cold requests)
+- Same parser, same error model as the Decodo adapter
+- Distinct error codes so CloudWatch / log dashboards can tell Firecrawl-specific failures apart from proxy failures (`FIRECRAWL_HTTP_ERROR`, `FIRECRAWL_UNSUCCESSFUL`, `FIRECRAWL_EMPTY_BODY`)
+
+**Router integration (`container_client.py::_extract_one`):**
+- Routing check is scoped to `retailer_id == "walmart"` — every other retailer flows through the unmodified container path
+- Imports deferred so unused adapters don't pay the httpx-client init cost at backend startup
+- Adapter fn signature matches the container path's contract (returns `ContainerResponse`, never raises)
+- `self._cfg` held by the client instance so adapters can read settings without a second import
+
+### C.8 Test coverage
+
+**24 new tests** covering both adapters and the shared parser:
+
+**`test_walmart_http_adapter.py` (15 tests):**
+- Proxy URL builder: prefix/suffix logic, double-prefix avoidance, password URL encoding, missing-creds exception
+- Happy path: 200 → parsed listings with extraction_method, `max_listings` cap
+- Challenge retry: 2 challenge pages → CHALLENGE error, 1 challenge + 1 success → success (retry semantics verified)
+- Error surfaces: HTTP 500, missing `__NEXT_DATA__` (PARSE_ERROR), `httpx.ReadTimeout` → TIMEOUT, missing creds → ADAPTER_NOT_CONFIGURED
+- Parser edge cases: sponsored filter, out-of-stock handling, absolute URL resolution, missing-next-data raise, challenge detector
+
+**`test_walmart_firecrawl_adapter.py` (9 tests):**
+- Happy path with 4 listings, correct extraction_method
+- Request shape: Bearer auth header, `country: US` + `rawHtml` in JSON body
+- Error surfaces: missing API key, HTTP 429 → FIRECRAWL_HTTP_ERROR, `success=false` → FIRECRAWL_UNSUCCESSFUL, challenge-in-response → CHALLENGE, empty body → FIRECRAWL_EMPTY_BODY
+
+**Test results:** `pytest -q` → **128 passed** (104 existing + 24 new). `ruff check .` → **clean**. No regressions in the existing M1/M2/watchdog/integration/auth/migration test suites.
+
+### C.9 Outstanding risks to validate before flipping to production
+
+These are not probe blockers — they're operational unknowns worth monitoring after deployment.
+
+1. **Pool burn rate over time.** The 5/5 success rate is a single snapshot. A fresh PR at C.8 should rerun the 5-scrape probe daily for a week and alert if success rate drops below 80%. If burn rate is real, budget 1.2–1.5× effective cost to cover retries.
+2. **Query diversity.** We tested `"Apple AirPods Pro"` — a common, safe query. Niche or adult queries may trigger different PX risk scores. Run the probe with a handful of query categories (electronics, groceries, adult, niche) before broad rollout.
+3. **Sustained throughput.** Our probe ran 5 sequential requests. The production M2 pipeline may fire bursts of dozens per minute during peak usage. Load-test at 2× expected peak before launch.
+4. **Decodo SLA + billing alerts.** Set `DECODO_PROXY_*` bandwidth alerts at 50%/80%/100% of the committed tier in the Decodo dashboard to avoid surprise overage.
+5. **Fallback chain.** Today the adapter retries once within Decodo. A more resilient design: on terminal failure, fall back to Firecrawl (`WALMART_ADAPTER=decodo_http_with_firecrawl_fallback`) for the remainder of the request. Cost vs reliability tradeoff — deferred.
+6. **Observability.** Current per-request bandwidth is logged but not exported. Add a `walmart_http_wire_bytes_total` counter (Prometheus/OpenTelemetry) so you can chart Decodo consumption against the tier ceiling in real time.
+7. **Schema drift on Walmart's `__NEXT_DATA__`**. Walmart is Next.js-based and has changed the `props.pageProps.initialData.*` shape in the past. The parser walks the tree looking for `itemStacks` wherever it appears, which is resilient to nesting changes, but a complete rename would break it. Consider adding a daily canary query that asserts `len(listings) > 0` for a known product UPC and alerts otherwise.
+
+### C.10 Artifacts
+
+**Probe artifacts:**
+- Decodo probe script: `.tmp/decodo_probe.sh`
+- Per-run raw HTML responses (5 files, ~4.5 MB total): `.tmp/decodo_results/walmart_{1..5}.html`
+
+**Implementation files (committed):**
+- `backend/modules/m2_prices/adapters/__init__.py` — subpackage marker
+- `backend/modules/m2_prices/adapters/_walmart_parser.py` — shared `__NEXT_DATA__` → `ContainerResponse` logic
+- `backend/modules/m2_prices/adapters/walmart_http.py` — Decodo residential proxy adapter
+- `backend/modules/m2_prices/adapters/walmart_firecrawl.py` — Firecrawl managed API adapter
+- `backend/modules/m2_prices/container_client.py` — added `_extract_one` router, `_resolve_walmart_adapter`, `walmart_adapter_mode` attr
+- `backend/app/config.py` — added `WALMART_ADAPTER`, `FIRECRAWL_API_KEY`, `DECODO_PROXY_{USER,PASS,HOST}`
+- `.env.example` — documented each new env var with a comment explaining when it's required
+- `backend/tests/fixtures/walmart_next_data_sample.html` — realistic fixture with 4 real-shape products + 1 sponsored placement (for filter test)
+- `backend/tests/fixtures/walmart_challenge_sample.html` — minimal "Robot or human?" challenge page
+- `backend/tests/modules/test_walmart_http_adapter.py` — 15 tests
+- `backend/tests/modules/test_walmart_firecrawl_adapter.py` — 9 tests
+- `backend/tests/modules/test_container_client.py` — updated `_setup_client` fixture with `walmart_adapter_mode = "container"` default
+- `backend/tests/modules/test_container_retailers.py` — same fixture update
+
+

@@ -2,10 +2,18 @@
 
 Each retailer runs in its own Docker container exposing POST /extract and GET /health.
 This client handles parallel dispatch, timeout/retry, and partial failure tolerance.
+
+Walmart routing: because most datacenter IPs are blocked by PerimeterX and
+Chromium-in-Docker is JS-fingerprinted even from residential IPs, walmart is
+routed through a pluggable HTTP adapter instead of the container path by
+default. Selected via `WALMART_ADAPTER` env var — see
+`modules/m2_prices/adapters/` and `docs/SCRAPING_AGENT_ARCHITECTURE.md`
+Appendices A–C.
 """
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 
 import httpx
 
@@ -20,15 +28,37 @@ from modules.m2_prices.schemas import (
 logger = logging.getLogger("barkain.m2")
 
 
+# Signature of a per-retailer HTTP adapter.
+AdapterFn = Callable[..., Awaitable[ContainerResponse]]
+
+
+def _resolve_walmart_adapter(mode: str) -> AdapterFn | None:
+    """Return the walmart adapter function for `mode`, or None for the container path.
+
+    Imports are deferred so unused adapters don't load their httpx clients at
+    startup and tests can patch the module without side effects.
+    """
+    if mode == "firecrawl":
+        from modules.m2_prices.adapters.walmart_firecrawl import fetch_walmart
+        return fetch_walmart
+    if mode == "decodo_http":
+        from modules.m2_prices.adapters.walmart_http import fetch_walmart
+        return fetch_walmart
+    # "container" (default) or any unknown value → fall through to container path
+    return None
+
+
 class ContainerClient:
     """HTTP client for communicating with retailer scraper containers."""
 
     def __init__(self, config: Settings | None = None) -> None:
         cfg = config or settings
+        self._cfg = cfg
         self.url_pattern = cfg.CONTAINER_URL_PATTERN
         self.timeout = cfg.CONTAINER_TIMEOUT_SECONDS
         self.retry_count = cfg.CONTAINER_RETRY_COUNT
         self.ports = cfg.CONTAINER_PORTS
+        self.walmart_adapter_mode = cfg.WALMART_ADAPTER
 
     def _get_container_url(self, retailer_id: str) -> str:
         """Resolve retailer_id to its container URL."""
@@ -114,6 +144,34 @@ class ContainerClient:
             ),
         )
 
+    async def _extract_one(
+        self,
+        retailer_id: str,
+        query: str,
+        product_name: str | None,
+        upc: str | None,
+        max_listings: int,
+    ) -> ContainerResponse:
+        """Route a single retailer to its adapter or the default container path.
+
+        Walmart may use a pluggable HTTP adapter (Firecrawl / Decodo) instead
+        of the browser container. Other retailers always use the container path.
+        """
+        if retailer_id == "walmart":
+            adapter = _resolve_walmart_adapter(self.walmart_adapter_mode)
+            if adapter is not None:
+                logger.debug(
+                    "routing walmart via adapter mode=%s", self.walmart_adapter_mode
+                )
+                return await adapter(
+                    query=query,
+                    product_name=product_name,
+                    upc=upc,
+                    max_listings=max_listings,
+                    cfg=self._cfg,
+                )
+        return await self.extract(retailer_id, query, product_name, upc, max_listings)
+
     async def extract_all(
         self,
         query: str,
@@ -125,13 +183,15 @@ class ContainerClient:
         """Dispatch extraction requests to multiple containers in parallel.
 
         Partial failures are tolerated — successful results are returned
-        alongside error responses.
+        alongside error responses. Walmart may be routed through an HTTP
+        adapter (see `_extract_one`).
         """
         # Phase 2: Watchdog circuit-breaker will skip unhealthy containers (D10)
         ids = retailer_ids or list(self.ports.keys())
 
         tasks = [
-            self.extract(rid, query, product_name, upc, max_listings) for rid in ids
+            self._extract_one(rid, query, product_name, upc, max_listings)
+            for rid in ids
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 

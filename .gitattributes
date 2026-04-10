@@ -1,0 +1,33 @@
+# Default: normalize text to LF in the repo; working tree follows platform.
+* text=auto
+
+# Files executed inside Linux containers MUST be LF regardless of checkout platform.
+# Without this, Windows clones checkout CRLF and `#!/usr/bin/env bash\r` fails.
+*.sh       text eol=lf
+*.py       text eol=lf
+*.js       text eol=lf
+*.json     text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.toml     text eol=lf
+Dockerfile text eol=lf
+.dockerignore text eol=lf
+
+# Swift (iOS) — LF is the Xcode default.
+*.swift text eol=lf
+
+# Windows-native scripts stay CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Known binaries.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.keystore binary
+*.p12  binary

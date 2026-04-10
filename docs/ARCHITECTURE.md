@@ -131,7 +131,7 @@ Backend sends `POST /extract` to container → container runs extraction → ret
 | Retailer | Port | Directory | Key Deviations |
 |----------|------|-----------|----------------|
 | Amazon | 8081 | `containers/amazon/` | Title fallback chain (3 selectors), sponsored noise stripping |
-| Walmart | 8083 | `containers/walmart/` | **PerimeterX:** Chrome launches directly with search URL; never `agent-browser open` |
+| Walmart | 8083 | `containers/walmart/` | **Legacy — superseded by HTTP adapter.** Container is still in repo as `WALMART_ADAPTER=container` fallback but does not work from any cloud. See "Walmart Adapter Routing" below. |
 | Target | 8084 | `containers/target/` | **Wait strategy:** `load` not `networkidle` (analytics pixels hang); wait for `[data-test='product-grid']` |
 | Sam's Club | 8089 | `containers/sams_club/` | Best-guess selectors; needs live validation |
 | Facebook Marketplace | 8091 | `containers/fb_marketplace/` | Login modal hidden with CSS `display:none` (never `.remove()`); all items condition "used" |
@@ -146,6 +146,62 @@ Backend sends `POST /extract` to container → container runs extraction → ret
 | eBay (new) | 8087 | `containers/ebay_new/` | `.s-item` anchor, URL filter `LH_ItemCondition=1000` for new only |
 | eBay (used/refurb) | 8088 | `containers/ebay_used/` | `.s-item` anchor, URL filter for used+refurb, extracts condition from `.SECONDARY_INFO` |
 | BackMarket | 8090 | `containers/backmarket/` | All items condition "refurbished", seller extraction |
+
+### Walmart Adapter Routing (post-Step-2a paradigm shift)
+
+**Why it exists:** Walmart's PerimeterX client-side fingerprinting defeats headless Chromium regardless of IP. The full product catalog is, however, already server-rendered into a `<script id="__NEXT_DATA__">` blob before JS runs — so a plain HTTPS request with realistic Chrome headers gets the data directly, no browser needed. This works reliably from residential IPs (home or proxy) but fails from most datacenter IPs at the edge layer. See `docs/SCRAPING_AGENT_ARCHITECTURE.md` Appendices A–C for the full evidence trail.
+
+**Architecture:**
+
+```
+ContainerClient.extract_all()
+  │
+  └── _extract_one(retailer_id)
+        │
+        ├── if retailer_id == "walmart":
+        │     switch on WALMART_ADAPTER env var:
+        │       ├── "container"    → legacy agent-browser path (broken)
+        │       ├── "firecrawl"    → walmart_firecrawl.py  (demo default)
+        │       └── "decodo_http"  → walmart_http.py       (production)
+        │
+        └── else:
+              → self.extract(retailer_id, ...)  [unchanged agent-browser container]
+```
+
+All 10 other retailers flow through the unchanged container path. Only walmart is routed. Both new adapters return a `ContainerResponse` so the downstream service layer (`PriceAggregationService`) treats them interchangeably with container responses.
+
+**Files:**
+
+| Path | Purpose |
+|---|---|
+| `backend/modules/m2_prices/adapters/_walmart_parser.py` | Shared `<script id="__NEXT_DATA__">` walker → `ContainerListing` mapper. Filters sponsored placements, detects challenge markers, handles Walmart's nested `priceInfo` shapes. |
+| `backend/modules/m2_prices/adapters/walmart_firecrawl.py` | Firecrawl managed API (`POST /v1/scrape` with `formats=["rawHtml"]`, `country="US"`). Demo default — Firecrawl handles proxies/anti-bot transparently. |
+| `backend/modules/m2_prices/adapters/walmart_http.py` | Decodo residential proxy (rotating US pool). Auto-prefixes username with `user-` and suffixes with `-country-us`. URL-encodes password. 1-retry on challenge (fresh IP on retry). Logs wire-bytes per request for cost observability. |
+| `backend/modules/m2_prices/container_client.py::_extract_one` | Router. One `if retailer_id == "walmart"` scope — every other retailer bypasses the switch entirely. |
+
+**Cost comparison (Walmart-only, per scrape):**
+
+| Path | $/scrape | Notes |
+|---|---:|---|
+| Firecrawl Standard ($83/mo) | $0.00125 | ~1.5 credits per scrape, 50 concurrent cap |
+| Decodo 3 GB ($11.25/mo) | $0.000466 | 2.7× cheaper, no concurrency cap |
+| Decodo 100 GB ($275/mo) | $0.000341 | 3.7× cheaper at scale |
+
+**Demo → production flip:**
+
+```bash
+# Demo (now)
+WALMART_ADAPTER=firecrawl
+FIRECRAWL_API_KEY=fc-xxxxx
+
+# Production (later)
+WALMART_ADAPTER=decodo_http
+DECODO_PROXY_USER=<bare-username>
+DECODO_PROXY_PASS=<password>
+DECODO_PROXY_HOST=gate.decodo.com:7000
+```
+
+One env-var change, redeploy, done. No code change between demo and production.
 
 ### Background Workers
 

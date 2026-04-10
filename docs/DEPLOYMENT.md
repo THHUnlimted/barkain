@@ -118,7 +118,32 @@ CORS_ORIGINS=http://localhost:3000,http://localhost:8000
 RATE_LIMIT_GENERAL=60            # per minute
 RATE_LIMIT_WRITE=30              # per minute
 RATE_LIMIT_AI=10                 # per minute
+
+# ── Walmart Adapter Routing (post-Step-2a paradigm shift) ──
+# Selects which path handles walmart scrapes. All other retailers always use
+# the container dispatch. See docs/ARCHITECTURE.md#walmart-adapter-routing and
+# docs/SCRAPING_AGENT_ARCHITECTURE.md Appendices A–C.
+#   container    — legacy browser container (broken on any cloud, do not use)
+#   firecrawl    — demo path via Firecrawl managed API (default for demo)
+#   decodo_http  — production path via Decodo residential proxy
+WALMART_ADAPTER=firecrawl
+
+# ── Firecrawl (walmart demo path) ─────────────────────
+# Get your API key from https://firecrawl.dev/app/api-keys
+# Only required when WALMART_ADAPTER=firecrawl.
+FIRECRAWL_API_KEY=fc-xxxxx
+
+# ── Decodo residential proxy (walmart production path) ─
+# Sign up at https://decodo.com → Residential Proxies → Authentication.
+# Username is auto-prefixed with `user-` and suffixed with `-country-us` so
+# you can put the bare dashboard username below. Only required when
+# WALMART_ADAPTER=decodo_http.
+DECODO_PROXY_USER=
+DECODO_PROXY_PASS=
+DECODO_PROXY_HOST=gate.decodo.com:7000
 ```
+
+**Paradigm shift note.** As of April 2026 (post-Step-2a), walmart no longer runs through the browser-container path in any deployed environment. The 10 other retailers still use the container dispatch unchanged. This is the only retailer with adapter-based routing today, and the pattern is intentionally scoped to walmart via a single `if retailer_id == "walmart"` check in `container_client.py::_extract_one`. Broader migration to Firecrawl for all retailers is deferred — see `docs/SCRAPING_AGENT_ARCHITECTURE.md` Appendix B.7 for the long-term recommendation.
 
 ### iOS (Xcconfig)
 

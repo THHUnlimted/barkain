@@ -47,3 +47,7 @@ TestResults.xcresult
 # ── Misc ─────────────────────────────────────────
 *.log
 tmp/
+.tmp/
+
+# ── Claude Code session state (agent-local, never commit) ─
+.claude/
