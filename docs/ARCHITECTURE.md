@@ -106,6 +106,8 @@ All endpoints under `/api/v1/`. Version bump only on breaking changes.
 
 ### Scraper Container Architecture (Phase 1)
 
+All containers inherit from `barkain-base:latest` (`containers/base/`), which provides Chromium, agent-browser CLI, Xvfb, Python/FastAPI, and the shared entrypoint.
+
 Each retailer runs in its own Docker container (11 containers for demo):
 
 ```
@@ -156,6 +158,7 @@ Standalone Python scripts that poll SQS queues. Not Celery.
 | discount_verification | discount-verify-queue | Weekly | Verifies identity discount programs still active |
 | coupon_validator | coupon-validate-queue | Daily | Tests coupon codes for validity |
 | prediction_trainer | predict-train-queue | Nightly | Retrains Prophet model on price history |
+| watchdog | — (cron-triggered) | Nightly (2 AM cron) | Health checks, failure classification, self-healing via Claude Opus, Slack escalation |
 
 ### Error Handling Format
 
@@ -188,7 +191,7 @@ All LLM interactions go through `abstraction.py`. No module imports `google.gena
 | Image product identification | Claude Sonnet (vision) | Best vision quality in testing | 3 |
 | Receipt OCR interpretation | Claude Sonnet (vision) | Structured data extraction from text | 3 |
 | Price prediction reasoning | Claude Sonnet | Complex temporal pattern analysis | 4 |
-| Watchdog self-healing | Claude Opus | Highest quality selector rediscovery; YC credits make cost viable | 2 |
+| Watchdog self-healing | Claude Opus | Highest quality selector rediscovery; YC credits make cost viable. Selector rediscovery, extract.js repair. ~$0.05-$0.20/heal | 2 |
 | Extraction parsing | Qwen Flash / ERNIE | Parsing scraped content into structured data | 2 |
 | Fallback (any task) | GPT-4o-mini / GPT-4o | If Claude API is down or returns errors | 3 |
 

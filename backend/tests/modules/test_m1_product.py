@@ -280,3 +280,57 @@ async def test_resolve_same_upc_twice_uses_cache(
 
     # Both responses should return the same product
     assert response1.json()["id"] == response2.json()["id"]
+
+
+# MARK: - Gemini null retry (Pre-Fix 1.3)
+
+
+@pytest.mark.asyncio
+async def test_gemini_null_retry_then_success(client, db_session, fake_redis):
+    """Given Gemini returns null on first attempt, retry succeeds on second."""
+    null_response = {"device_name": None}
+    success_response = {"device_name": "Sony WH-1000XM5 Wireless Headphones"}
+
+    with patch(
+        "modules.m1_product.service.gemini_generate_json",
+        new_callable=AsyncMock,
+        side_effect=[null_response, success_response],
+    ) as mock_gemini:
+        response = await client.post(RESOLVE_URL, json={"upc": "887276789880"})
+        assert response.status_code == 200
+        data = response.json()
+        assert "Sony" in data["name"]
+        # Called twice: initial + retry
+        assert mock_gemini.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_gemini_null_retry_both_null_falls_to_upcitemdb(
+    client, db_session, fake_redis
+):
+    """Given Gemini returns null twice, falls through to UPCitemdb."""
+    null_response = {"device_name": None}
+    upcitemdb_result = {
+        "name": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+        "brand": "Sony",
+        "category": "Electronics > Audio > Headphones",
+        "description": "Premium wireless noise canceling headphones.",
+        "asin": "B09XS7JWHH",
+        "image_url": "https://example.com/image.jpg",
+    }
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            side_effect=[null_response, null_response],
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=upcitemdb_result,
+        ),
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": "887276789880"})
+        assert response.status_code == 200
+        assert "Sony" in response.json()["name"]

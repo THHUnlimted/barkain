@@ -9,6 +9,7 @@ import json
 import logging
 import re
 
+import anthropic
 from google import genai
 from google.genai import types
 from google.genai.types import GoogleSearch, ThinkingConfig, Tool
@@ -18,19 +19,34 @@ from app.config import settings
 logger = logging.getLogger("barkain.ai")
 
 
-# MARK: - Configuration
+# MARK: - Gemini Configuration
 
-_client: genai.Client | None = None
+_gemini_client: genai.Client | None = None
 
 
-def _get_client() -> genai.Client:
+def _get_gemini_client() -> genai.Client:
     """Return (and lazily create) the Gemini client."""
-    global _client
-    if _client is None:
+    global _gemini_client
+    if _gemini_client is None:
         if not settings.GEMINI_API_KEY:
             raise RuntimeError("GEMINI_API_KEY is not configured")
-        _client = genai.Client(api_key=settings.GEMINI_API_KEY)
-    return _client
+        _gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    return _gemini_client
+
+
+# MARK: - Anthropic Configuration
+
+_anthropic_client: anthropic.AsyncAnthropic | None = None
+
+
+def _get_anthropic_client() -> anthropic.AsyncAnthropic:
+    """Return (and lazily create) the Anthropic async client."""
+    global _anthropic_client
+    if _anthropic_client is None:
+        if not settings.ANTHROPIC_API_KEY:
+            raise RuntimeError("ANTHROPIC_API_KEY is not configured")
+        _anthropic_client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    return _anthropic_client
 
 
 # MARK: - Helpers
@@ -88,7 +104,7 @@ async def gemini_generate(
         RuntimeError: If GEMINI_API_KEY is not configured.
         Exception: If all retries exhausted.
     """
-    client = _get_client()
+    client = _get_gemini_client()
 
     config = types.GenerateContentConfig(
         temperature=1.0,
@@ -173,3 +189,191 @@ async def gemini_generate_json(
 
         logger.error("Failed to parse Gemini response as JSON: %s", raw[:500])
         raise ValueError(f"Gemini response is not valid JSON: {raw[:200]}")
+
+
+# MARK: - Claude / Anthropic
+
+
+async def claude_generate(
+    prompt: str,
+    *,
+    model: str = "claude-opus-4-0",
+    temperature: float = 0.1,
+    max_output_tokens: int = 4096,
+    max_retries: int = 1,
+    retry_delay: float = 1.0,
+    system_instruction: str | None = None,
+) -> str:
+    """Send a prompt to Claude and return the text response.
+
+    Args:
+        prompt: The prompt text to send.
+        model: Claude model name (claude-opus-4-0, claude-sonnet-4-5-20250514, etc.).
+        temperature: Sampling temperature.
+        max_output_tokens: Maximum response length.
+        max_retries: Number of retries on transient failures.
+        retry_delay: Base delay in seconds between retries (doubles each retry).
+        system_instruction: Optional system instruction for the model.
+
+    Returns:
+        Raw text response from Claude.
+
+    Raises:
+        RuntimeError: If ANTHROPIC_API_KEY is not configured.
+        Exception: If all retries exhausted.
+    """
+    client = _get_anthropic_client()
+
+    kwargs: dict = {
+        "model": model,
+        "max_tokens": max_output_tokens,
+        "temperature": temperature,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if system_instruction:
+        kwargs["system"] = system_instruction
+
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = await client.messages.create(**kwargs)
+            # Extract text from content blocks
+            text_parts = [
+                block.text for block in response.content if block.type == "text"
+            ]
+            return "\n".join(text_parts) if text_parts else ""
+        except Exception as exc:
+            last_error = exc
+            if attempt < max_retries:
+                delay = retry_delay * (2**attempt)
+                logger.warning(
+                    "Claude call failed (attempt %d/%d), retrying in %.1fs: %s",
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                    exc,
+                )
+                await asyncio.sleep(delay)
+
+    raise last_error  # type: ignore[misc]
+
+
+async def claude_generate_json(
+    prompt: str,
+    *,
+    model: str = "claude-opus-4-0",
+    temperature: float = 0.1,
+    max_output_tokens: int = 4096,
+    max_retries: int = 1,
+    retry_delay: float = 1.0,
+    system_instruction: str | None = None,
+) -> dict:
+    """Send a prompt to Claude and parse the response as JSON.
+
+    Calls claude_generate() then parses the result. Strips markdown
+    code fences (```json ... ```) if present.
+
+    Returns:
+        Parsed JSON as a dict.
+
+    Raises:
+        ValueError: If response is not valid JSON after cleanup.
+    """
+    raw = await claude_generate(
+        prompt,
+        model=model,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        max_retries=max_retries,
+        retry_delay=retry_delay,
+        system_instruction=system_instruction,
+    )
+
+    # Strip markdown code fences
+    cleaned = re.sub(r"^```(?:json)?\s*\n?", "", raw.strip())
+    cleaned = re.sub(r"\n?```\s*$", "", cleaned)
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[^{}]*\}", cleaned)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+
+        logger.error("Failed to parse Claude response as JSON: %s", raw[:500])
+        raise ValueError(f"Claude response is not valid JSON: {raw[:200]}")
+
+
+async def claude_generate_json_with_usage(
+    prompt: str,
+    *,
+    model: str = "claude-opus-4-0",
+    temperature: float = 0.1,
+    max_output_tokens: int = 8192,
+    max_retries: int = 1,
+    retry_delay: float = 1.0,
+    system_instruction: str | None = None,
+) -> tuple[dict, int]:
+    """Like claude_generate_json but also returns total tokens used.
+
+    Used by the Watchdog to track LLM cost in watchdog_events.
+
+    Returns:
+        Tuple of (parsed JSON dict, total tokens used).
+    """
+    client = _get_anthropic_client()
+
+    kwargs: dict = {
+        "model": model,
+        "max_tokens": max_output_tokens,
+        "temperature": temperature,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if system_instruction:
+        kwargs["system"] = system_instruction
+
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = await client.messages.create(**kwargs)
+            text_parts = [
+                block.text for block in response.content if block.type == "text"
+            ]
+            raw = "\n".join(text_parts) if text_parts else ""
+            total_tokens = response.usage.input_tokens + response.usage.output_tokens
+
+            # Parse JSON
+            cleaned = re.sub(r"^```(?:json)?\s*\n?", "", raw.strip())
+            cleaned = re.sub(r"\n?```\s*$", "", cleaned)
+
+            try:
+                return json.loads(cleaned), total_tokens
+            except json.JSONDecodeError:
+                match = re.search(r"\{[^{}]*\}", cleaned)
+                if match:
+                    try:
+                        return json.loads(match.group()), total_tokens
+                    except json.JSONDecodeError:
+                        pass
+
+                logger.error("Failed to parse Claude response as JSON: %s", raw[:500])
+                raise ValueError(f"Claude response is not valid JSON: {raw[:200]}")
+        except ValueError:
+            raise
+        except Exception as exc:
+            last_error = exc
+            if attempt < max_retries:
+                delay = retry_delay * (2**attempt)
+                logger.warning(
+                    "Claude call failed (attempt %d/%d), retrying in %.1fs: %s",
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                    exc,
+                )
+                await asyncio.sleep(delay)
+
+    raise last_error  # type: ignore[misc]

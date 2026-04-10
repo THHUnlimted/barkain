@@ -3,10 +3,11 @@
 import logging
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db, get_rate_limiter, get_redis
+from app.errors import raise_http_error
 from modules.m1_product.schemas import ProductResolveRequest, ProductResponse
 from modules.m1_product.service import (
     ProductNotFoundError,
@@ -40,13 +41,4 @@ async def resolve_product(
         product = await service.resolve(body.upc)
         return ProductResponse.model_validate(product)
     except ProductNotFoundError:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": {
-                    "code": "PRODUCT_NOT_FOUND",
-                    "message": f"No product found for UPC {body.upc}",
-                    "details": {"upc": body.upc},
-                }
-            },
-        )
+        raise_http_error(404, "PRODUCT_NOT_FOUND", f"No product found for UPC {body.upc}", {"upc": body.upc})

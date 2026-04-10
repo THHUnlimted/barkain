@@ -97,9 +97,12 @@ KEEPA_API_KEY=xxxxx
 GEMINI_API_KEY=xxxxx
 UPCITEMDB_API_KEY=xxxxx
 
-# ── AI Models (Phase 1: UPC lookup, Phase 3: recommendations) ─
+# ── AI Models (Phase 1: UPC lookup, Phase 2: Watchdog, Phase 3: recommendations) ─
 ANTHROPIC_API_KEY=sk-ant-xxxxx
 OPENAI_API_KEY=sk-xxxxx
+
+# ── Watchdog (Phase 2) ──────────────────────────────────
+WATCHDOG_SLACK_WEBHOOK=https://hooks.slack.com/services/xxxxx  # Optional, for escalation notifications
 
 # ── Affiliate (Phase 2) ─────────────────────────────
 AMAZON_ASSOCIATE_TAG=barkain-20
@@ -285,6 +288,29 @@ alembic downgrade abc123
 ```
 
 **Rule:** Backward-compatible migrations only. Never drop columns or rename tables in production. Add new columns as nullable, backfill, then add constraints.
+
+---
+
+## Watchdog Cron
+
+```bash
+# Nightly health check + self-healing for all retailer containers
+0 3 * * * cd /path/to/barkain && python scripts/run_watchdog.py --check-all
+```
+
+---
+
+## Container Base Image
+
+```bash
+# Build the shared base image first (all retailer containers inherit from it)
+docker build -t barkain-base:latest containers/base/
+
+# Then build individual retailers:
+docker build -t barkain-amazon containers/amazon/
+docker build -t barkain-walmart containers/walmart/
+# ... etc for each retailer
+```
 
 ---
 

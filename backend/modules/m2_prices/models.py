@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Numeric,
+    PrimaryKeyConstraint,
     Text,
     UniqueConstraint,
     text,
@@ -66,12 +67,8 @@ class PriceHistory(Base):
 
     __tablename__ = "price_history"
 
-    # NOTE(D4): Single-column PK on `time` is required by TimescaleDB hypertable.
-    # Composite PK (time + product_id + retailer_id) would be ideal but requires
-    # recreating the hypertable. Microsecond offset in service.py prevents
-    # collisions within a single dispatch. Deferred to Phase 2.
     time: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), primary_key=True, server_default=text("NOW()")
+        DateTime(timezone=True), nullable=False, server_default=text("NOW()")
     )
     product_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), nullable=False
@@ -88,6 +85,7 @@ class PriceHistory(Base):
     )
 
     __table_args__ = (
+        PrimaryKeyConstraint("product_id", "retailer_id", "time"),
         Index("idx_price_history_product_time", "product_id", time.desc()),
         Index("idx_price_history_retailer_time", "retailer_id", time.desc()),
     )

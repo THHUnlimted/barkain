@@ -32,6 +32,7 @@ from modules.m2_prices.schemas import ContainerResponse
 logger = logging.getLogger("barkain.m2")
 
 REDIS_CACHE_TTL = 21600  # 6 hours — no partial invalidation by design; force_refresh bypasses (D9)
+REDIS_CACHE_TTL_EMPTY = 1800  # 30 minutes for 0-result responses — users re-scanning get fresh attempts sooner
 REDIS_KEY_PREFIX = "prices:product:"
 DB_FRESHNESS_HOURS = 6
 
@@ -350,7 +351,12 @@ class PriceAggregationService:
     async def _cache_to_redis(
         self, product_id: uuid.UUID, data: dict
     ) -> None:
-        """Cache the price comparison result to Redis with 6hr TTL."""
+        """Cache the price comparison result to Redis.
+
+        Uses shorter TTL (30min) when no prices were found so users
+        re-scanning get fresh container attempts sooner.
+        """
         key = f"{REDIS_KEY_PREFIX}{product_id}"
         serialized = json.dumps(data, default=_json_serializer)
-        await self.redis.set(key, serialized, ex=REDIS_CACHE_TTL)
+        ttl = REDIS_CACHE_TTL_EMPTY if not data.get("prices") else REDIS_CACHE_TTL
+        await self.redis.set(key, serialized, ex=ttl)
