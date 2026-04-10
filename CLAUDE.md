@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** April 2026 (v3.3 — Phase 1 complete, tagged v0.1.0)
+> **Last updated:** April 2026 (v3.4 — Phase 2 Step 2a complete)
 
 ---
 
@@ -63,11 +63,14 @@ barkain/
 │   │   ├── main.py                    # FastAPI entry point
 │   │   ├── config.py                  # Environment configuration (pydantic-settings)
 │   │   ├── dependencies.py            # Dependency injection (DB session, Redis, auth)
+│   │   ├── errors.py                  # Shared error response helpers
 │   │   └── middleware.py              # Auth, rate limiting, logging, error handling
 │   ├── modules/
 │   │   ├── m1_product/                # Product resolution (UPC → canonical)
 │   │   ├── m2_prices/                 # Price aggregation + caching
-│   │   │   └── adapters/             # Per-retailer adapters (bestbuy.py, ebay.py, keepa.py)
+│   │   │   ├── adapters/             # Per-retailer adapters (bestbuy.py, ebay.py, keepa.py)
+│   │   │   ├── health_monitor.py     # Retailer health monitoring service
+│   │   │   └── health_router.py      # GET /api/v1/health/retailers endpoint
 │   │   ├── m3_secondary/              # Secondary market (eBay used/refurb, BackMarket)
 │   │   ├── m4_coupons/                # Coupon discovery + validation
 │   │   ├── m5_identity/               # User identity + discount catalog + card portfolio
@@ -81,13 +84,15 @@ barkain/
 │   ├── ai/
 │   │   ├── abstraction.py             # Model-agnostic LLM interface
 │   │   ├── prompts/                   # Prompt templates per module
+│   │   │   └── watchdog_heal.py       # Opus heal + diagnose prompts
 │   │   └── models.py                  # Model routing (Opus/Sonnet/Qwen/GPT)
 │   ├── workers/
 │   │   ├── price_ingestion.py         # Scheduled price fetching
 │   │   ├── portal_rates.py            # Portal bonus rate scraping (every 6hr)
 │   │   ├── discount_verification.py   # Identity discount program verification (weekly)
 │   │   ├── coupon_validator.py        # Background coupon validation
-│   │   └── prediction_trainer.py      # Price prediction model training
+│   │   ├── prediction_trainer.py      # Price prediction model training
+│   │   └── watchdog.py                # Watchdog supervisor agent (nightly health checks + self-healing)
 │   ├── tests/
 │   │   ├── conftest.py                # Shared fixtures (Docker test DB, mock AI, fakeredis)
 │   │   ├── modules/                   # Per-module test files
@@ -95,6 +100,7 @@ barkain/
 │   ├── requirements.txt
 │   └── requirements-test.txt
 ├── containers/                        # Per-retailer scraper containers (Phase 2)
+│   ├── base/                          # Shared container base image (Dockerfile, server.py, entrypoint.sh)
 │   ├── walmart/
 │   │   ├── Dockerfile
 │   │   ├── walmart-extract.sh
@@ -165,7 +171,7 @@ ruff check .                  # Lint
 
 **Scrapers:** Per-retailer Docker containers, each running: Chrome + agent-browser CLI + extraction script (DOM eval pattern) + AI health agent (Watchdog). Backend sends requests to containers; containers return structured JSON.
 
-**AI Layer:** All LLM calls go through `backend/ai/abstraction.py`. Never call Claude/GPT directly from a module. The abstraction handles model routing, retry logic, and structured output parsing. Gemini calls use thinking (ThinkingConfig), Google Search grounding, and temperature=1.0 for maximum UPC resolution accuracy. Response parsing extracts text parts only, skipping thinking chunks. Watchdog self-healing uses Claude Opus (YC credits); recommendation synthesis uses Claude Sonnet.
+**AI Layer:** All LLM calls go through `backend/ai/abstraction.py`. Never call Claude/GPT directly from a module. The abstraction handles model routing, retry logic, and structured output parsing. Gemini calls use thinking (ThinkingConfig), Google Search grounding, and temperature=1.0 for maximum UPC resolution accuracy. Response parsing extracts text parts only, skipping thinking chunks. Anthropic calls use the `anthropic` SDK with async client, retry logic, JSON parsing, and token usage tracking. Watchdog self-healing uses Claude Opus (YC credits); recommendation synthesis uses Claude Sonnet.
 
 **Data flow:**
 ```
@@ -269,7 +275,18 @@ This project uses a **two-tier AI workflow:**
 **Step 1h — Price Comparison UI: COMPLETE** ✅ (2026-04-08)
 **Step 1i — Hardening + Doc Sweep + Tag v0.1.0: COMPLETE** ✅ (2026-04-08)
 **Phase 1 — Foundation: COMPLETE (tagged v0.1.0)**
+**Step 2a — Watchdog Supervisor + Health Monitoring + Pre-Fixes: COMPLETE** ✅ (2026-04-10)
 
+- AI abstraction: ✅ (Anthropic/Claude Opus added alongside Gemini — claude_generate, claude_generate_json, claude_generate_json_with_usage)
+- Watchdog supervisor: ✅ (nightly health checks, failure classification, self-healing via Opus, escalation)
+- Health monitor: ✅ (GET /api/v1/health/retailers, retailer_health table tracking)
+- Watchdog CLI: ✅ (scripts/run_watchdog.py — --check-all, --heal, --status, --dry-run)
+- Shared container base image: ✅ (containers/base/ — 11 retailer Dockerfiles refactored)
+- Pre-fix: PriceHistory composite PK: ✅ (migration 0002 — composite PK on product_id, retailer_id, time)
+- Pre-fix: Error response helper: ✅ (backend/app/errors.py — DRY error format)
+- Pre-fix: Gemini null retry: ✅ (retry once with broader prompt before UPCitemdb fallback)
+- Pre-fix: Shorter Redis TTL: ✅ (30min for 0-result, 6hr for success)
+- Pre-fix: Broadened UPC prompt: ✅ (handles all product categories, not just electronics)
 - Architecture documents: ✅
 - Questionnaire (7 phases): ✅
 - Cost analysis: ✅
@@ -278,6 +295,7 @@ This project uses a **two-tier AI workflow:**
 - Apple Developer account: ✅
 - Clerk project: ✅ (keys in .env)
 - Gemini API: ✅ (key in .env — primary UPC resolution)
+- Anthropic API: ✅ (ANTHROPIC_API_KEY in .env — Watchdog self-healing via Claude Opus)
 - UPCitemdb API: NOT STARTED (fallback — nice-to-have, free tier 100/day)
 - API sign-ups (Best Buy, eBay, Keepa): NOT STARTED (production optimization — not required for demo)
 - Docker local dev environment: ✅ (3 containers: barkain-db, barkain-db-test, barkain-redis)
@@ -338,8 +356,8 @@ This project uses a **two-tier AI workflow:**
 - iOS scan→compare flow: ✅ (full demo loop: scan barcode → resolve product → fetch 11 retailer prices → display comparison)
 - iOS tests: ✅ (21 passing — ScannerViewModel×14, APIClient×3, others)
 
-**Test counts:** 84 backend, 21 iOS unit, 0 UI, 0 snapshot
-**Build status:** Backend compiles and serves health + product resolve + price comparison endpoints; container template + 11 retailer containers build and respond to GET /health; iOS app builds for simulator with full scan→resolve→compare flow; `ruff check` clean
+**Test counts:** 104 backend, 21 iOS unit, 0 UI, 0 snapshot
+**Build status:** Backend compiles and serves health + product resolve + price comparison + retailer health endpoints; container template + 11 retailer containers build and respond to GET /health; iOS app builds for simulator with full scan→resolve→compare flow; `ruff check` clean
 
 ### Key Files Created (Step 1a)
 ```
@@ -508,12 +526,28 @@ containers/*/server.py (12 files)                       # D6 TODO — auth defer
 containers/README.md                                    # D7 note — server.py duplication documented
 ```
 
+### Key Files Created/Modified (Step 2a)
+```
+backend/ai/abstraction.py                              # Extended — Anthropic/Claude Opus (claude_generate, claude_generate_json, claude_generate_json_with_usage)
+backend/ai/prompts/watchdog_heal.py                    # NEW — Opus heal + diagnose prompt templates
+backend/workers/watchdog.py                            # NEW — Watchdog supervisor agent (health checks, classification, self-healing, escalation)
+backend/modules/m2_prices/health_monitor.py            # NEW — Retailer health monitoring service
+backend/modules/m2_prices/health_router.py             # NEW — GET /api/v1/health/retailers endpoint
+backend/app/errors.py                                  # NEW — Shared error response helpers (DRY format)
+containers/base/                                       # NEW — Shared container base image (Dockerfile, server.py, entrypoint.sh)
+scripts/run_watchdog.py                                # NEW — Watchdog CLI (--check-all, --heal, --status, --dry-run)
+infrastructure/migrations/versions/0002_price_history_composite_pk.py  # NEW — Composite PK migration
+backend/ai/prompts/upc_lookup.py                       # Updated — broadened for all product categories
+backend/modules/m1_product/service.py                  # Updated — Gemini null retry with broader prompt
+backend/modules/m2_prices/service.py                   # Updated — shorter Redis TTL (30min for 0-result)
+```
+
 ---
 
 ## What's Next
 
 1. **Phase 1 COMPLETE** — tagged v0.1.0. Full barcode scan → 11-retailer price comparison demo operational.
-2. **Phase 2 starts:** Step 2a (Watchdog supervisor agent for container self-healing)
+2. **Step 2a COMPLETE.** Phase 2 continues: Step 2b (M5 Identity Profile)
 
 ---
 
@@ -555,3 +589,4 @@ containers/README.md                                    # D7 note — server.py 
 | App Transport Security | NSAllowsLocalNetworking=true | Permits HTTP to LAN IPs for physical device testing against local backend | Apr 2026 |
 | API base URL | Configurable via xcconfig → Info.plist → AppConfig.swift | Debug.xcconfig sets localhost; change to Mac IP for physical device testing. Runtime reads from Bundle.main.infoDictionary | Apr 2026 |
 | Demo mode auth bypass | BARKAIN_DEMO_MODE=1 env var | Bypasses Clerk JWT in dependencies.py for local testing. NOT for production | Apr 2026 |
+| AI SDK (Anthropic) | anthropic SDK (async) | Same lazy singleton + retry pattern as Gemini. YC credits cover Opus cost for Watchdog | Apr 2026 |

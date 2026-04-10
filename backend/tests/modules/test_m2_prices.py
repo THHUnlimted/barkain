@@ -450,3 +450,40 @@ async def test_auth_required_returns_401(unauthed_client):
     fake_id = uuid.uuid4()
     resp = await unauthed_client.get(f"/api/v1/prices/{fake_id}")
     assert resp.status_code == 401
+
+
+# MARK: - Pre-Fix: Shorter Redis TTL for empty results
+
+
+async def test_empty_results_get_shorter_redis_ttl(db_session, fake_redis):
+    """When all containers fail (0 results), Redis TTL should be 30 minutes."""
+    from modules.m2_prices.service import (
+        PriceAggregationService,
+        REDIS_CACHE_TTL_EMPTY,
+        REDIS_KEY_PREFIX,
+    )
+
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon"])
+
+    # All containers return errors
+    error_response = ContainerResponse(
+        retailer_id="amazon",
+        query="test",
+        extraction_time_ms=100,
+        listings=[],
+        error=ContainerError(code="TIMEOUT", message="timed out"),
+    )
+    mock_client = AsyncMock()
+    mock_client.extract_all = AsyncMock(return_value={"amazon": error_response})
+
+    service = PriceAggregationService(
+        db=db_session, redis=fake_redis, container_client=mock_client,
+    )
+    await service.get_prices(product.id, force_refresh=True)
+
+    # Verify shorter TTL was set
+    key = f"{REDIS_KEY_PREFIX}{product.id}"
+    ttl = await fake_redis.ttl(key)
+    assert ttl <= REDIS_CACHE_TTL_EMPTY
+    assert ttl > 0

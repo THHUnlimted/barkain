@@ -2,7 +2,7 @@
 
 Each retailer runs in its own Docker container with Chromium, agent-browser CLI, and a FastAPI server. The backend dispatches `POST /extract` requests to containers and receives structured JSON responses.
 
-> **Note (D7):** Each container has its own `server.py` copy (not symlinked) for standalone deployment independence. A shared Docker base image may consolidate this in Phase 2.
+> **Shared Base Image (Step 2a):** All retailer containers inherit from `barkain-base:latest` (`containers/base/`). The base provides Chromium, Xvfb, agent-browser, FastAPI server, and entrypoint. Retailer containers only add their extraction scripts.
 
 ## Architecture
 

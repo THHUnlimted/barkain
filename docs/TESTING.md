@@ -386,7 +386,8 @@ Update this table after every step:
 | Step 1g | 72 | 9 | 0 | 0 | 9 iOS (scan_resolve×1, scan_network_error×1, scan_loading×1, scan_clear_old×1, scan_reset×1, api_decode_product×1, api_404×1, api_decode_prices×1, placeholder×1) |
 | Step 1h | 72 | 21 | 0 | 0 | 9 iOS (resolve_and_prices×1, loading_states×1, price_error×1, force_refresh×1, partial_results×1, savings_calc×1, best_price×1, reset_price_state×1, resolve_fail_skips_prices×1) + existing test updated |
 | Step 1i | 84 | 21 | 0 | 0 | 12 backend integration (full_flow×7, error_format×5) |
-| **Total** | **84** | **21** | **0** | **0** | |
+| Step 2a | 104 | 21 | 0 | 0 | 20 (ai_abstraction×4, health_monitor×5, watchdog×8, pre_fix_verifications×3) |
+| **Total** | **104** | **21** | **0** | **0** | |
 
 ---
 

@@ -9,6 +9,7 @@ from app.database import async_engine
 from app.dependencies import get_redis
 from app.middleware import setup_middleware
 from modules.m1_product.router import router as m1_product_router
+from modules.m2_prices.health_router import router as health_router
 from modules.m2_prices.router import router as m2_prices_router
 
 app = FastAPI(
@@ -21,6 +22,7 @@ app = FastAPI(
 setup_middleware(app)
 app.include_router(m1_product_router)
 app.include_router(m2_prices_router)
+app.include_router(health_router)
 
 
 @app.get("/api/v1/health")

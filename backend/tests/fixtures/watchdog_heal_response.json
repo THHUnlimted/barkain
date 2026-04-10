@@ -1,0 +1,9 @@
+{
+  "extract_js": "(function() { const items = document.querySelectorAll('[data-product-id]'); const listings = []; items.forEach(item => { const title = item.querySelector('[data-title]')?.textContent?.trim() || ''; const priceText = item.querySelector('[data-price]')?.textContent || '0'; const price = parseFloat(priceText.replace(/[$,]/g, '')) || 0; if (title && price > 0) { listings.push({ title, price, currency: 'USD', url: item.querySelector('a')?.href || '', condition: 'new', is_available: true, extraction_method: 'dom_eval' }); } }); console.log(JSON.stringify({ listings, metadata: { url: window.location.href, extracted_at: new Date().toISOString(), count: listings.length, bot_detected: false } })); })();",
+  "changes": [
+    "Changed anchor from '.sku-item' to '[data-product-id]'",
+    "Changed title selector from '.sku-header a' to '[data-title]'",
+    "Changed price selector from '.priceView-hero-price span' to '[data-price]'"
+  ],
+  "confidence": 0.85
+}

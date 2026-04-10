@@ -34,8 +34,13 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     UPCITEMDB_API_KEY: str = ""
 
+    # AI — Watchdog / Anthropic
+    ANTHROPIC_API_KEY: str = ""
+    WATCHDOG_TEST_QUERY: str = "Sony WH-1000XM5"
+    WATCHDOG_SLACK_WEBHOOK: str = ""
+
     # App
-    APP_VERSION: str = "0.1.0"
+    APP_VERSION: str = "0.2.0"
 
     # Containers (agent-browser scraper infrastructure)
     CONTAINER_URL_PATTERN: str = "http://localhost:{port}"

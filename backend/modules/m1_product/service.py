@@ -17,7 +17,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai.abstraction import gemini_generate_json
-from ai.prompts.upc_lookup import UPC_LOOKUP_SYSTEM_INSTRUCTION, build_upc_lookup_prompt
+from ai.prompts.upc_lookup import (
+    UPC_LOOKUP_SYSTEM_INSTRUCTION,
+    build_upc_lookup_prompt,
+    build_upc_retry_prompt,
+)
 from modules.m1_product.models import Product
 from modules.m1_product.upcitemdb import lookup_upc as upcitemdb_lookup
 
@@ -113,7 +117,10 @@ class ProductResolutionService:
         return result.scalar_one_or_none()
 
     async def _resolve_via_gemini(self, upc: str) -> Product | None:
-        """Call Gemini API to resolve UPC, persist to DB, cache to Redis."""
+        """Call Gemini API to resolve UPC, persist to DB, cache to Redis.
+
+        Retries once with a broader prompt if the first attempt returns null.
+        """
         try:
             prompt = build_upc_lookup_prompt(upc)
             raw = await gemini_generate_json(
@@ -122,8 +129,19 @@ class ProductResolutionService:
             )
 
             device_name = raw.get("device_name")
+
+            # Retry once with broader prompt if null
             if not device_name:
-                logger.info("Gemini could not identify UPC %s", upc)
+                logger.info("Gemini returned null for UPC %s, retrying with broader prompt", upc)
+                retry_prompt = build_upc_retry_prompt(upc)
+                raw = await gemini_generate_json(
+                    retry_prompt,
+                    system_instruction=UPC_LOOKUP_SYSTEM_INSTRUCTION,
+                )
+                device_name = raw.get("device_name")
+
+            if not device_name:
+                logger.info("Gemini could not identify UPC %s after retry", upc)
                 return None
 
             data = {"name": device_name}

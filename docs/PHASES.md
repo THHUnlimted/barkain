@@ -20,6 +20,7 @@
 **Step 1h (Price Comparison UI) — COMPLETE** (2026-04-08)
 **Step 1i (Hardening + Doc Sweep + Tag v0.1.0) — COMPLETE** (2026-04-08)
 **Phase 1 (Foundation) — COMPLETE**
+**Step 2a (Watchdog Supervisor Agent + Health Monitoring + Shared Base Image) — COMPLETE** (2026-04-10)
 **Tagged releases:** v0.1.0 (Phase 1)
 
 ---
@@ -131,7 +132,7 @@
 
 | Step | Scope | Status |
 |------|-------|--------|
-| 2a | Watchdog supervisor agent: nightly health checks, failure classification (transient/selector_drift/blocked), self-healing via Claude Opus (YC credits), escalation to developer after 3 failed attempts | ⬜ |
+| 2a | Watchdog supervisor agent, health monitoring, shared base image, Phase 1 pre-fixes | ✅ (2026-04-10) |
 | 2b | M5 Identity Profile: onboarding flow (capture identity groups + memberships), discount catalog seeding from IDENTITY_DISCOUNTS.md, weekly batch scraping of ID.me/SheerID/GovX/WeSalute/UNiDAYS/StudentBeans directories | ⬜ |
 | 2c | M5 Card Portfolio: card catalog seeding (top 30 cards from CARD_REWARDS.md), user card selection, rotating_categories seeding (current + next quarter) | ⬜ |
 | 2d | M11 Billing: StoreKit 2 via RevenueCat, free/pro tier gating, feature flags | ⬜ |
