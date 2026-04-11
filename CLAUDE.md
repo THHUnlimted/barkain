@@ -9,7 +9,7 @@
 
 Barkain is a native iOS app (with Python backend) that finds the absolute lowest total cost of any product by combining price comparison, identity-based discounts, credit card reward optimization, coupons, secondary market listings, shopping portal bonuses, and price prediction into a single AI-powered recommendation.
 
-**Repo:** `github.com/molatunji3/barkain`
+**Repo:** `github.com/THHUnlimted/barkain`
 **Bundle ID:** `com.molatunji3.barkain`
 **Minimum deployment:** iOS 17.0 | Xcode 16+ | Swift 5.9+
 
@@ -302,7 +302,7 @@ This project uses a **two-tier AI workflow:**
 - Docker local dev environment: ✅ (3 containers: barkain-db, barkain-db-test, barkain-redis)
 - TimescaleDB extension: ✅ (v2.26.1 on both PostgreSQL instances)
 - MCP servers: ✅ (5 configured: Postgres Pro, Redis, Context7, Clerk, XcodeBuildMCP)
-- GitHub repo: ✅ (github.com/molatunji3/barkain, private)
+- GitHub repo: ✅ (github.com/THHUnlimted/barkain, private)
 - CLI tools: ✅ (all 16 installed — brew, git, gh, python3, pip3, node, npm, docker, compose, jq, xcodes, swiftlint, ruff, alembic, pytest, swift)
 - Xcode: ✅ (26.4, xcode-select configured)
 - Visual prototype: NOT STARTED
