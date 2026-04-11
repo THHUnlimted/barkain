@@ -6,7 +6,7 @@
 #   --all:   builds + runs all 11 retailers
 set -euo pipefail
 
-REPO_URL="https://github.com/molatunji3/barkain.git"
+REPO_URL="https://github.com/THHUnlimted/barkain.git"
 REPO_DIR="$HOME/barkain"
 
 echo "========================================="

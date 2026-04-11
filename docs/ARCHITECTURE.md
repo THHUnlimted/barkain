@@ -59,7 +59,7 @@
 
 ## Version Control
 
-**Repo:** `github.com/[org]/barkain`
+**Repo:** `github.com/THHUnlimted/barkain`
 **Branch strategy:** `phase-N/step-Na` branches → PR to `main`
 **Protection rules:** CI must pass before merge; no direct pushes to `main`
 
