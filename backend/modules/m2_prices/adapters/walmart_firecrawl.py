@@ -76,7 +76,7 @@ async def fetch_walmart(
     payload = {
         "url": search_url,
         "formats": ["rawHtml"],
-        "country": "US",
+        "location": {"country": "US"},
     }
     headers = {
         "Authorization": f"Bearer {cfg.FIRECRAWL_API_KEY}",
