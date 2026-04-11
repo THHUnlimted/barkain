@@ -19,7 +19,7 @@ app = FastAPI(title="Barkain Scraper Container", docs_url=None, redoc_url=None)
 RETAILER_ID = os.environ.get("RETAILER_ID", "template")
 SCRIPT_VERSION = os.environ.get("SCRIPT_VERSION", "0.0.0")
 CHROMIUM_PATH = os.environ.get("CHROMIUM_PATH", "/usr/bin/chromium")
-EXTRACT_TIMEOUT = 60  # seconds
+EXTRACT_TIMEOUT = int(os.environ.get("EXTRACT_TIMEOUT", "180"))  # seconds; live Best Buy + Walmart regularly exceed 60s
 
 
 # MARK: - Models

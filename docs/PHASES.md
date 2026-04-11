@@ -2,7 +2,7 @@
 
 > Source: Project Planning Questionnaire + Architecture Sessions, March–April 2026
 > Scope: All planned phases, current position, infrastructure dependencies
-> Last updated: April 2026 (v3 — LocalStack deferred to Phase 2, Open Food Facts deferred, Opus for Watchdog)
+> Last updated: April 2026 (v3.1 — first live 3-retailer scan-to-prices demo validated on physical iPhone; 7 live-run bug fixes landed on `phase-2/scan-to-prices-deploy`)
 
 ---
 
@@ -22,6 +22,7 @@
 **Phase 1 (Foundation) — COMPLETE**
 **Step 2a (Watchdog Supervisor Agent + Health Monitoring + Shared Base Image) — COMPLETE** (2026-04-10)
 **Walmart HTTP Adapter + Firecrawl/Decodo Routing — COMPLETE** (2026-04-10) — paradigm shift: walmart now uses `WALMART_ADAPTER={container,firecrawl,decodo_http}` routing instead of the browser container. Demo runs through Firecrawl, production flips to Decodo residential proxy with one env var change. 10 other retailers unchanged. See `docs/ARCHITECTURE.md#walmart-adapter-routing-post-step-2a-paradigm-shift` and `docs/SCRAPING_AGENT_ARCHITECTURE.md` Appendices A–C.
+**Scan-to-Prices Live Demo (3 retailers) — COMPLETE** (2026-04-10) — first-ever live end-to-end run on a physical iPhone. Amazon + Best Buy via agent-browser containers on EC2 t3.xlarge (reached from Mac over SSH tunnel), Walmart via Firecrawl v2 adapter. 7 live-run bug fixes landed on `phase-2/scan-to-prices-deploy` (see `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md`): fd-3 stdout pollution, 180s EXTRACT_TIMEOUT baseline, Xvfb lock cleanup, Firecrawl v2 `location.country` schema drift, `.env` overrides rot (`CONTAINER_URL_PATTERN`, `CONTAINER_TIMEOUT_SECONDS`), zero-price listing guard, iOS URLSession 240s timeout. See `docs/SCRAPING_AGENT_ARCHITECTURE.md` Appendix D for the extract.sh conventions now required of every retailer container.
 **Tagged releases:** v0.1.0 (Phase 1)
 
 ---
@@ -134,6 +135,8 @@
 | Step | Scope | Status |
 |------|-------|--------|
 | 2a | Watchdog supervisor agent, health monitoring, shared base image, Phase 1 pre-fixes | ✅ (2026-04-10) |
+| (interstitial) | Scan-to-Prices Live Demo — first-ever 3-retailer end-to-end run on physical iPhone; 7 live-run bug fixes landed on `phase-2/scan-to-prices-deploy` | ✅ (2026-04-10) |
+| 2b-pre | **BLOCKERS before 2b can start.** (1) Product-match relevance scoring (SP-10): retailer on-site search returns similar-but-not-identical products; `_pick_best_listing` needs a relevance guardrail before any user-facing demo. (2) Gemini UPC accuracy (SP-L4): 3/3 test UPCs resolved wrong, needs UPCitemdb second-opinion fallback or confidence scoring. (3) Rotate leaked GitHub PAT in EC2 git config (SP-L1). (4) Backfill fd-3 stdout convention to the other 8 retailer extract.sh files (SP-L2). (5) Amazon extract.js title selector regression (SP-9). (6) Walmart first-party filter in `_walmart_parser.py` (SP-L5). See `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md`. | ⬜ |
 | 2b | M5 Identity Profile: onboarding flow (capture identity groups + memberships), discount catalog seeding from IDENTITY_DISCOUNTS.md, weekly batch scraping of ID.me/SheerID/GovX/WeSalute/UNiDAYS/StudentBeans directories | ⬜ |
 | 2c | M5 Card Portfolio: card catalog seeding (top 30 cards from CARD_REWARDS.md), user card selection, rotating_categories seeding (current + next quarter) | ⬜ |
 | 2d | M11 Billing: StoreKit 2 via RevenueCat, free/pro tier gating, feature flags | ⬜ |

@@ -388,6 +388,7 @@ Update this table after every step:
 | Step 1i | 84 | 21 | 0 | 0 | 12 backend integration (full_flow×7, error_format×5) |
 | Step 2a | 104 | 21 | 0 | 0 | 20 (ai_abstraction×4, health_monitor×5, watchdog×8, pre_fix_verifications×3) |
 | Walmart adapter routing (post-2a) | 128 | 21 | 0 | 0 | 24 (walmart_http×15: proxy URL builder×4, happy path×2, challenge retry×2, http/parse/timeout/missing-creds errors×4, parser edge cases×3 + walmart_firecrawl×9: happy path×1, request shape×1, 6 error surfaces, + 2 existing fixture updates) |
+| Scan-to-Prices Live Demo (2026-04-10) | 128 | 21 | 0 | 0 | **0 new** — live validation session, not a code-gen step. 7 live-run bugs fixed but no tests added; test gap documented below and deferred to Step 2b |
 | **Total** | **128** | **21** | **0** | **0** | |
 
 ---
@@ -401,3 +402,40 @@ Update this table after every step:
 5. **Docker PostgreSQL for backend** — never SQLite. TimescaleDB features require real PostgreSQL
 6. **Preview providers count as tests** — if it compiles in Preview, the view renders
 7. **Fixture files for canned API responses** — `tests/fixtures/*.json`, not inline strings
+8. **Mocks are not contracts** — respx + MockAPIClient catch logic bugs but do not validate vendor API schema drift or real subprocess boundaries. Every vendor adapter and every scraper container must ALSO have a real-API smoke test (see next principle).
+
+---
+
+## Real-API smoke tests (added 2026-04-10 after first live run exposed the gap)
+
+> The first-ever live 3-retailer run on 2026-04-10 surfaced 7 bugs that all 128 respx-mocked backend tests and 21 MockAPIClient-backed iOS tests were blind to. The root cause is the same in every case: the unit tests mock the boundary between our code and the outside world, so schema drift / subprocess / stdout / Chromium issues are invisible until something real runs through. Full postmortem: `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md` (SP-1 through SP-9).
+
+### Required coverage (Step 2b pre-fix block)
+
+Every adapter and every retailer container must have a companion real-API smoke test:
+
+| Component | Current test coverage | Real-API smoke test required |
+|-----------|----------------------|------------------------------|
+| `walmart_firecrawl.py` adapter | 7 respx-mocked tests (schema drift invisible) | Nightly GET against real Firecrawl v2 `/scrape` endpoint with a known Walmart URL; assert non-zero listings with non-zero prices |
+| `walmart_http.py` (Decodo) adapter | 15 respx-mocked tests | Nightly GET against Walmart via real Decodo proxy; assert non-zero listings |
+| `containers/{amazon,best_buy,…}/extract.sh` | 10-14 respx-mocked tests per retailer | Nightly real `POST /extract` against each retailer container; assert `success=true`, `listings|length > 0`, first listing `price > 0`. Reuses `scripts/ec2_test_extractions.sh` as the reference implementation |
+| Future Keepa adapter | n/a | Nightly GET against real Keepa API |
+| Future UPCitemdb fallback | n/a | Nightly GET against real UPCitemdb API |
+
+### Cadence and enforcement
+
+- **Nightly** in CI against the real endpoints, not every push (cost + rate limits).
+- Alert on failure via Slack / email / PagerDuty.
+- A smoke test failure is **not a build break** but creates a P1 issue for the next morning.
+- These tests do **not** replace the respx unit tests — unit tests stay fast and run on every push. Smoke tests catch schema drift and environmental regressions the unit tests can't see.
+
+### Counter-examples: bugs that respx + MockAPIClient missed on 2026-04-10
+
+- **SP-1** — `agent-browser` writes progress lines to stdout, polluting `json.loads`. Invisible because the container client tests (`test_container_client.py`) mock HTTP responses and never invoke the real subprocess.
+- **SP-4** — Firecrawl v2 renamed `country` → `location.country`. Invisible because `test_walmart_firecrawl_adapter.py` uses respx and doesn't validate request body shape.
+- **SP-2, SP-3** — `EXTRACT_TIMEOUT=60s` too short and `/tmp/.X99-lock` blocks Xvfb on restart. Invisible because tests never actually run Chromium.
+- **SP-5, SP-6** — `.env` overrides for `CONTAINER_URL_PATTERN` and `CONTAINER_TIMEOUT_SECONDS` silently rotted. Invisible because tests don't read `.env`.
+- **SP-7** — Zero-price listings dominated `_pick_best_listing`. Invisible because respx fixtures don't mirror real-world extract.js parse failures.
+- **SP-8** — iOS URLSession 60 s default timed out before 90 s backend round trip. Invisible because `MockAPIClient` returns synchronously.
+
+All seven of these were one-line or small fixes once discovered. The lesson isn't "write more unit tests" — it's "the mocking boundary is a blind spot, and the blind spot must have its own test discipline."

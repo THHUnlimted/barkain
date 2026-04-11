@@ -20,10 +20,21 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
     // MARK: - Init
 
     init(
-        session: URLSession = .shared,
+        session: URLSession? = nil,
         baseURL: URL = AppConfig.apiBaseURL
     ) {
-        self.session = session
+        // Live price aggregation can take 90-120s end-to-end (Best Buy container
+        // is the slow leg). URLSession.shared defaults to 60s which trips the
+        // iPhone before the backend finishes, so we build a dedicated session
+        // with a 240s request timeout and a 300s resource ceiling.
+        if let session {
+            self.session = session
+        } else {
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = 240
+            config.timeoutIntervalForResource = 300
+            self.session = URLSession(configuration: config)
+        }
         self.baseURL = baseURL
 
         let decoder = JSONDecoder()

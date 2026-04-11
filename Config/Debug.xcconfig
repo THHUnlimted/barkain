@@ -1,3 +1,7 @@
 // Debug configuration for Barkain
-// API base URL for local development
-API_BASE_URL = http:$()/$()/localhost:8000
+// API base URL for local development.
+// Use localhost when running on the iOS simulator.
+// Switch to your Mac's LAN IP (e.g. 192.168.1.208) when running on a physical
+// device — the iPhone must be able to reach your uvicorn backend over WiFi,
+// and the backend must be started with --host 0.0.0.0 for that to work.
+API_BASE_URL = http:$()/$()/192.168.1.208:8000

@@ -260,10 +260,15 @@ class PriceAggregationService:
         NOTE(D11): Keeps only the cheapest listing per retailer. All listings are
         recorded in price_history, but only the cheapest is shown. Phase 2 may
         expose seller-level pricing.
+
+        Listings with price <= 0 are treated as parse failures (extract.js
+        sometimes returns a zero price when the price element is missing or
+        obscured) and are skipped so they don't dominate the min() selection.
         """
-        available = [item for item in response.listings if item.is_available]
+        valid = [item for item in response.listings if item.price and item.price > 0]
+        available = [item for item in valid if item.is_available]
         if not available:
-            available = response.listings
+            available = valid
         return min(available, key=lambda item: item.price) if available else None
 
     async def _upsert_price(
