@@ -1709,3 +1709,125 @@ These are not probe blockers — they're operational unknowns worth monitoring a
 - `backend/tests/modules/test_container_retailers.py` — same fixture update
 
 
+## Appendix D — Required extract.sh conventions (2026-04-10, first live run)
+
+> Motivation: the 2026-04-10 first-ever live 3-retailer run against real Amazon + Best Buy + Walmart uncovered three latent bugs that every retailer container had shipped with since Phase 1, because Phase 1's container tests all used respx mocks and never exercised the real subprocess → stdout boundary. These conventions are now load-bearing and every new retailer extract.sh must follow them.
+
+### D.1 fd 3 stdout convention
+
+**Problem:** `agent-browser` writes progress lines to **STDOUT**, not stderr:
+
+```
+✓ Amazon.com. Spend less. Smile more.
+  https://www.amazon.com/
+✓ Done
+✓ Done
+{...JSON here...}
+✓ Browser closed
+```
+
+If extract.sh's python3 JSON dumper writes to stdout alongside all that chatter, `server.py`'s `stdout, stderr = await proc.communicate(); json.loads(stdout)` sees a leading `✓` and raises `Expecting value: line 1 column 1 (char 0)` → error code `PARSE_ERROR`.
+
+**Convention (required for every retailer extract.sh):**
+
+```bash
+# Immediately after `trap cleanup EXIT`, before any other command:
+# Reserve fd 3 as the real stdout and redirect fd 1 to stderr for all
+# other commands. Only the final extraction JSON should land on fd 3.
+exec 3>&1
+exec 1>&2
+```
+
+Then every non-capturing `ab` call (`ab open`, `ab wait`, `ab scroll`, `ab close`) prints its progress lines through fd 1, which is now stderr, so they appear in `docker logs` for debugging but never pollute the HTTP response body.
+
+Capturing calls via `$(...)` still work correctly because command substitution creates a subshell with its own pipe-backed fd 1 that overrides the parent's `exec 1>&2`:
+
+```bash
+# These STILL capture stdout correctly:
+PAGE_TITLE=$(ab get title 2>/dev/null || echo "")
+RAW_OUTPUT=$(ab eval --stdin < "$JS_FILE" 2>/dev/null || echo "")
+```
+
+The final JSON emit and the failure-path fallback both go through fd 3:
+
+```bash
+# Success path:
+python3 -c "
+import json, sys
+raw = sys.stdin.read().strip()
+if raw.startswith('\"'):
+    raw = json.loads(raw)
+data = json.loads(raw)
+json.dump(data, sys.stdout, indent=2, ensure_ascii=False)
+" <<< "$RAW_OUTPUT" >&3
+
+exit 0
+done
+
+# Failure fallback (after retry loop exhausts):
+log "Failed after $RETRY_MAX attempts"
+echo '{"listings":[],"metadata":{"url":"","extracted_at":"","bot_detected":true}}' >&3
+exit 1
+```
+
+**Currently applied in:** `containers/amazon/extract.sh`, `containers/best_buy/extract.sh`.
+
+**Latent in:** `containers/{target,home_depot,lowes,ebay_new,ebay_used,sams_club,backmarket,fb_marketplace,walmart}/extract.sh`. Backfill before any of those containers is used live. Long-term, move the convention into a shared `containers/base/extract_helpers.sh` that every retailer's extract.sh sources, so it can't rot per-retailer.
+
+**Reference commit:** `8755802` on `phase-2/scan-to-prices-deploy`.
+
+### D.2 Xvfb lock cleanup in entrypoint.sh
+
+**Problem:** `Xvfb` creates `/tmp/.X99-lock` when it binds display :99. On a clean `docker run` from a fresh image, no lock exists → Xvfb starts. But on `docker restart <retailer>`, the container filesystem persists, the lock file stays behind, and the restarting Xvfb prints:
+
+```
+(EE) Server is already active for display 99
+	If this server is no longer running, remove /tmp/.X99-lock
+	and start again.
+(EE)
+```
+
+then exits. `exec uvicorn` then starts the FastAPI server without an X backend, every `ab open` call dies with `Missing X server or $DISPLAY`, and the retry loop exhausts both attempts → `EXTRACTION_FAILED: Script exited with code 1`.
+
+**Convention:** always remove stale locks + sockets before launching Xvfb in `containers/base/entrypoint.sh`:
+
+```bash
+# Remove any stale X lock files left behind by a previous container run.
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
+
+# Start Xvfb on display :99
+Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp &
+sleep 2   # bumped from 1s to reduce a race observed on t3.xlarge
+```
+
+The guard is idempotent and costs nothing on first boot. `2 s` sleep is a minimum — bump further if Xvfb is slow to bind on smaller instance types.
+
+**Reference commit:** `8755802`.
+
+### D.3 Minimum EXTRACT_TIMEOUT
+
+**Problem:** Phase 1 set `EXTRACT_TIMEOUT = 60` seconds in `containers/base/server.py` as a conservative default, but live Best Buy runs at ~90 s end-to-end on t3.xlarge (warmup + homepage jitter + scroll + search URL + scroll + DOM eval). A 60 s ceiling kills the subprocess mid-extraction and returns `TIMEOUT`.
+
+**Convention:** `EXTRACT_TIMEOUT` defaults to **180 s** and is env-overridable:
+
+```python
+EXTRACT_TIMEOUT = int(os.environ.get("EXTRACT_TIMEOUT", "180"))  # seconds; live Best Buy + Walmart regularly exceed 60s
+```
+
+180 s is based on observed ~94 s worst case with ~2× headroom. Per-retailer overrides via the `EXTRACT_TIMEOUT` env var in each retailer's run command if a retailer consistently needs more.
+
+The backend-side container client timeout (`CONTAINER_TIMEOUT_SECONDS` in `.env`) must be **at least as large** as the container's `EXTRACT_TIMEOUT` or the backend will disconnect before the container responds. 180 s is the current minimum for both.
+
+**Reference commit:** `8755802`.
+
+### D.4 Test gap — the respx trap
+
+Phase 1's container tests (`test_container_client.py`, `test_container_retailers.py`) all use `respx` to mock the HTTP layer between backend and container, so the backend sees a pre-fabricated JSON response body and never invokes a real subprocess. Similarly, `test_walmart_firecrawl_adapter.py` uses respx to mock the Firecrawl API and never hits the real endpoint.
+
+Consequences observed on the 2026-04-10 live run:
+- **D.1, D.2, D.3** — all latent in every retailer container, never triggered because the mocks short-circuited the subprocess path entirely.
+- **Firecrawl v2 API shape drift** (`country` → `location.country`) — never caught by `test_walmart_firecrawl_adapter.py` because respx doesn't validate the request body shape.
+
+**Required countermeasure** (to be implemented as part of Step 2b or a dedicated testing mini-step): every vendor adapter (Firecrawl, Decodo, future Keepa) and every retailer container must have a companion real-API smoke test that runs nightly in CI against the real endpoint, produces a pass/fail health check, and alerts on failure. The smoke test does not replace the respx unit tests — it complements them. Unit tests stay fast; smoke tests catch schema drift before the next live demo.
+
+See `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md` § SP-4 for the Firecrawl v2 schema drift case study.

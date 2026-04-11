@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** April 2026 (v3.6 — Phase 2 Step 2a complete + walmart_http adapter with Decodo/Firecrawl routing)
+> **Last updated:** April 2026 (v3.7 — first live 3-retailer scan-to-prices demo on physical iPhone; 7 live-run bug fixes landed on `phase-2/scan-to-prices-deploy`)
 
 ---
 
@@ -276,6 +276,7 @@ This project uses a **two-tier AI workflow:**
 **Step 1i — Hardening + Doc Sweep + Tag v0.1.0: COMPLETE** ✅ (2026-04-08)
 **Phase 1 — Foundation: COMPLETE (tagged v0.1.0)**
 **Step 2a — Watchdog Supervisor + Health Monitoring + Pre-Fixes: COMPLETE** ✅ (2026-04-10)
+**Scan-to-Prices Live Demo (3 retailers): COMPLETE** ✅ (2026-04-10, branch `phase-2/scan-to-prices-deploy`)
 
 - AI abstraction: ✅ (Anthropic/Claude Opus added alongside Gemini — claude_generate, claude_generate_json, claude_generate_json_with_usage)
 - Watchdog supervisor: ✅ (nightly health checks, failure classification, self-healing via Opus, escalation)
@@ -356,8 +357,22 @@ This project uses a **two-tier AI workflow:**
 - iOS scan→compare flow: ✅ (full demo loop: scan barcode → resolve product → fetch 11 retailer prices → display comparison)
 - iOS tests: ✅ (21 passing — ScannerViewModel×14, APIClient×3, others)
 
-**Test counts:** 128 backend (104 + 24 new walmart adapter tests), 21 iOS unit, 0 UI, 0 snapshot
-**Build status:** Backend compiles and serves health + product resolve + price comparison + retailer health endpoints; container template + 11 retailer containers build and respond to GET /health; iOS app builds for simulator with full scan→resolve→compare flow; `ruff check` clean
+**Test counts:** 128 backend, 21 iOS unit, 0 UI, 0 snapshot (unchanged from Step 2a — scan-to-prices was a live validation, not a code-gen step)
+**Build status:** Backend compiles and serves health + product resolve + price comparison + retailer health endpoints; Amazon + Best Buy containers build and return real listings end-to-end against live sites on EC2 `t3.xlarge`; Walmart path returns real listings via Firecrawl v2 adapter; iOS app scans barcode → resolves via Gemini → fetches 3 retailers → displays comparison on a physical iPhone in ~90–120 s; `ruff check` clean
+
+**Live demo runtime profile (2026-04-10, physical iPhone):**
+- Gemini UPC resolve: 2–4 s
+- Amazon container (EC2): ~30 s end-to-end
+- Best Buy container (EC2): ~90 s end-to-end (dominant leg)
+- Walmart Firecrawl adapter: ~30 s
+- iOS total: ~90–120 s, dominated by Best Buy
+
+**Known demo caveats (see `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md`):**
+- **Product-match relevance (SP-10, HIGH):** each retailer's on-site search returns similar-but-not-identical products, and `_pick_best_listing` picks the cheapest regardless. Example: scanning an M4 Mac mini returned the correct SKU on Best Buy but a cheaper wrong-spec Mac mini on Amazon. Relevance guardrail is a hard prerequisite for any external demo — belongs in Step 2b design.
+- **Gemini UPC resolution accuracy (SP-L4, HIGH):** 3/3 tested UPCs (`0027242927568`, `0027242922914`, `194253397953`) resolved to unrelated products (camera battery, lens hood, dining room set). Needs UPCitemdb second-opinion fallback when Gemini's output doesn't match the scanned category, or a confidence score, or a broader prompt.
+- **Amazon extract.js title selector (SP-9, MEDIUM):** only captures brand (e.g. `"Sony"`) instead of full product title. Price, URL, image correct. Selector refactor or Watchdog heal pass needed.
+- **fd-3 stdout pattern latent on 8 retailers (SP-L2, MEDIUM):** only `containers/amazon/extract.sh` and `containers/best_buy/extract.sh` were fixed this session. The other 8 retailer extract.sh files (target, home_depot, lowes, ebay_new, ebay_used, sams_club, backmarket, fb_marketplace, walmart_container) still have the same latent bug and must be backfilled before those retailers go live.
+- **GitHub PAT leaked in EC2 git config (SP-L1, HIGH):** `gho_UUsp9ML…` is embedded in `~/barkain/.git/config` on stopped EC2 instance `i-09ce25ed6df7a09b2`. Must be rotated.
 
 ### Key Files Created (Step 1a)
 ```
@@ -542,6 +557,34 @@ backend/modules/m1_product/service.py                  # Updated — Gemini null
 backend/modules/m2_prices/service.py                   # Updated — shorter Redis TTL (30min for 0-result)
 ```
 
+### Key Files Created/Modified (Scan-to-Prices Live Demo, 2026-04-10)
+
+Branch: `phase-2/scan-to-prices-deploy`. 5 commits, 9 files, ~700 lines.
+
+```
+containers/amazon/extract.sh                           # Updated — exec 3>&1 / exec 1>&2, python3 JSON dump via >&3, fallback echo via >&3 (SP-1)
+containers/best_buy/extract.sh                          # Updated — same fd-3 pattern + uses new a.sku-title walker (SP-1)
+containers/best_buy/extract.js                          # Updated — a.sku-title walker replaces .sku-item selector (live Best Buy React/Tailwind migration, 2026-04-10)
+containers/base/server.py                              # Updated — EXTRACT_TIMEOUT env-overridable, default 60s → 180s (SP-2)
+containers/base/entrypoint.sh                          # Updated — rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 before Xvfb, sleep 1s → 2s (SP-3)
+backend/modules/m2_prices/adapters/walmart_firecrawl.py # Fixed — Firecrawl v2 API: top-level `country` → nested `location.country` (SP-4)
+backend/modules/m2_prices/service.py                   # Fixed — `_pick_best_listing` filters `price > 0` before min() to skip parse-failure listings (SP-7)
+Barkain/Services/Networking/APIClient.swift             # Fixed — dedicated URLSession with timeoutIntervalForRequest=240, timeoutIntervalForResource=300 (SP-8)
+Config/Debug.xcconfig                                   # Updated — Mac LAN IP for physical device testing with switch-back comment
+scripts/ec2_deploy.sh                                   # NEW — build + run barkain-base + 3 retailer containers with health checks
+scripts/ec2_tunnel.sh                                   # NEW — forward ports 8081-8091 from Mac to EC2 with verification
+scripts/ec2_test_extractions.sh                         # NEW — live extraction smoke test (Sony WH-1000XM5 + AirPods Pro) with pass/fail markdown table
+containers/walmart/TROUBLESHOOTING_LOG.md               # NEW — prior-session Walmart PerimeterX notes
+Barkain Prompts/Scan_to_Prices_Validation_Results.md    # NEW — chronological record of the run
+Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md  # NEW — 10 issues + 8 latent, viability rated
+Barkain Prompts/Conversation_Summary_Scan_to_Prices_Deployment.md  # NEW — session summary with decisions + learnings
+```
+
+**Env-only overrides applied to Mike's `.env` (not committed; documented so future sessions apply the same):**
+- `CONTAINER_URL_PATTERN=http://localhost:{port}` (was `http://localhost:808{port}` from Step 1c — silently rotted when Step 1d changed port format, SP-5)
+- `CONTAINER_TIMEOUT_SECONDS=180` (was 30 — too short for live Best Buy, SP-6)
+- `BARKAIN_DEMO_MODE=1` (bypasses Clerk auth for physical device testing)
+
 ### Key Files Created/Modified (Walmart Adapter Routing, post-Step-2a)
 ```
 backend/modules/m2_prices/adapters/__init__.py         # NEW — adapters subpackage marker
@@ -565,7 +608,13 @@ backend/tests/modules/test_container_retailers.py      # Updated — same fixtur
 
 1. **Phase 1 COMPLETE** — tagged v0.1.0. Full barcode scan → 11-retailer price comparison demo operational.
 2. **Step 2a COMPLETE.** Walmart adapter routing (walmart_http + walmart_firecrawl) landed dormant with `WALMART_ADAPTER=container` default — flip to `firecrawl` for demo, `decodo_http` for production.
-3. Phase 2 continues: Step 2b (M5 Identity Profile)
+3. **Scan-to-Prices Live Demo COMPLETE** (2026-04-10) — 3-retailer end-to-end validated on physical iPhone. 7 live-run bugs fixed on `phase-2/scan-to-prices-deploy`. EC2 instance `i-09ce25ed6df7a09b2` stopped, ready to start again with `aws ec2 start-instances`.
+4. **Blockers before Step 2b can start (HIGH priority):**
+   - **Product-match relevance scoring (SP-10):** design session needed. Retailer on-site search returns similar-but-not-identical products; `_pick_best_listing` needs a relevance guardrail before any user-facing demo. See `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md` SP-10 for approach options.
+   - **Gemini UPC accuracy (SP-L4):** 3/3 test UPCs resolved wrong. Needs UPCitemdb second-opinion fallback or confidence scoring.
+   - **Rotate leaked GitHub PAT (SP-L1):** `gho_UUsp9ML…` in `~/barkain/.git/config` on EC2.
+5. **Lower-priority pre-fixes for Step 2b:** backfill fd-3 stdout pattern to the other 8 retailer extract.sh files (SP-L2), Amazon extract.js title selector regression (SP-9), Walmart first-party filter in `_walmart_parser.py` (SP-L5), streaming per-retailer results to iPhone instead of blocking (SP-L7), real-API contract tests for vendor adapters (SP-4 test gap).
+6. **Phase 2 continues:** Step 2b (M5 Identity Profile), after the above blockers are addressed.
 
 ---
 
@@ -613,3 +662,10 @@ backend/tests/modules/test_container_retailers.py      # Updated — same fixtur
 | Production scraping architecture | Collapse browser containers to local-dev-only; use Firecrawl for production | Containers don't work from any cloud (IP blocks at edge). Firecrawl solves all 10 retailers from anywhere. Hybrid plan: direct HTTP for amazon/target/ebay_new ($0), Firecrawl for the other 7 ($0.0088/comparison). Containers become local-dev + emergency fallback. Adapter interface in M2 with per-retailer mode config. See Appendix B.7-B.8 | Apr 2026 |
 | Decodo residential proxy for walmart-only production path | Decodo rotating residential (US-targeted) as post-demo walmart path | 5/5 Walmart scrapes PASS via Decodo US residential pool (Verizon Fios). Wire body ~121 KB/scrape → 8,052 scrapes/GB. $0.000466/scrape at $3.75/GB (3 GB tier) → **2.7× cheaper than Firecrawl** per request, no concurrency cap. See Appendix C. Username auto-prefixed with `user-` and suffixed with `-country-us` by the adapter | Apr 2026 |
 | walmart_http adapter lands now, dormant until launch | `WALMART_ADAPTER={container,firecrawl,decodo_http}` feature flag | Demo default = `firecrawl`; flip to `decodo_http` post-demo. All 3 paths return `ContainerResponse`, routed by `ContainerClient._extract_one`. Other 10 retailers still use the container dispatch unchanged. 24 new tests (15 walmart_http + 9 firecrawl), 128 total passing. See Appendix C.6–C.8 | Apr 2026 |
+| extract.sh fd-3 stdout convention | Every retailer extract.sh must reserve fd 3 as real stdout via `exec 3>&1; exec 1>&2`, and emit final JSON via `>&3` | `agent-browser` writes progress lines ("✓ Done", "✓ <page title>", "✓ Browser closed") to STDOUT. Phase 1 respx-mocked tests never exercised this boundary, so every retailer extract.sh shipped with a latent `PARSE_ERROR` bug. Discovered on first live run (SP-1). See `docs/SCRAPING_AGENT_ARCHITECTURE.md` § Required extract.sh conventions | Apr 2026 |
+| EXTRACT_TIMEOUT baseline | 180 s default, env-overridable via `EXTRACT_TIMEOUT` | Live Best Buy runs at ~90 s end-to-end (warmup + scroll + DOM eval on t3.xlarge); Amazon ~30 s; old 60 s default tripped Best Buy every time. 180 s gives 2× headroom. | Apr 2026 |
+| Xvfb lock cleanup in entrypoint | Always `rm -f /tmp/.X99-lock /tmp/.X11-unix/X99` before starting Xvfb | Without it, `docker restart <retailer>` leaves a stale lock, Xvfb refuses to bind :99, uvicorn starts without X, and every extraction dies with `Missing X server or $DISPLAY`. Idempotent guard costs nothing on first boot. (SP-3) | Apr 2026 |
+| iOS URLSession timeout | Dedicated session with `timeoutIntervalForRequest=240`, `timeoutIntervalForResource=300` | Default 60 s trips before ~94 s backend round-trip. Progressive loading UI is still cosmetic — streaming per-retailer results is the real long-term fix (SP-L7). (SP-8) | Apr 2026 |
+| Zero-price listing guard | `_pick_best_listing` filters `price > 0` before `min()` | extract.js occasionally parses price as 0 when DOM node is missing/lazy (Amazon especially). `min(key=price)` then returns the zero-price listing as "cheapest". Defensive guard at service boundary; extract.js root-cause fix deferred. (SP-7) | Apr 2026 |
+| EC2 dev iteration pattern | Local Mac backend + SSH tunnel (8081–8091) → EC2 x86 container runtime | Local backend keeps hot reload / breakpoints / real env; containers run on EC2 for real x86 Chromium (ARM is non-viable per L13). `scripts/ec2_tunnel.sh` forwards ports, `CONTAINER_URL_PATTERN=http://localhost:{port}` unchanged. See `docs/DEPLOYMENT.md` § Live dev loop | Apr 2026 |
+| Product-match relevance scoring | Required before any user-facing demo | SP-10: each retailer's on-site search returns similar-but-not-identical products and `_pick_best_listing` picks cheapest regardless. Example: M4 Mac mini scan returned correct SKU on Best Buy but wrong-spec Mac mini on Amazon. Approach TBD (lexical / structural / embedding / retailer-weighted) — belongs in Step 2b design. | Apr 2026 |

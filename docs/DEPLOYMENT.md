@@ -337,6 +337,74 @@ docker build -t barkain-walmart containers/walmart/
 # ... etc for each retailer
 ```
 
+**Required extract.sh conventions** (see `docs/SCRAPING_AGENT_ARCHITECTURE.md` Appendix D for full rationale):
+- Every retailer's `extract.sh` must `exec 3>&1; exec 1>&2` at the top and emit the final JSON via `>&3`. Otherwise `agent-browser`'s progress output (`✓ Done`, `✓ Browser closed`) pollutes stdout and `server.py` returns `PARSE_ERROR`.
+- `containers/base/entrypoint.sh` must `rm -f /tmp/.X99-lock /tmp/.X11-unix/X99` before starting Xvfb. Otherwise `docker restart` leaves a stale lock and every subsequent extraction dies with `Missing X server or $DISPLAY`.
+- `EXTRACT_TIMEOUT` defaults to **180 s** (was 60 s in Phase 1). Best Buy's warmup + scroll + DOM eval routinely runs ~90 s on t3.xlarge, and Phase 1's 60 s limit killed every live extraction mid-run.
+- Backend's `CONTAINER_TIMEOUT_SECONDS` must be **at least as large** as the container's `EXTRACT_TIMEOUT` or the backend disconnects before the container responds.
+
+---
+
+## Live dev loop — Mac backend + EC2 containers via SSH tunnel
+
+> Rationale: agent-browser containers don't work on Apple Silicon (x86 emulation is 60–180 s per request per CLAUDE.md L13), but they run fine on a t3.large/xlarge EC2 instance. Rather than bake the backend into a container image and round-trip it to EC2 on every change, keep the backend on the Mac with hot reload / breakpoints / real env, and forward the container ports over SSH. No code change is required to swap between "local" and "remote" retailer runtimes.
+
+```
+┌────────────────┐                    ┌─────────────────────┐
+│  Mac           │    SSH tunnel      │   EC2 t3.xlarge     │
+│                │   (8081→8091)      │                     │
+│  uvicorn       │ ◄──────────────────┤  barkain-amazon     │ ← port 8081
+│  :8000         │                    │  barkain-bestbuy    │ ← port 8082
+│  ↑             │                    │  barkain-walmart    │ ← port 8083
+│  iPhone LAN IP │                    │  ...                │
+│  (physical dev)│                    │                     │
+└────────────────┘                    └─────────────────────┘
+```
+
+### Scripts (committed on `phase-2/scan-to-prices-deploy`, pending merge to main)
+
+- **`scripts/ec2_deploy.sh`** — run ON the EC2 instance. Installs Docker + git on first run, clones the repo, builds `barkain-base` then 3 priority retailers (amazon/best_buy/walmart) or all 11 with `--all`, runs them on ports 8081–8091, health-checks each one. Idempotent on re-run.
+- **`scripts/ec2_tunnel.sh <EC2_IP> [ssh_key_path]`** — run on the Mac. Kills any stale tunnel to that IP, opens `-L 8081:localhost:8081 … -L 8091:localhost:8091`, verifies each port responds on the Mac side. After this completes, the Mac backend's `CONTAINER_URL_PATTERN=http://localhost:{port}` reaches the EC2 containers unchanged.
+- **`scripts/ec2_test_extractions.sh`** — run ON the EC2 instance. Fires a live Sony WH-1000XM5 + AirPods Pro request against every running container. Produces a pass/fail markdown table. Uses `max_listings` (not `max_results`).
+
+### Typical iteration loop
+
+```bash
+# 0. One-time setup: launch or start the EC2 instance.
+aws ec2 start-instances --instance-ids <id> --region us-east-1
+aws ec2 wait instance-running --instance-ids <id> --region us-east-1
+EC2_IP=$(aws ec2 describe-instances --instance-ids <id> --query 'Reservations[0].Instances[0].PublicIpAddress' --output text --region us-east-1)
+
+# 1. SSH in and (re-)deploy containers. Incremental rebuilds from a warm base image are ~15s.
+ssh -i ~/.ssh/barkain-scrapers.pem ubuntu@$EC2_IP
+  cd ~/barkain && git pull && bash scripts/ec2_deploy.sh
+  bash scripts/ec2_test_extractions.sh   # live smoke test
+  exit
+
+# 2. Open the tunnel on the Mac.
+bash scripts/ec2_tunnel.sh $EC2_IP ~/.ssh/barkain-scrapers.pem
+
+# 3. Run backend locally. --host 0.0.0.0 is required for physical iPhone access.
+cd backend && set -a && source ../.env && set +a
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# 4. Iterate on backend code as normal — uvicorn hot-reloads. Container images only
+#    need rebuilding when extract.sh / extract.js / server.py / entrypoint.sh changes.
+
+# 5. When done for the day:
+kill $(pgrep -f "ssh.*$EC2_IP.*-N")                   # close tunnel
+aws ec2 stop-instances --instance-ids <id> --region us-east-1
+```
+
+### Cost + caveats
+
+- `t3.large` ~$0.08/hr, `t3.xlarge` ~$0.17/hr. Stop when idle; EBS persists at ~$2.40/mo so the pre-built `barkain-base` image survives across sessions.
+- Public IP rotates on stop/start unless you assign an Elastic IP. Tunnel script takes `$EC2_IP` as a positional arg so re-running with the new IP is fine.
+- Security group must allow port 22 from your current Mac IP. `curl -s -4 ifconfig.me` gets it; re-run `aws ec2 authorize-security-group-ingress` whenever you change networks.
+- The backend needs `--host 0.0.0.0` (not `--host localhost`) for physical iPhone testing over WiFi.
+- iOS `Config/Debug.xcconfig` must have `API_BASE_URL = http://<mac-lan-ip>:8000` for physical device builds. Info.plist's `NSAllowsLocalNetworking=true` permits the HTTP LAN connection.
+- **Env sync:** after any Step 1 → Step 2 style config shape change, verify that `.env` overrides still match `backend/app/config.py` defaults. 2/7 live-run bugs on 2026-04-10 were `.env` overrides silently rotting. See `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md` SP-5 / SP-6.
+
 ---
 
 ## Health Monitoring
