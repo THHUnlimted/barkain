@@ -51,3 +51,4 @@ tmp/
 
 # ── Claude Code session state (agent-local, never commit) ─
 .claude/
+.tmp/
