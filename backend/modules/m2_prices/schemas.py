@@ -48,6 +48,7 @@ class ContainerListing(BaseModel):
     is_available: bool = True
     image_url: str | None = None
     seller: str | None = None
+    is_third_party: bool = False
     extraction_method: str = "dom_eval"
 
 

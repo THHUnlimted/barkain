@@ -31,6 +31,13 @@ class Product(Base):
         DateTime(timezone=True), server_default=text("NOW()")
     )
 
+    @property
+    def confidence(self) -> float:
+        """Resolution confidence score from cross-validation, stored in source_raw."""
+        if self.source_raw and isinstance(self.source_raw, dict):
+            return self.source_raw.get("confidence", 0.0)
+        return 0.0
+
     __table_args__ = (
         Index("idx_products_upc", "upc", postgresql_where=text("upc IS NOT NULL")),
         Index("idx_products_asin", "asin", postgresql_where=text("asin IS NOT NULL")),

@@ -3,9 +3,14 @@
 Resolution chain:
 1. Redis cache (24hr TTL, key: product:upc:{upc})
 2. PostgreSQL (products table, query by upc)
-3. Gemini API (via ai.abstraction)
-4. UPCitemdb API (backup, free 100/day)
-5. Raise ProductNotFoundError if all fail
+3. Cross-validated resolution: Gemini + UPCitemdb second-opinion
+4. Raise ProductNotFoundError if all fail
+
+Cross-validation (Step 2b):
+- Always calls UPCitemdb after Gemini to verify brand agreement.
+- If brands match → trusts Gemini (richer name), enriched with UPCitemdb fields.
+- If brands disagree → trusts UPCitemdb (barcode database > search engine).
+- Confidence: 1.0 (agree), 0.7 (Gemini only), 0.5 (override), 0.3 (UPCitemdb only).
 """
 
 import logging
@@ -71,20 +76,15 @@ class ProductResolutionService:
             await self._cache_to_redis(upc, product)
             return product
 
-        # Step 3: Gemini API
-        product = await self._resolve_via_gemini(upc)
+        # Step 3: Cross-validated resolution (Gemini + UPCitemdb)
+        product = await self._resolve_with_cross_validation(upc)
         if product:
-            logger.info("Product resolved via Gemini API: upc=%s", upc)
             return product
 
-        # Step 4: UPCitemdb
-        product = await self._resolve_via_upcitemdb(upc)
-        if product:
-            logger.info("Product resolved via UPCitemdb: upc=%s", upc)
-            return product
-
-        # Step 5: All sources exhausted
+        # Step 4: All sources exhausted
         raise ProductNotFoundError(upc)
+
+    # MARK: - Cache Checks
 
     async def _check_redis(self, upc: str) -> Product | None:
         """Check Redis for a cached product UUID, then load from DB."""
@@ -116,8 +116,40 @@ class ProductResolutionService:
         )
         return result.scalar_one_or_none()
 
-    async def _resolve_via_gemini(self, upc: str) -> Product | None:
-        """Call Gemini API to resolve UPC, persist to DB, cache to Redis.
+    # MARK: - Cross-Validated Resolution
+
+    async def _resolve_with_cross_validation(self, upc: str) -> Product | None:
+        """Resolve UPC by querying Gemini and UPCitemdb, then cross-validating.
+
+        Always attempts both sources for maximum accuracy. Falls back gracefully
+        when one or both fail.
+        """
+        gemini_data = await self._get_gemini_data(upc)
+        upcitemdb_data = await self._get_upcitemdb_data(upc)
+
+        result = self._cross_validate(gemini_data, upcitemdb_data)
+        if result is None:
+            return None
+
+        product_data, confidence, source_label = result
+
+        # Store both raw responses and confidence in source_raw.
+        # Use shallow copies to avoid circular references (product_data may
+        # BE one of the raw dicts when _cross_validate returns it directly).
+        product_data["source_raw"] = {
+            "confidence": confidence,
+            "gemini_raw": dict(gemini_data) if gemini_data else None,
+            "upcitemdb_raw": dict(upcitemdb_data) if upcitemdb_data else None,
+        }
+
+        logger.info(
+            "Product resolved via %s (confidence=%.1f): upc=%s name=%s",
+            source_label, confidence, upc, product_data.get("name", "?"),
+        )
+        return await self._persist_product(upc, product_data, source_label)
+
+    async def _get_gemini_data(self, upc: str) -> dict | None:
+        """Call Gemini API to resolve UPC. Returns raw dict or None.
 
         Retries once with a broader prompt if the first attempt returns null.
         """
@@ -144,27 +176,71 @@ class ProductResolutionService:
                 logger.info("Gemini could not identify UPC %s after retry", upc)
                 return None
 
-            data = {"name": device_name}
-            return await self._persist_product(upc, data, "gemini_upc")
+            return {"name": device_name}
         except Exception:
             logger.warning(
                 "Gemini resolution failed for UPC %s", upc, exc_info=True
             )
             return None
 
-    async def _resolve_via_upcitemdb(self, upc: str) -> Product | None:
-        """Call UPCitemdb API to resolve UPC, persist to DB, cache to Redis."""
+    async def _get_upcitemdb_data(self, upc: str) -> dict | None:
+        """Call UPCitemdb API. Returns structured dict with name/brand/category or None."""
         try:
             data = await upcitemdb_lookup(upc)
             if not data or not data.get("name"):
                 return None
-
-            return await self._persist_product(upc, data, "upcitemdb")
+            return data
         except Exception:
             logger.warning(
                 "UPCitemdb resolution failed for UPC %s", upc, exc_info=True
             )
             return None
+
+    @staticmethod
+    def _cross_validate(
+        gemini_data: dict | None,
+        upcitemdb_data: dict | None,
+    ) -> tuple[dict, float, str] | None:
+        """Compare Gemini and UPCitemdb results, pick the winner.
+
+        Returns:
+            (product_data, confidence, source_label) or None if both failed.
+        """
+        if gemini_data and upcitemdb_data:
+            # Both sources returned data — check brand agreement
+            upcitemdb_brand = (upcitemdb_data.get("brand") or "").strip()
+            gemini_name = gemini_data.get("name", "")
+
+            if upcitemdb_brand and upcitemdb_brand.lower() in gemini_name.lower():
+                # Brands agree — trust Gemini name, enrich with UPCitemdb fields
+                return (
+                    {
+                        "name": gemini_name,
+                        "brand": upcitemdb_data.get("brand"),
+                        "category": upcitemdb_data.get("category"),
+                        "description": upcitemdb_data.get("description"),
+                        "image_url": upcitemdb_data.get("image_url"),
+                        "asin": upcitemdb_data.get("asin"),
+                    },
+                    1.0,
+                    "gemini_validated",
+                )
+            else:
+                # Brands disagree — trust UPCitemdb (barcode DB > search engine)
+                return (upcitemdb_data, 0.5, "upcitemdb_override")
+
+        if gemini_data:
+            # Gemini only — UPCitemdb returned nothing
+            return (gemini_data, 0.7, "gemini_upc")
+
+        if upcitemdb_data:
+            # UPCitemdb only — Gemini failed
+            return (upcitemdb_data, 0.3, "upcitemdb")
+
+        # Both failed
+        return None
+
+    # MARK: - Persistence
 
     async def _persist_product(
         self, upc: str, data: dict, source: str
@@ -182,7 +258,7 @@ class ProductResolutionService:
             image_url=data.get("image_url"),
             asin=data.get("asin"),
             source=source,
-            source_raw=data,
+            source_raw=data.get("source_raw", data),
         )
         self.db.add(product)
 

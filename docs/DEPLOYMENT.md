@@ -145,6 +145,13 @@ DECODO_PROXY_HOST=gate.decodo.com:7000
 
 **Paradigm shift note.** As of April 2026 (post-Step-2a), walmart no longer runs through the browser-container path in any deployed environment. The 10 other retailers still use the container dispatch unchanged. This is the only retailer with adapter-based routing today, and the pattern is intentionally scoped to walmart via a single `if retailer_id == "walmart"` check in `container_client.py::_extract_one`. Broader migration to Firecrawl for all retailers is deferred — see `docs/SCRAPING_AGENT_ARCHITECTURE.md` Appendix B.7 for the long-term recommendation.
 
+**`.env.example` audit (Step 2b, PF-1, 2026-04-11).** The `.env.example` was audited as part of Step 2b to prevent a repeat of the SP-5 drift trap (wrong `CONTAINER_URL_PATTERN` format silently rotting in `.env` while `config.py` had the correct default). Changes:
+- Duplicate defaults that merely echoed `backend/app/config.py` defaults were removed. Only genuine overrides that MUST differ from code defaults remain.
+- `CONTAINER_URL_PATTERN` line removed entirely — it was the SP-5 root cause. The correct default (`http://localhost:{port}`) lives in `config.py` and should never be overridden in `.env` unless the deployment topology changes.
+- `CONTAINER_TIMEOUT_SECONDS=180` added (matches the post-live-run baseline from SP-6).
+- `BARKAIN_DEMO_MODE=1` added as a comment — uncomment for local physical-device testing without Clerk auth.
+- **Rule:** if a value in `.env.example` matches the default in `config.py`, delete it from `.env.example`. The env file is for secrets and deployment-specific overrides only.
+
 ### iOS (Xcconfig)
 
 ```

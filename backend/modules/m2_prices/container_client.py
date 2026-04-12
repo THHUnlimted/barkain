@@ -112,10 +112,29 @@ class ContainerClient:
                 data = resp.json()
                 return ContainerResponse(**data)
 
-            except (httpx.TimeoutException, httpx.ConnectError) as e:
+            except httpx.ConnectError as e:
+                last_error = f"{type(e).__name__}: {e}"
+                if "Connection refused" in str(e) or "ConnectRefusedError" in str(e):
+                    logger.debug(
+                        "Container %s not running (attempt %d/%d)",
+                        retailer_id,
+                        attempt + 1,
+                        1 + self.retry_count,
+                    )
+                else:
+                    logger.warning(
+                        "Container %s attempt %d/%d connect error: %s",
+                        retailer_id,
+                        attempt + 1,
+                        1 + self.retry_count,
+                        last_error,
+                    )
+                continue
+
+            except httpx.TimeoutException as e:
                 last_error = f"{type(e).__name__}: {e}"
                 logger.warning(
-                    "Container %s attempt %d/%d failed: %s",
+                    "Container %s attempt %d/%d timed out: %s",
                     retailer_id,
                     attempt + 1,
                     1 + self.retry_count,

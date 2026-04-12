@@ -1831,3 +1831,47 @@ Consequences observed on the 2026-04-10 live run:
 **Required countermeasure** (to be implemented as part of Step 2b or a dedicated testing mini-step): every vendor adapter (Firecrawl, Decodo, future Keepa) and every retailer container must have a companion real-API smoke test that runs nightly in CI against the real endpoint, produces a pass/fail health check, and alerts on failure. The smoke test does not replace the respx unit tests — it complements them. Unit tests stay fast; smoke tests catch schema drift before the next live demo.
 
 See `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md` § SP-4 for the Firecrawl v2 schema drift case study.
+
+---
+
+## Appendix E — Amazon Title Selector (SP-9 fix, Step 2b, 2026-04-11)
+
+Amazon's `extract.js` had a single-selector title extraction that only captured the brand name (e.g. `"Sony"`) instead of the full product title. This was invisible in respx-mocked tests but broke relevance scoring on every live Amazon result.
+
+### 5-level title fallback chain
+
+The fix implements a cascading selector chain with brand-name validation:
+
+1. `[data-cy="title-recipe"] span` — most reliable when present (Amazon's newer recipe-based layout)
+2. `h2 a .a-text-normal` — standard search results layout
+3. `h2 a span` — older/fallback layout
+4. `img[data-image-latency="s-product-image"]` alt — specific product image alt text
+5. `img.s-image` alt — generic product image alt text
+
+### Brand-name validation gate
+
+If a candidate title is too short (single word or fewer than 20 characters), it is likely just a brand label (e.g. `"Sony"`, `"Apple"`, `"Samsung"`). The loop skips that candidate and continues trying the remaining selectors until it finds a substantive title. This prevents `_score_listing_relevance` from receiving a brand-only string that would fail token overlap.
+
+---
+
+## Appendix F — Relevance Scoring (SP-10 fix, Step 2b, 2026-04-11)
+
+The first live demo (2026-04-10) revealed that each retailer's on-site search returns similar-but-not-identical products, and `_pick_best_listing` selected the cheapest listing regardless of relevance. Example: scanning an M4 Mac mini returned the correct SKU on Best Buy but a cheaper wrong-spec Mac mini on Amazon.
+
+### `_score_listing_relevance()` in `m2_prices/service.py`
+
+Scores each listing 0.0 to 1.0 against the canonical product from M1:
+
+1. **Model number hard gate.** Extracts structured identifiers from `product.name` using regex patterns for model numbers (WH-1000XM5), chip generations (M4, A17), storage sizes (256GB, 1TB), screen sizes (65", 27-inch), and similar. If any identifiers are found in the product name, at least one must appear in the listing title. If none match, the listing scores 0.0 immediately.
+
+2. **Brand match.** If `product.brand` is known and non-empty, it must appear (case-insensitive) in the listing title. Skipped if brand is unknown (Gemini-only resolution does not always populate brand).
+
+3. **Token overlap.** Tokenizes both `product.name` and the listing title into lowercase alphanumeric tokens. Computes `len(intersection) / len(product_tokens)`. This catches partial matches and word-order differences across retailers.
+
+### Threshold
+
+Listings scoring below **0.4** are excluded from `_pick_best_listing`. This threshold filters out clearly wrong products (different model, different spec) while allowing minor title variations across retailers (e.g. "Sony WH-1000XM5 Wireless Headphones" vs "Sony WH1000XM5 Noise Cancelling Headphone").
+
+### Integration with `_pick_best_listing`
+
+The flow is: score all listings -> filter below 0.4 -> pick cheapest among remaining. If all listings for a retailer are below threshold, that retailer returns no result for the product (rather than a misleadingly cheap wrong product).

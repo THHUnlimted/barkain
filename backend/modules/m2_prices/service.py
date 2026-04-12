@@ -14,6 +14,7 @@ Pipeline:
 
 import json
 import logging
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -52,6 +53,75 @@ def _json_serializer(obj: object) -> str:
     if isinstance(obj, uuid.UUID):
         return str(obj)
     raise TypeError(f"Not JSON serializable: {type(obj)}")
+
+
+# MARK: - Relevance Scoring
+
+_MODEL_PATTERNS = [
+    re.compile(r'[A-Z]{1,3}\d{1,2}-?\d{3,5}[A-Z]*(?:/[A-Z0-9]+)?', re.IGNORECASE),
+    re.compile(r'\b(?:M[1-9]\d?|Gen\s*\d+|Series\s*[A-Z0-9]+|v\d+)\b', re.IGNORECASE),
+    re.compile(r'\d{2,3}["\u201d]'),
+    re.compile(r'\d{3,4}\s*GB', re.IGNORECASE),
+    re.compile(r'\d{1,2}[.-]inch', re.IGNORECASE),
+]
+
+_STOPWORDS = frozenset({
+    "the", "a", "an", "and", "or", "for", "with", "in", "of", "to",
+    "is", "it", "by", "on", "at", "from", "new", "black", "white",
+})
+
+_BRAND_SUFFIXES = re.compile(r'\s*(?:Inc\.?|Corp\.?|LLC|Ltd\.?|Co\.?)$', re.IGNORECASE)
+
+RELEVANCE_THRESHOLD = 0.4
+
+
+def _extract_model_identifiers(name: str) -> list[str]:
+    """Extract model numbers and spec markers from a product name."""
+    identifiers = []
+    for pattern in _MODEL_PATTERNS:
+        identifiers.extend(pattern.findall(name))
+    return identifiers
+
+
+def _tokenize(text: str) -> set[str]:
+    """Lowercase, strip punctuation, remove stopwords."""
+    tokens = re.findall(r'[a-z0-9]+', text.lower())
+    return {t for t in tokens if t not in _STOPWORDS and len(t) > 1}
+
+
+def _score_listing_relevance(listing_title: str, product: Product) -> float:
+    """Score how relevant a listing title is to the resolved product (0.0–1.0).
+
+    Rules applied in order:
+    1. Model number hard gate: if product has identifiers, at least one must appear.
+    2. Brand match: product.brand must appear in listing title.
+    3. Token overlap tiebreaker: |intersection| / |product_tokens|.
+    """
+    product_identifiers = _extract_model_identifiers(product.name)
+    title_lower = listing_title.lower()
+
+    # Rule 1: Model number hard gate
+    if product_identifiers:
+        if not any(ident.lower() in title_lower for ident in product_identifiers):
+            return 0.0
+
+    # Rule 2: Brand match (skip if brand is unknown)
+    if product.brand:
+        clean_brand = _BRAND_SUFFIXES.sub("", product.brand).strip()
+        if clean_brand and clean_brand.lower() not in title_lower:
+            return 0.0
+
+    # Rule 3: Token overlap
+    product_tokens = _tokenize(product.name)
+    listing_tokens = _tokenize(listing_title)
+
+    if not product_tokens:
+        return 0.5  # Can't score — assume passable
+
+    overlap = len(product_tokens & listing_tokens)
+    score = overlap / len(product_tokens)
+
+    return score if score >= RELEVANCE_THRESHOLD else 0.0
 
 
 class PriceAggregationService:
@@ -111,7 +181,7 @@ class PriceAggregationService:
                 continue
 
             succeeded += 1
-            best_listing = self._pick_best_listing(response)
+            best_listing, relevance = self._pick_best_listing(response, product)
             if best_listing is None:
                 continue
 
@@ -144,6 +214,7 @@ class PriceAggregationService:
                         and best_listing.price < best_listing.original_price
                     ),
                     "last_checked": now.isoformat(),
+                    "relevance_score": relevance,
                 }
             )
 
@@ -254,22 +325,44 @@ class PriceAggregationService:
             parts.append(product.brand)
         return " ".join(parts)
 
-    def _pick_best_listing(self, response: ContainerResponse):
-        """Pick the lowest-priced available listing from a container response.
+    def _pick_best_listing(
+        self, response: ContainerResponse, product: Product
+    ) -> tuple | tuple[None, float]:
+        """Pick the lowest-priced, relevance-filtered listing from a container response.
+
+        Returns (listing, relevance_score) or (None, 0.0).
 
         NOTE(D11): Keeps only the cheapest listing per retailer. All listings are
-        recorded in price_history, but only the cheapest is shown. Phase 2 may
-        expose seller-level pricing.
+        recorded in price_history, but only the cheapest is shown.
 
-        Listings with price <= 0 are treated as parse failures (extract.js
-        sometimes returns a zero price when the price element is missing or
-        obscured) and are skipped so they don't dominate the min() selection.
+        Filters:
+        1. Price > 0 (parse failure guard — SP-7)
+        2. Relevance score >= 0.4 (wrong-product guard — SP-10)
+        3. Availability preference (available > unavailable)
+        4. Cheapest wins among survivors
         """
+        # Filter zero-price parse failures
         valid = [item for item in response.listings if item.price and item.price > 0]
-        available = [item for item in valid if item.is_available]
+        if not valid:
+            return None, 0.0
+
+        # Score and filter by relevance
+        scored = []
+        for item in valid:
+            score = _score_listing_relevance(item.title, product)
+            if score >= RELEVANCE_THRESHOLD:
+                scored.append((item, score))
+
+        if not scored:
+            return None, 0.0
+
+        # Prefer available listings
+        available = [(item, s) for item, s in scored if item.is_available]
         if not available:
-            available = valid
-        return min(available, key=lambda item: item.price) if available else None
+            available = scored
+
+        best_item, best_score = min(available, key=lambda pair: pair[0].price)
+        return best_item, best_score
 
     async def _upsert_price(
         self, product_id: uuid.UUID, retailer_id: str, listing, now: datetime
