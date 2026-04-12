@@ -95,10 +95,17 @@ async def test_full_flow_scan_resolve_then_prices(client, db_session):
     }
 
     # Step 1: Resolve product
-    with patch(
-        "modules.m1_product.service.gemini_generate_json",
-        new_callable=AsyncMock,
-        return_value=GEMINI_PRODUCT_DATA,
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=GEMINI_PRODUCT_DATA,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
     ):
         resolve_resp = await client.post(
             "/api/v1/products/resolve",
@@ -138,10 +145,17 @@ async def test_full_flow_empty_product_name(client, db_session):
         "device_name": "Unknown Gadget",
     }
 
-    with patch(
-        "modules.m1_product.service.gemini_generate_json",
-        new_callable=AsyncMock,
-        return_value=gemini_data,
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_data,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
     ):
         resolve_resp = await client.post(
             "/api/v1/products/resolve",
@@ -151,8 +165,21 @@ async def test_full_flow_empty_product_name(client, db_session):
     assert resolve_resp.status_code == 200
     product_id = resolve_resp.json()["id"]
 
+    # Listing title must match the product name for relevance scoring
     mock_responses = {
-        "amazon": _make_container_response("amazon", 49.99),
+        "amazon": ContainerResponse(
+            retailer_id="amazon",
+            query="Unknown Gadget",
+            extraction_time_ms=1500,
+            listings=[
+                ContainerListing(
+                    title="Unknown Gadget Wireless Device",
+                    price=49.99,
+                    condition="new",
+                    is_available=True,
+                )
+            ],
+        ),
     }
 
     with patch(
@@ -175,10 +202,17 @@ async def test_full_flow_missing_asin(client, db_session):
         "device_name": "Generic Speaker",
     }
 
-    with patch(
-        "modules.m1_product.service.gemini_generate_json",
-        new_callable=AsyncMock,
-        return_value=gemini_data,
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_data,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
     ):
         resolve_resp = await client.post(
             "/api/v1/products/resolve",
@@ -190,7 +224,19 @@ async def test_full_flow_missing_asin(client, db_session):
     assert resolve_resp.json().get("asin") is None
 
     mock_responses = {
-        "walmart": _make_container_response("walmart", 39.99),
+        "walmart": ContainerResponse(
+            retailer_id="walmart",
+            query="Generic Speaker",
+            extraction_time_ms=1500,
+            listings=[
+                ContainerListing(
+                    title="Generic Speaker Bluetooth Portable",
+                    price=39.99,
+                    condition="new",
+                    is_available=True,
+                )
+            ],
+        ),
     }
 
     with patch(
@@ -210,10 +256,17 @@ async def test_full_flow_all_containers_timeout(client, db_session):
     await _seed_retailers(db_session, ALL_RETAILER_IDS)
 
     # Resolve a product first
-    with patch(
-        "modules.m1_product.service.gemini_generate_json",
-        new_callable=AsyncMock,
-        return_value=GEMINI_PRODUCT_DATA,
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=GEMINI_PRODUCT_DATA,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
     ):
         resolve_resp = await client.post(
             "/api/v1/products/resolve",
@@ -243,10 +296,17 @@ async def test_full_flow_partial_results(client, db_session):
     """3/11 succeed, 8 fail — correct counts and prices."""
     await _seed_retailers(db_session, ALL_RETAILER_IDS)
 
-    with patch(
-        "modules.m1_product.service.gemini_generate_json",
-        new_callable=AsyncMock,
-        return_value=GEMINI_PRODUCT_DATA,
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=GEMINI_PRODUCT_DATA,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
     ):
         resolve_resp = await client.post(
             "/api/v1/products/resolve",
@@ -280,11 +340,18 @@ async def test_full_flow_partial_results(client, db_session):
 async def test_full_flow_duplicate_upc_uses_cache(client, db_session, fake_redis):
     """Second resolve for same UPC returns cached product, no Gemini call."""
     # First resolve
-    with patch(
-        "modules.m1_product.service.gemini_generate_json",
-        new_callable=AsyncMock,
-        return_value=GEMINI_PRODUCT_DATA,
-    ) as mock_gemini:
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=GEMINI_PRODUCT_DATA,
+        ) as mock_gemini,
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
         resp1 = await client.post(
             "/api/v1/products/resolve",
             json={"upc": "555555555555"},
@@ -295,11 +362,18 @@ async def test_full_flow_duplicate_upc_uses_cache(client, db_session, fake_redis
     product_id_1 = resp1.json()["id"]
 
     # Second resolve — should hit Redis cache, no Gemini call
-    with patch(
-        "modules.m1_product.service.gemini_generate_json",
-        new_callable=AsyncMock,
-        return_value=GEMINI_PRODUCT_DATA,
-    ) as mock_gemini_2:
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=GEMINI_PRODUCT_DATA,
+        ) as mock_gemini_2,
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
         resp2 = await client.post(
             "/api/v1/products/resolve",
             json={"upc": "555555555555"},
@@ -314,10 +388,17 @@ async def test_full_flow_force_refresh(client, db_session, fake_redis):
     """force_refresh=true re-dispatches containers even with cached data."""
     await _seed_retailers(db_session, ["amazon"])
 
-    with patch(
-        "modules.m1_product.service.gemini_generate_json",
-        new_callable=AsyncMock,
-        return_value=GEMINI_PRODUCT_DATA,
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=GEMINI_PRODUCT_DATA,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
     ):
         resolve_resp = await client.post(
             "/api/v1/products/resolve",

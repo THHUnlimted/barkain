@@ -37,6 +37,11 @@ CHALLENGE_MARKERS = (
     "access denied",
 )
 
+# Known Walmart first-party seller names (lowercase for comparison)
+WALMART_FIRST_PARTY_SELLERS = frozenset({
+    "walmart", "walmart.com", "walmart inc", "walmart inc.",
+})
+
 # Flexible `<script id="__NEXT_DATA__">` regex — tolerates any attribute order
 # and whitespace between attributes.
 _NEXT_DATA_RE = re.compile(
@@ -51,8 +56,17 @@ def detect_challenge(html: str) -> bool:
     return any(marker in lowered for marker in CHALLENGE_MARKERS)
 
 
-def extract_listings(html: str, max_listings: int = 10) -> list[ContainerListing]:
+def extract_listings(
+    html: str,
+    max_listings: int = 10,
+    first_party_only: bool = True,
+) -> list[ContainerListing]:
     """Extract up to `max_listings` product listings from Walmart search HTML.
+
+    When `first_party_only` is True (default), third-party reseller listings
+    are filtered out. If ALL listings are third-party, the cheapest one is
+    returned with its `is_third_party` flag preserved so downstream code can
+    decide what to do with it.
 
     Raises `ValueError` if the page has no `__NEXT_DATA__` block at all —
     the caller should treat that as a parse failure, not an empty result.
@@ -70,14 +84,25 @@ def extract_listings(html: str, max_listings: int = 10) -> list[ContainerListing
     if not items:
         return []
 
-    listings: list[ContainerListing] = []
+    all_listings: list[ContainerListing] = []
     for raw in items:
         listing = _map_item_to_listing(raw)
         if listing is not None:
-            listings.append(listing)
-            if len(listings) >= max_listings:
-                break
-    return listings
+            all_listings.append(listing)
+
+    if not first_party_only:
+        return all_listings[:max_listings]
+
+    first_party = [li for li in all_listings if not li.is_third_party]
+    if first_party:
+        return first_party[:max_listings]
+
+    # All listings are third-party — return the cheapest one
+    if all_listings:
+        cheapest = min(all_listings, key=lambda li: li.price)
+        return [cheapest]
+
+    return []
 
 
 def build_success_response(
@@ -195,6 +220,13 @@ def _map_item_to_listing(item: dict) -> ContainerListing | None:
     if "Pre-Owned" in name or "Refurbished" in name or "Restored" in name:
         condition = "used"
 
+    # Classify first-party vs third-party seller
+    seller_name = item.get("sellerName") or ""
+    is_third_party = (
+        bool(seller_name.strip())
+        and seller_name.strip().lower() not in WALMART_FIRST_PARTY_SELLERS
+    )
+
     return ContainerListing(
         title=name.strip()[:300],
         price=price,
@@ -204,7 +236,8 @@ def _map_item_to_listing(item: dict) -> ContainerListing | None:
         condition=condition,
         is_available=is_available,
         image_url=image,
-        seller=item.get("sellerName"),
+        seller=seller_name.strip() or None,
+        is_third_party=is_third_party,
         extraction_method="http_next_data",  # overridden by build_success_response
     )
 

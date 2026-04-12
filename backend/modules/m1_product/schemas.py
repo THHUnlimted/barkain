@@ -40,6 +40,7 @@ class ProductResponse(BaseModel):
     description: str | None
     image_url: str | None
     source: str
+    confidence: float = 0.0
     created_at: datetime
     updated_at: datetime
 

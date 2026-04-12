@@ -133,12 +133,18 @@ async def test_resolve_calls_gemini_on_cache_miss(
     client, db_session, fake_redis, gemini_fixture
 ):
     """When Redis and DB are empty, calls Gemini and persists result."""
-    with patch(
-        "modules.m1_product.service.gemini_generate_json",
-        new_callable=AsyncMock,
-    ) as mock_gemini:
-        mock_gemini.return_value = gemini_fixture
-
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_fixture,
+        ) as mock_gemini,
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
         response = await client.post(RESOLVE_URL, json={"upc": VALID_UPC})
 
     assert response.status_code == 200
@@ -218,10 +224,17 @@ async def test_resolve_response_contains_required_fields(
     client, db_session, fake_redis, gemini_fixture
 ):
     """Response includes all expected fields."""
-    with patch(
-        "modules.m1_product.service.gemini_generate_json",
-        new_callable=AsyncMock,
-        return_value=gemini_fixture,
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_fixture,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
     ):
         response = await client.post(RESOLVE_URL, json={"upc": VALID_UPC})
 
@@ -229,7 +242,7 @@ async def test_resolve_response_contains_required_fields(
     data = response.json()
     required_fields = {
         "id", "upc", "name", "brand", "category",
-        "source", "created_at", "updated_at",
+        "source", "confidence", "created_at", "updated_at",
     }
     assert required_fields.issubset(data.keys())
 
@@ -242,10 +255,17 @@ async def test_resolve_accepts_13_digit_ean(
     client, db_session, fake_redis, gemini_fixture
 ):
     """13-digit EAN barcode is accepted."""
-    with patch(
-        "modules.m1_product.service.gemini_generate_json",
-        new_callable=AsyncMock,
-        return_value=gemini_fixture,
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_fixture,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
     ):
         response = await client.post(
             RESOLVE_URL, json={"upc": "0027242923782"}
@@ -262,11 +282,18 @@ async def test_resolve_same_upc_twice_uses_cache(
     client, db_session, fake_redis, gemini_fixture
 ):
     """Second resolve for same UPC uses cached result, not Gemini."""
-    with patch(
-        "modules.m1_product.service.gemini_generate_json",
-        new_callable=AsyncMock,
-        return_value=gemini_fixture,
-    ) as mock_gemini:
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_fixture,
+        ) as mock_gemini,
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
         # First call — hits Gemini
         response1 = await client.post(RESOLVE_URL, json={"upc": VALID_UPC})
         assert response1.status_code == 200
@@ -291,11 +318,18 @@ async def test_gemini_null_retry_then_success(client, db_session, fake_redis):
     null_response = {"device_name": None}
     success_response = {"device_name": "Sony WH-1000XM5 Wireless Headphones"}
 
-    with patch(
-        "modules.m1_product.service.gemini_generate_json",
-        new_callable=AsyncMock,
-        side_effect=[null_response, success_response],
-    ) as mock_gemini:
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            side_effect=[null_response, success_response],
+        ) as mock_gemini,
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
         response = await client.post(RESOLVE_URL, json={"upc": "887276789880"})
         assert response.status_code == 200
         data = response.json()
@@ -334,3 +368,190 @@ async def test_gemini_null_retry_both_null_falls_to_upcitemdb(
         response = await client.post(RESOLVE_URL, json={"upc": "887276789880"})
         assert response.status_code == 200
         assert "Sony" in response.json()["name"]
+
+
+# MARK: - Cross-Validation (Step 2b)
+
+
+CROSS_UPC = "194253397953"
+
+
+@pytest.mark.asyncio
+async def test_cross_validate_both_agree(client, db_session, fake_redis):
+    """When Gemini and UPCitemdb agree on brand, Gemini name wins with confidence=1.0."""
+    gemini_response = {"device_name": "Sony WH-1000XM5 Wireless Headphones (WH1000XM5/B)"}
+    upcitemdb_result = {
+        "name": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+        "brand": "Sony",
+        "category": "Electronics > Audio > Headphones",
+        "description": "Premium noise canceling headphones.",
+        "asin": "B09XS7JWHH",
+        "image_url": "https://example.com/image.jpg",
+    }
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_response,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=upcitemdb_result,
+        ),
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": CROSS_UPC})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "gemini_validated"
+    assert data["confidence"] == 1.0
+    assert "WH-1000XM5" in data["name"]
+    assert data["brand"] == "Sony"
+
+
+@pytest.mark.asyncio
+async def test_cross_validate_brand_mismatch(client, db_session, fake_redis):
+    """When Gemini and UPCitemdb disagree on brand, UPCitemdb wins with confidence=0.5."""
+    gemini_response = {"device_name": "Energizer CR2032 Lithium Battery Pack"}
+    upcitemdb_result = {
+        "name": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+        "brand": "Sony",
+        "category": "Electronics > Audio > Headphones",
+        "description": "Premium noise canceling headphones.",
+        "asin": "B09XS7JWHH",
+        "image_url": "https://example.com/image.jpg",
+    }
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_response,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=upcitemdb_result,
+        ),
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": CROSS_UPC})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "upcitemdb_override"
+    assert data["confidence"] == 0.5
+    assert data["brand"] == "Sony"
+
+
+@pytest.mark.asyncio
+async def test_cross_validate_gemini_only(client, db_session, fake_redis):
+    """When UPCitemdb returns nothing, Gemini wins with confidence=0.7."""
+    gemini_response = {"device_name": "Sony WH-1000XM5 Wireless Headphones"}
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_response,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": CROSS_UPC})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "gemini_upc"
+    assert data["confidence"] == 0.7
+
+
+@pytest.mark.asyncio
+async def test_cross_validate_upcitemdb_only(client, db_session, fake_redis):
+    """When Gemini fails, UPCitemdb wins with confidence=0.3."""
+    upcitemdb_result = {
+        "name": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+        "brand": "Sony",
+        "category": "Electronics > Audio > Headphones",
+        "description": "Premium noise canceling headphones.",
+        "asin": "B09XS7JWHH",
+        "image_url": "https://example.com/image.jpg",
+    }
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            side_effect=Exception("Gemini API error"),
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=upcitemdb_result,
+        ),
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": CROSS_UPC})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "upcitemdb"
+    assert data["confidence"] == 0.3
+
+
+@pytest.mark.asyncio
+async def test_cross_validate_both_fail(client, db_session, fake_redis):
+    """When both sources fail, returns 404."""
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value={"device_name": None},
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": CROSS_UPC})
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_redis_cache_skips_cross_validation(
+    client, db_session, fake_redis
+):
+    """Redis cache hit skips both Gemini and UPCitemdb calls entirely."""
+    product = Product(
+        upc=CROSS_UPC,
+        name="Sony WH-1000XM5",
+        brand="Sony",
+        source="gemini_validated",
+        source_raw={"confidence": 1.0},
+    )
+    db_session.add(product)
+    await db_session.flush()
+    await fake_redis.set(f"product:upc:{CROSS_UPC}", str(product.id), ex=86400)
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+        ) as mock_gemini,
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+        ) as mock_upcitemdb,
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": CROSS_UPC})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["confidence"] == 1.0
+    mock_gemini.assert_not_called()
+    mock_upcitemdb.assert_not_called()

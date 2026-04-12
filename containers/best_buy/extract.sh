@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # Best Buy extraction script — 9-step agent-browser DOM eval pattern.
-# Anchor selector: .sku-item or [data-sku-id] — Best Buy uses class-based product cards.
+# Anchor selector: a.sku-title → walk up to .list-item card container.
 # Bot detection: Moderate — headed Chrome with anti-detection flags works.
+#
+# Step 2b optimizations (target: <45s from ~90s):
+#   - Reduced scroll passes from 5 to 2 (first 12 results front-loaded)
+#   - Switched warmup+search waits from networkidle to load
+#   - Removed homepage scroll during warmup
+#   - Added TIMING profiling logs to stderr
 #
 # Usage: ./extract.sh <query> [max_listings]
 
@@ -18,6 +24,7 @@ CHROMIUM="${CHROMIUM_PATH:-/usr/bin/chromium}"
 
 # Helpers
 log()  { echo "[$(date +%T)] $*" >&2; }
+timing() { echo "[$(date +%T)] TIMING: $* at $(date +%s%N | cut -b1-13)ms" >&2; }
 jitter() {
   local min_ms=$1 max_ms=$2
   local delay_ms=$((min_ms + RANDOM % (max_ms - min_ms)))
@@ -55,6 +62,7 @@ while [ $attempt -lt $RETRY_MAX ]; do
   [ $attempt -gt 1 ] && { pkill -f "chromium.*--remote-debugging-port=$CDP_PORT" 2>/dev/null || true; jitter 1500 3000; }
 
   # Step 2: Launch headed Chromium with anti-detection flags
+  timing "chrome_launch_start"
   "$CHROMIUM" \
     --remote-debugging-port=$CDP_PORT \
     --user-data-dir="$PROFILE_DIR" \
@@ -65,18 +73,23 @@ while [ $attempt -lt $RETRY_MAX ]; do
     --no-sandbox \
     "about:blank" &
   sleep 3
+  timing "chrome_launch_done"
 
-  # Step 3: Warm up on Best Buy homepage (establish cookies, look human)
-  jitter 800 1500
+  # Step 3: Warm up on Best Buy homepage (establish cookies)
+  # Optimization: removed homepage scroll and switched to load wait (not networkidle)
+  timing "warmup_start"
+  jitter 500 1000
   ab open "https://www.bestbuy.com" || { log "Warm-up failed (attempt $attempt)"; continue; }
-  ab wait --load networkidle 2>/dev/null || true
-  jitter 1500 3000
-  ab scroll down $((150 + RANDOM % 250)) 2>/dev/null || true
+  ab wait --load load 2>/dev/null || true
+  jitter 1000 2000
+  timing "warmup_done"
 
   # Step 4: Navigate to search page
+  timing "navigate_start"
   ab open "$SEARCH_URL" || { log "Navigation failed (attempt $attempt)"; continue; }
-  ab wait --load networkidle 2>/dev/null || true
-  jitter 1500 2500
+  ab wait --load load 2>/dev/null || true
+  jitter 1000 2000
+  timing "navigate_done"
 
   # Step 5: Bot detection check
   PAGE_TITLE=$(ab get title 2>/dev/null || echo "")
@@ -84,18 +97,23 @@ while [ $attempt -lt $RETRY_MAX ]; do
     log "Bot detection triggered (attempt $attempt): $PAGE_TITLE"
     continue
   fi
+  timing "bot_check_passed"
 
   # Step 6: Handle overlays/modals (Best Buy: location/cookie prompts)
   ab eval 'document.querySelector(".c-close-icon")?.click()' 2>/dev/null || true
-  jitter 500 1000
+  jitter 300 600
 
-  # Step 7: Scroll to load lazy content
-  for i in 1 2 3 4 5; do
+  # Step 7: Scroll to load lazy content (2 passes — first 12 results front-loaded)
+  # Optimization: reduced from 5 passes; extra passes only loaded lazy images
+  timing "scroll_start"
+  for i in 1 2; do
     ab scroll down $((250 + RANDOM % 400)) 2>/dev/null || true
-    jitter 600 1200
+    jitter 500 1000
   done
+  timing "scroll_done"
 
   # Step 8: Extract via DOM eval
+  timing "extract_start"
   cp /app/extract.js "$JS_FILE"
   sed -i "s/__MAX_LISTINGS__/$MAX_LISTINGS/g" "$JS_FILE"
 
@@ -108,6 +126,7 @@ while [ $attempt -lt $RETRY_MAX ]; do
   fi
 
   # Step 9: Unwrap agent-browser JSON string quoting and emit the JSON on fd 3 (real stdout).
+  timing "extract_done"
   python3 -c "
 import json, sys
 raw = sys.stdin.read().strip()
@@ -117,6 +136,7 @@ data = json.loads(raw)
 json.dump(data, sys.stdout, indent=2, ensure_ascii=False)
 " <<< "$RAW_OUTPUT" >&3
 
+  timing "complete"
   exit 0
 done
 

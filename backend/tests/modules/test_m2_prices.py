@@ -487,3 +487,110 @@ async def test_empty_results_get_shorter_redis_ttl(db_session, fake_redis):
     ttl = await fake_redis.ttl(key)
     assert ttl <= REDIS_CACHE_TTL_EMPTY
     assert ttl > 0
+
+
+# MARK: - Relevance Scoring (Step 2b)
+
+
+def test_relevance_model_number_match():
+    """Listing with matching model number gets score > 0.4."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(name="Sony WH-1000XM5 Wireless Headphones", brand="Sony", source="test")
+    score = _score_listing_relevance("Sony WH-1000XM5 Wireless Noise Canceling Headphones", product)
+    assert score >= 0.4
+
+
+def test_relevance_model_number_mismatch():
+    """Listing with different model number gets score = 0.0."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(name="Apple Mac mini M4", brand="Apple", source="test")
+    score = _score_listing_relevance("Apple Mac mini M2 Desktop Computer", product)
+    assert score == 0.0
+
+
+def test_relevance_brand_mismatch():
+    """Listing from wrong brand gets score = 0.0."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(name="Sony WH-1000XM5", brand="Sony", source="test")
+    score = _score_listing_relevance("Bose QuietComfort 45 Headphones", product)
+    assert score == 0.0
+
+
+def test_relevance_no_model_number_token_overlap():
+    """Product without model numbers falls through to token overlap."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(name="Wireless Headphones Premium Audio", brand=None, source="test")
+    score = _score_listing_relevance("Wireless Headphones Premium Audio Black Edition", product)
+    assert score >= 0.4
+
+
+def test_relevance_low_token_overlap():
+    """Low token overlap gets filtered out."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(name="Sony WH-1000XM5 Wireless Headphones", brand="Sony", source="test")
+    score = _score_listing_relevance("Sony Phone Case Black Protective Cover", product)
+    assert score == 0.0
+
+
+async def test_relevance_all_filtered_returns_none(db_session):
+    """When all listings fail relevance, _pick_best_listing returns None."""
+    from modules.m2_prices.service import PriceAggregationService
+
+    product = Product(name="Apple Mac mini M4 Desktop", brand="Apple", source="test")
+    response = ContainerResponse(
+        retailer_id="amazon",
+        query="Apple Mac mini M4",
+        listings=[
+            ContainerListing(title="Apple Mac mini M2 Desktop Computer", price=499.00),
+            ContainerListing(title="Dell Inspiron Desktop Tower", price=399.00),
+        ],
+    )
+
+    service = PriceAggregationService.__new__(PriceAggregationService)
+    result, score = service._pick_best_listing(response, product)
+    assert result is None
+
+
+async def test_relevance_zero_price_still_filtered(db_session):
+    """Zero-price listings are excluded even with good title match."""
+    from modules.m2_prices.service import PriceAggregationService
+
+    product = Product(name="Sony WH-1000XM5 Wireless Headphones", brand="Sony", source="test")
+    response = ContainerResponse(
+        retailer_id="amazon",
+        query="Sony WH-1000XM5",
+        listings=[
+            ContainerListing(title="Sony WH-1000XM5 Wireless Headphones", price=0.0),
+        ],
+    )
+
+    service = PriceAggregationService.__new__(PriceAggregationService)
+    result, score = service._pick_best_listing(response, product)
+    assert result is None
+
+
+async def test_relevance_cheapest_after_filter(db_session):
+    """After relevance filter, cheapest of the survivors is picked."""
+    from modules.m2_prices.service import PriceAggregationService
+
+    product = Product(name="Sony WH-1000XM5 Wireless Headphones", brand="Sony", source="test")
+    response = ContainerResponse(
+        retailer_id="amazon",
+        query="Sony WH-1000XM5",
+        listings=[
+            ContainerListing(title="Sony WH-1000XM5 Wireless Headphones Black", price=348.00),
+            ContainerListing(title="Sony WH-1000XM5 Wireless Headphones Silver", price=278.00),
+            ContainerListing(title="Sony WH-1000XM5 Wireless Noise Canceling", price=299.99),
+        ],
+    )
+
+    service = PriceAggregationService.__new__(PriceAggregationService)
+    result, score = service._pick_best_listing(response, product)
+    assert result is not None
+    assert result.price == 278.00
+    assert score >= 0.4

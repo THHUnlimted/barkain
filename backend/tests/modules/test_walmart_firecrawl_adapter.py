@@ -145,3 +145,78 @@ async def test_firecrawl_empty_body_is_reported():
 
     assert result.error is not None
     assert result.error.code == "FIRECRAWL_EMPTY_BODY"
+
+
+# MARK: - First-Party Filter (Step 2b — SP-L5)
+
+
+def test_walmart_first_party_seller_kept():
+    """Walmart.com seller is NOT marked as third-party."""
+    from modules.m2_prices.adapters._walmart_parser import _map_item_to_listing
+
+    item = {
+        "name": "Sony WH-1000XM5 Headphones",
+        "price": 278.00,
+        "sellerName": "Walmart.com",
+        "canonicalUrl": "/ip/12345",
+    }
+    listing = _map_item_to_listing(item)
+    assert listing is not None
+    assert listing.is_third_party is False
+    assert listing.seller == "Walmart.com"
+
+
+def test_walmart_third_party_seller_filtered():
+    """Third-party seller listings are filtered by extract_listings when first_party_only=True."""
+    from modules.m2_prices.adapters._walmart_parser import extract_listings
+
+    # Build minimal HTML with __NEXT_DATA__ containing one Walmart and one third-party item
+    items_json = [
+        {"name": "Sony WH-1000XM5", "price": 278.00, "sellerName": "Walmart.com", "canonicalUrl": "/ip/1"},
+        {"name": "Sony WH-1000XM5", "price": 250.00, "sellerName": "RHEA Store", "canonicalUrl": "/ip/2"},
+    ]
+    import json as _json
+
+    next_data = {"props": {"pageProps": {"initialData": {"searchResult": {"itemStacks": [{"items": items_json}]}}}}}
+    html = f'<script id="__NEXT_DATA__" type="application/json">{_json.dumps(next_data)}</script>'
+
+    listings = extract_listings(html, first_party_only=True)
+    assert len(listings) == 1
+    assert listings[0].seller == "Walmart.com"
+    assert listings[0].is_third_party is False
+
+
+def test_walmart_all_third_party_returns_cheapest():
+    """When ALL listings are third-party, returns the cheapest one."""
+    from modules.m2_prices.adapters._walmart_parser import extract_listings
+
+    items_json = [
+        {"name": "Sony WH-1000XM5", "price": 300.00, "sellerName": "SellerA", "canonicalUrl": "/ip/1"},
+        {"name": "Sony WH-1000XM5", "price": 250.00, "sellerName": "SellerB", "canonicalUrl": "/ip/2"},
+    ]
+    import json as _json
+
+    next_data = {"props": {"pageProps": {"initialData": {"searchResult": {"itemStacks": [{"items": items_json}]}}}}}
+    html = f'<script id="__NEXT_DATA__" type="application/json">{_json.dumps(next_data)}</script>'
+
+    listings = extract_listings(html, first_party_only=True)
+    assert len(listings) == 1
+    assert listings[0].price == 250.00
+    assert listings[0].is_third_party is True
+
+
+def test_walmart_first_party_filter_disabled():
+    """With first_party_only=False, all listings are returned."""
+    from modules.m2_prices.adapters._walmart_parser import extract_listings
+
+    items_json = [
+        {"name": "Sony WH-1000XM5", "price": 278.00, "sellerName": "Walmart.com", "canonicalUrl": "/ip/1"},
+        {"name": "Sony WH-1000XM5", "price": 250.00, "sellerName": "RHEA Store", "canonicalUrl": "/ip/2"},
+    ]
+    import json as _json
+
+    next_data = {"props": {"pageProps": {"initialData": {"searchResult": {"itemStacks": [{"items": items_json}]}}}}}
+    html = f'<script id="__NEXT_DATA__" type="application/json">{_json.dumps(next_data)}</script>'
+
+    listings = extract_listings(html, first_party_only=False)
+    assert len(listings) == 2

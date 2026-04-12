@@ -1,5 +1,8 @@
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "integration: tests that hit live APIs (run with pytest -m integration)",
+]
 filterwarnings = [
     "ignore::pytest.PytestUnraisableExceptionWarning",
     "ignore::DeprecationWarning:pytest_asyncio",

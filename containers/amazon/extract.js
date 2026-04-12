@@ -2,6 +2,15 @@
 // Anchor: [data-component-type="s-search-result"] with data-asin attribute.
 // Run via: agent-browser --cdp 9222 eval --stdin < extract.js
 //
+// Title fallback chain (Step 2b — SP-9 fix):
+//   1. [data-cy="title-recipe"] span — most reliable when present
+//   2. h2 a .a-text-normal — standard layout
+//   3. h2 a span — older layout
+//   4. img[data-image-latency="s-product-image"] alt — image alt
+//   5. img.s-image alt — generic product image
+//   Brand-name validation: if title is too short (single word / <20 chars),
+//   keep trying — it's likely just the brand label, not the full product name.
+//
 // Placeholder replaced by extract.sh before execution:
 //   __MAX_LISTINGS__ — maximum listings to extract
 
@@ -36,23 +45,35 @@
     return cleaned.trim();
   }
 
+  // Title selector chain — try each in order, prefer substantive titles
+  const TITLE_SELECTORS = [
+    el => el.querySelector('[data-cy="title-recipe"] span')?.innerText?.trim(),
+    el => el.querySelector('h2 a .a-text-normal')?.innerText?.trim(),
+    el => el.querySelector('h2 a span')?.innerText?.trim(),
+    el => el.querySelector('img[data-image-latency="s-product-image"]')?.alt?.trim(),
+    el => el.querySelector('img.s-image')?.alt?.trim(),
+  ];
+
+  function extractTitle(el) {
+    let fallback = '';
+    for (const selector of TITLE_SELECTORS) {
+      const candidate = selector(el);
+      if (!candidate || candidate.length < 3) continue;
+
+      // Accept immediately if it looks like a full product name
+      const wordCount = candidate.split(/\s+/).length;
+      if (wordCount >= 3 || candidate.length > 20) {
+        return cleanTitle(candidate);
+      }
+      // Keep as fallback (likely just a brand name)
+      if (!fallback) fallback = candidate;
+    }
+    return cleanTitle(fallback);
+  }
+
   // 3. Extract fields from each card
   const listings = unique.slice(0, MAX).map((el, i) => {
-    // Title — fallback chain: [data-cy="title-recipe"] span → h2 a span → img alt
-    let title = '';
-    const titleRecipe = el.querySelector('[data-cy="title-recipe"] span');
-    if (titleRecipe) {
-      title = titleRecipe.innerText.trim();
-    }
-    if (!title) {
-      const h2Span = el.querySelector('h2 a span');
-      if (h2Span) title = h2Span.innerText.trim();
-    }
-    if (!title) {
-      const imgAlt = el.querySelector('img[alt]');
-      if (imgAlt) title = imgAlt.alt.trim();
-    }
-    title = cleanTitle(title);
+    const title = extractTitle(el);
 
     // Price — use innerText and regex (handles .a-price-whole + .a-price-fraction)
     const priceContainer = el.querySelector('.a-price:not([data-a-strike]) .a-offscreen')

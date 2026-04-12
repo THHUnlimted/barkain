@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** April 2026 (v3.7 — first live 3-retailer scan-to-prices demo on physical iPhone; 7 live-run bug fixes landed on `phase-2/scan-to-prices-deploy`)
+> **Last updated:** April 2026 (v3.8 — Step 2b demo container reliability: cross-validation, relevance scoring, first-party filter, title fallback)
 
 ---
 
@@ -277,6 +277,7 @@ This project uses a **two-tier AI workflow:**
 **Phase 1 — Foundation: COMPLETE (tagged v0.1.0)**
 **Step 2a — Watchdog Supervisor + Health Monitoring + Pre-Fixes: COMPLETE** ✅ (2026-04-10)
 **Scan-to-Prices Live Demo (3 retailers): COMPLETE** ✅ (2026-04-10, branch `phase-2/scan-to-prices-deploy`)
+**Step 2b — Demo Container Reliability: COMPLETE** ✅ (2026-04-11)
 
 - AI abstraction: ✅ (Anthropic/Claude Opus added alongside Gemini — claude_generate, claude_generate_json, claude_generate_json_with_usage)
 - Watchdog supervisor: ✅ (nightly health checks, failure classification, self-healing via Opus, escalation)
@@ -297,7 +298,7 @@ This project uses a **two-tier AI workflow:**
 - Clerk project: ✅ (keys in .env)
 - Gemini API: ✅ (key in .env — primary UPC resolution)
 - Anthropic API: ✅ (ANTHROPIC_API_KEY in .env — Watchdog self-healing via Claude Opus)
-- UPCitemdb API: NOT STARTED (fallback — nice-to-have, free tier 100/day)
+- UPCitemdb API: ✅ (cross-validation second opinion after Gemini — brand agreement check catches mismatches, free tier 100/day)
 - API sign-ups (Best Buy, eBay, Keepa): NOT STARTED (production optimization — not required for demo)
 - Docker local dev environment: ✅ (3 containers: barkain-db, barkain-db-test, barkain-redis)
 - TimescaleDB extension: ✅ (v2.26.1 on both PostgreSQL instances)
@@ -357,7 +358,7 @@ This project uses a **two-tier AI workflow:**
 - iOS scan→compare flow: ✅ (full demo loop: scan barcode → resolve product → fetch 11 retailer prices → display comparison)
 - iOS tests: ✅ (21 passing — ScannerViewModel×14, APIClient×3, others)
 
-**Test counts:** 128 backend, 21 iOS unit, 0 UI, 0 snapshot (unchanged from Step 2a — scan-to-prices was a live validation, not a code-gen step)
+**Test counts:** 146 backend, 21 iOS unit, 0 UI, 0 snapshot (Step 2b additions: +6 cross-validation, +8 relevance scoring, +4 walmart first-party, +6 integration (skipped without env var))
 **Build status:** Backend compiles and serves health + product resolve + price comparison + retailer health endpoints; Amazon + Best Buy containers build and return real listings end-to-end against live sites on EC2 `t3.xlarge`; Walmart path returns real listings via Firecrawl v2 adapter; iOS app scans barcode → resolves via Gemini → fetches 3 retailers → displays comparison on a physical iPhone in ~90–120 s; `ruff check` clean
 
 **Live demo runtime profile (2026-04-10, physical iPhone):**
@@ -368,9 +369,6 @@ This project uses a **two-tier AI workflow:**
 - iOS total: ~90–120 s, dominated by Best Buy
 
 **Known demo caveats (see `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md`):**
-- **Product-match relevance (SP-10, HIGH):** each retailer's on-site search returns similar-but-not-identical products, and `_pick_best_listing` picks the cheapest regardless. Example: scanning an M4 Mac mini returned the correct SKU on Best Buy but a cheaper wrong-spec Mac mini on Amazon. Relevance guardrail is a hard prerequisite for any external demo — belongs in Step 2b design.
-- **Gemini UPC resolution accuracy (SP-L4, HIGH):** 3/3 tested UPCs (`0027242927568`, `0027242922914`, `194253397953`) resolved to unrelated products (camera battery, lens hood, dining room set). Needs UPCitemdb second-opinion fallback when Gemini's output doesn't match the scanned category, or a confidence score, or a broader prompt.
-- **Amazon extract.js title selector (SP-9, MEDIUM):** only captures brand (e.g. `"Sony"`) instead of full product title. Price, URL, image correct. Selector refactor or Watchdog heal pass needed.
 - **fd-3 stdout pattern latent on 8 retailers (SP-L2, MEDIUM):** only `containers/amazon/extract.sh` and `containers/best_buy/extract.sh` were fixed this session. The other 8 retailer extract.sh files (target, home_depot, lowes, ebay_new, ebay_used, sams_club, backmarket, fb_marketplace, walmart_container) still have the same latent bug and must be backfilled before those retailers go live.
 - **GitHub PAT leaked in EC2 git config (SP-L1, HIGH):** `gho_UUsp9ML…` is embedded in `~/barkain/.git/config` on stopped EC2 instance `i-09ce25ed6df7a09b2`. Must be rotated.
 
@@ -602,6 +600,25 @@ backend/tests/modules/test_container_client.py         # Updated — `_setup_cli
 backend/tests/modules/test_container_retailers.py      # Updated — same fixture update (walmart in ports dict triggers router)
 ```
 
+### Key Files Created/Modified (Step 2b)
+```
+backend/modules/m1_product/service.py                  # Refactored — cross-validation with Gemini + UPCitemdb
+backend/modules/m1_product/models.py                    # Added confidence @property
+backend/modules/m1_product/schemas.py                   # Added confidence field to ProductResponse
+backend/modules/m2_prices/service.py                    # Added relevance scoring + _pick_best_listing filter
+backend/modules/m2_prices/schemas.py                    # Added is_third_party to ContainerListing
+backend/modules/m2_prices/adapters/_walmart_parser.py   # First-party seller filter
+backend/modules/m2_prices/container_client.py           # Connection-refused log level downgrade
+containers/amazon/extract.js                            # 5-level title selector fallback chain
+containers/best_buy/extract.sh                          # Timing optimization (2 scrolls, load wait, profiling)
+.env.example                                            # Audited — removed duplicates, fixed CONTAINER_URL_PATTERN
+backend/pyproject.toml                                  # Registered integration marker
+backend/tests/integration/test_real_api_contracts.py    # NEW — 6 real-API contract tests
+backend/tests/modules/test_m1_product.py                # +6 cross-validation tests
+backend/tests/modules/test_m2_prices.py                 # +8 relevance scoring tests
+backend/tests/modules/test_walmart_firecrawl_adapter.py # +4 first-party filter tests
+```
+
 ---
 
 ## What's Next
@@ -609,12 +626,12 @@ backend/tests/modules/test_container_retailers.py      # Updated — same fixtur
 1. **Phase 1 COMPLETE** — tagged v0.1.0. Full barcode scan → 11-retailer price comparison demo operational.
 2. **Step 2a COMPLETE.** Walmart adapter routing (walmart_http + walmart_firecrawl) landed dormant with `WALMART_ADAPTER=container` default — flip to `firecrawl` for demo, `decodo_http` for production.
 3. **Scan-to-Prices Live Demo COMPLETE** (2026-04-10) — 3-retailer end-to-end validated on physical iPhone. 7 live-run bugs fixed on `phase-2/scan-to-prices-deploy`. EC2 instance `i-09ce25ed6df7a09b2` stopped, ready to start again with `aws ec2 start-instances`.
-4. **Blockers before Step 2b can start (HIGH priority):**
-   - **Product-match relevance scoring (SP-10):** design session needed. Retailer on-site search returns similar-but-not-identical products; `_pick_best_listing` needs a relevance guardrail before any user-facing demo. See `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md` SP-10 for approach options.
-   - **Gemini UPC accuracy (SP-L4):** 3/3 test UPCs resolved wrong. Needs UPCitemdb second-opinion fallback or confidence scoring.
+4. **Step 2b COMPLETE** (2026-04-11) — Demo container reliability: UPCitemdb cross-validation (SP-L4), relevance scoring (SP-10), Amazon title fallback (SP-9), Walmart first-party filter (SP-L5). 146 backend tests passing.
+5. **Remaining pre-fixes (not blockers):**
+   - **Backfill fd-3 stdout pattern (SP-L2):** 8 retailer extract.sh files still have latent bug — must be fixed before those retailers go live.
    - **Rotate leaked GitHub PAT (SP-L1):** `gho_UUsp9ML…` in `~/barkain/.git/config` on EC2.
-5. **Lower-priority pre-fixes for Step 2b:** backfill fd-3 stdout pattern to the other 8 retailer extract.sh files (SP-L2), Amazon extract.js title selector regression (SP-9), Walmart first-party filter in `_walmart_parser.py` (SP-L5), streaming per-retailer results to iPhone instead of blocking (SP-L7), real-API contract tests for vendor adapters (SP-4 test gap).
-6. **Phase 2 continues:** Step 2b (M5 Identity Profile), after the above blockers are addressed.
+   - **Streaming per-retailer results (SP-L7):** iOS progressive loading is cosmetic — real streaming to iPhone instead of blocking needed for production UX.
+6. **Phase 2 continues:** Step 2c (M5 Identity Profile) or Step 2d (streaming per-retailer results to iPhone).
 
 ---
 
@@ -669,3 +686,6 @@ backend/tests/modules/test_container_retailers.py      # Updated — same fixtur
 | Zero-price listing guard | `_pick_best_listing` filters `price > 0` before `min()` | extract.js occasionally parses price as 0 when DOM node is missing/lazy (Amazon especially). `min(key=price)` then returns the zero-price listing as "cheapest". Defensive guard at service boundary; extract.js root-cause fix deferred. (SP-7) | Apr 2026 |
 | EC2 dev iteration pattern | Local Mac backend + SSH tunnel (8081–8091) → EC2 x86 container runtime | Local backend keeps hot reload / breakpoints / real env; containers run on EC2 for real x86 Chromium (ARM is non-viable per L13). `scripts/ec2_tunnel.sh` forwards ports, `CONTAINER_URL_PATTERN=http://localhost:{port}` unchanged. See `docs/DEPLOYMENT.md` § Live dev loop | Apr 2026 |
 | Product-match relevance scoring | Required before any user-facing demo | SP-10: each retailer's on-site search returns similar-but-not-identical products and `_pick_best_listing` picks cheapest regardless. Example: M4 Mac mini scan returned correct SKU on Best Buy but wrong-spec Mac mini on Amazon. Approach TBD (lexical / structural / embedding / retailer-weighted) — belongs in Step 2b design. | Apr 2026 |
+| UPCitemdb cross-validation | Always call UPCitemdb as second opinion after Gemini | Gemini resolved 3/3 test UPCs wrong; brand agreement check catches mismatches | Apr 2026 |
+| Relevance scoring | Model-number hard gate + brand match + token overlap (threshold 0.4) | _pick_best_listing returned wrong-spec products; gate catches M4 vs M2 Mac mini | Apr 2026 |
+| Walmart first-party filter | Filter third-party resellers via sellerName field; fall back to cheapest if all third-party | Demo returned RHEA-Sony reseller listing at $50.25 instead of Walmart's price | Apr 2026 |

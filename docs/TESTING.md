@@ -389,7 +389,48 @@ Update this table after every step:
 | Step 2a | 104 | 21 | 0 | 0 | 20 (ai_abstraction×4, health_monitor×5, watchdog×8, pre_fix_verifications×3) |
 | Walmart adapter routing (post-2a) | 128 | 21 | 0 | 0 | 24 (walmart_http×15: proxy URL builder×4, happy path×2, challenge retry×2, http/parse/timeout/missing-creds errors×4, parser edge cases×3 + walmart_firecrawl×9: happy path×1, request shape×1, 6 error surfaces, + 2 existing fixture updates) |
 | Scan-to-Prices Live Demo (2026-04-10) | 128 | 21 | 0 | 0 | **0 new** — live validation session, not a code-gen step. 7 live-run bugs fixed but no tests added; test gap documented below and deferred to Step 2b |
-| **Total** | **128** | **21** | **0** | **0** | |
+| Step 2b | 152 | 21 | 0 | 0 | 24 (cross_validation×6: gemini→upcitemdb second-opinion, confidence scoring, category mismatch detection, fallback trigger, cache invalidation on correction, wrong-product rejection + relevance_scoring×8: model_number_hard_gate×2, brand_match×2, token_overlap×2, threshold_filter×1, pick_best_with_scoring×1 + walmart_first_party×4: first_party_filter×2, sponsored_exclusion×1, seller_name_extraction×1) + 6 integration tests with skip guard |
+| **Total** | **152** | **21** | **0** | **0** | |
+
+---
+
+## Integration Tests (Step 2b+)
+
+### Pattern: `@pytest.mark.integration` with skip guard
+
+Integration tests live in `backend/tests/integration/test_real_api_contracts.py` and hit real external APIs (Firecrawl, Decodo, Gemini, UPCitemdb, retailer containers). They are **not** run on every push — they require explicit opt-in via environment variable:
+
+```bash
+# Run integration tests manually
+BARKAIN_RUN_INTEGRATION_TESTS=1 pytest -m integration --tb=short -q
+
+# Run only unit tests (default CI behavior)
+pytest --tb=short -q
+```
+
+Every integration test is decorated with:
+```python
+@pytest.mark.integration
+```
+
+The `conftest.py` at `backend/tests/integration/` registers the marker and auto-skips when `BARKAIN_RUN_INTEGRATION_TESTS` is not set to `1`:
+```python
+def pytest_collection_modifyitems(config, items):
+    if not os.environ.get("BARKAIN_RUN_INTEGRATION_TESTS") == "1":
+        skip = pytest.mark.skip(reason="Set BARKAIN_RUN_INTEGRATION_TESTS=1 to run")
+        for item in items:
+            if "integration" in item.keywords:
+                item.add_marker(skip)
+```
+
+### Why separate from unit tests
+
+- **Cost:** Each integration test makes real API calls (Firecrawl credits, proxy bandwidth, Gemini tokens).
+- **Rate limits:** Vendors throttle aggressive testing.
+- **Flakiness:** Real endpoints have transient failures that would break CI if run on every push.
+- **Speed:** Integration tests take 10-60s each vs <100ms for mocked unit tests.
+
+Integration tests complement the respx-mocked unit tests by catching the schema drift and environmental regressions that mocks cannot see (see "Real-API smoke tests" section below for the full rationale from the 2026-04-10 live run).
 
 ---
 
