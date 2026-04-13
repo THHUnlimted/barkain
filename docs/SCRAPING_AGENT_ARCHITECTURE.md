@@ -1834,44 +1834,407 @@ See `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md` § SP-4 for the 
 
 ---
 
-## Appendix E — Amazon Title Selector (SP-9 fix, Step 2b, 2026-04-11)
+## Appendix E — Amazon `extract.js` Conventions (SP-9 + post-2b-val, 2026-04-12)
 
-Amazon's `extract.js` had a single-selector title extraction that only captured the brand name (e.g. `"Sony"`) instead of the full product title. This was invisible in respx-mocked tests but broke relevance scoring on every live Amazon result.
+Amazon's `containers/amazon/extract.js` is the most battle-tested of the retailer extractors because Amazon's search page is the most adversarial (sponsored listings, installment pricing, refurb markings, split DOM). Every convention below was forced by a real bug caught on live runs.
 
-### 5-level title fallback chain
+### E.1 Title extraction — join all child spans, don't pick one
 
-The fix implements a cascading selector chain with brand-name validation:
+**Original bug (SP-9, Step 2b first fix).** Amazon's title chain used `[data-cy="title-recipe"] span` to grab the first span inside the title container. This worked against the Step 2b test fixtures, but against live Amazon in Step 2b-val the title came back as just `"Sony"` (the brand word). The reason: Amazon now splits brand and product into **sibling spans** inside the same `h2` / `[data-cy="title-recipe"]` container:
 
-1. `[data-cy="title-recipe"] span` — most reliable when present (Amazon's newer recipe-based layout)
-2. `h2 a .a-text-normal` — standard search results layout
-3. `h2 a span` — older/fallback layout
-4. `img[data-image-latency="s-product-image"]` alt — specific product image alt text
-5. `img.s-image` alt — generic product image alt text
+```html
+<h2>
+  <span>Sony</span>
+  <span>WH-1000XM5 Premium Noise Canceling Headphones…</span>
+</h2>
+```
 
-### Brand-name validation gate
+`querySelector('span')` returns the first span only.
 
-If a candidate title is too short (single word or fewer than 20 characters), it is likely just a brand label (e.g. `"Sony"`, `"Apple"`, `"Samsung"`). The loop skips that candidate and continues trying the remaining selectors until it finds a substantive title. This prevents `_score_listing_relevance` from receiving a brand-only string that would fail token overlap.
+**Fix (Step 2b-val).** The `extractTitle()` function now collects **all** span `innerText` values inside `[data-cy="title-recipe"]` and `h2`, deduplicates by exact text, and joins with spaces. The fallback ladder is:
+
+1. Join all spans inside `[data-cy="title-recipe"]` (most reliable when present)
+2. Full `[data-cy="title-recipe"]` `innerText` (handles the no-span layout)
+3. Join all spans inside `h2`
+4. Full `h2` `innerText`
+5. `h2 a` `innerText`
+6. `img.s-image` / `img[data-image-latency="s-product-image"]` `alt` text
+
+A candidate is accepted immediately if it is ≥3 words OR >20 chars (substantive title). Shorter candidates are held as fallback and only returned if nothing else fires. Short candidates like `"Sony"` (1 word / 4 chars) still survive as a last-resort fallback so we never return an empty title.
+
+### E.2 Sponsored-noise stripping — Unicode-aware apostrophe
+
+**Bug.** Amazon sponsored listings prepend the title with phrases like `You're seeing this ad based on the product's relevance to your search query.`. The Step 2b regex used ASCII `'`, but Amazon emits the curly apostrophe `'` (U+2019), so the regex never matched.
+
+**Fix.** Every apostrophe slot in the sponsored-noise patterns uses the character class `['\u2019]`:
+
+```js
+const SPONSORED_NOISE = [
+  /Sponsored\s*/gi,
+  /You['\u2019]re seeing this ad based on the product['\u2019]s relevance to your search query\.?\s*/gi,
+  /Leave ad feedback\s*/gi,
+  /You['\u2019]re seeing this ad\s*/gi,
+];
+```
+
+All sponsored-noise patterns run against every title candidate before substance-checking.
+
+### E.3 Condition detection — `detectCondition(title)`
+
+**Bug.** `condition` was hardcoded to `"new"` for every Amazon listing, even when the title clearly said `(Renewed)` or `(Refurbished)`.
+
+**Fix.** Title-regex-based classifier:
+
+```js
+function detectCondition(title) {
+  const lower = title.toLowerCase();
+  if (/\brenewed\b|\brefurbished\b|\brecertified\b|\bre-certified\b|\bcertified\s+pre-?owned\b|\bpre-?owned\b/.test(lower)) {
+    return 'refurbished';
+  }
+  if (/\bused\b|\bopen\s*box\b/.test(lower)) {
+    return 'used';
+  }
+  return 'new';
+}
+```
+
+Word-boundary anchors prevent `"newly released"` → `"new"` from matching `"renewed"`. Best Buy's `extract.js` uses the same helper and also accepts `"Geek Squad Certified"` as refurbished.
+
+### E.4 Installment price rejection — `extractPrice(el)`
+
+**Bug.** Amazon shows `"$45/mo"` as a prominent non-strikethrough price on carrier-locked phones and Mint Mobile sponsored cards. The Step 2b selector `.a-price:not([data-a-strike]) .a-offscreen` picked up the monthly as the price, so an iPhone 16 came out as `$45`.
+
+**Fix.** `extractPrice()` scans all `.a-price:not([data-a-strike])` elements on the card. For each, it walks up to `.a-row` / `.a-section` and checks the container's innerText against an installment regex:
+
+```js
+const INSTALLMENT_RE = /\$[\d,]+(?:\.\d{1,2})?\s*\/\s*mo\b|\/\s*month\b|\bper\s*month\b|\bmonthly\s+payment\b|\bfrom\s*\$[\d,]+\s*\/\s*mo\b/i;
+```
+
+Candidates whose surrounding row matches are dropped entirely. Surviving candidates are parsed to floats and the `max()` is returned (installment amounts are almost always smaller than outright prices, but `max` is a belt-and-suspenders safeguard). If **all** `.a-price` elements match the installment regex, the function falls through to a raw card-text scan with the installment fragment stripped first.
+
+### E.5 Reference commits + currently-applied retailers
+
+- Amazon `extract.js` has all of E.1–E.4 applied (hot-patched to the EC2 amazon container via `docker cp`; see 2b-val-L1 in CLAUDE.md known caveats for redeploy notes)
+- Best Buy `extract.js` has E.3 (`detectCondition` incl. Geek Squad) and a carrier/installment filter documented in Appendix H
+- Walmart `_walmart_parser.py` has the Python equivalents of E.3 + E.4 (Appendix H)
+- All other retailers: E.1–E.4 are latent and need to be ported when those containers go live
 
 ---
 
-## Appendix F — Relevance Scoring (SP-10 fix, Step 2b, 2026-04-11)
+## Appendix F — Relevance Scoring (`_score_listing_relevance`, post-2b-val state, 2026-04-12)
 
-The first live demo (2026-04-10) revealed that each retailer's on-site search returns similar-but-not-identical products, and `_pick_best_listing` selected the cheapest listing regardless of relevance. Example: scanning an M4 Mac mini returned the correct SKU on Best Buy but a cheaper wrong-spec Mac mini on Amazon.
+The first live demo (2026-04-10) revealed that each retailer's on-site search returns similar-but-not-identical products, and `_pick_best_listing` selected the cheapest listing regardless of relevance. Since then the scorer has gone through four rounds of hardening — each one forced by a real wrong match observed in a live run. This appendix describes the **current state** (not the history; see CLAUDE.md decisions log for the progression).
 
-### `_score_listing_relevance()` in `m2_prices/service.py`
+### F.1 Product-name cleanup (`_clean_product_name`)
 
-Scores each listing 0.0 to 1.0 against the canonical product from M1:
+Gemini and UPCitemdb occasionally bake supplier catalog codes into the resolved product name:
 
-1. **Model number hard gate.** Extracts structured identifiers from `product.name` using regex patterns for model numbers (WH-1000XM5), chip generations (M4, A17), storage sizes (256GB, 1TB), screen sizes (65", 27-inch), and similar. If any identifiers are found in the product name, at least one must appear in the listing title. If none match, the listing scores 0.0 immediately.
+```
+Apple iPhone 16 256GB Black (CBC998000002407)
+Apple AirPods Pro with Wireless Charging Case (MWP22A...)
+Logitech MX Master Wireless Mouse (910-005527)
+JBL Flip 6 Portable Waterproof Bluetooth Speaker (Teal) (JBLFLIP6TEALAM)
+```
 
-2. **Brand match.** If `product.brand` is known and non-empty, it must appear (case-insensitive) in the listing title. Skipped if brand is unknown (Gemini-only resolution does not always populate brand).
+These codes are **supplier-specific** — no retailer listing title contains them — so they poison both the search query (Amazon fuzz-matched `iPhone 16 … (CBC…)` to iPhone SE) and the relevance hard gate (the cleaned product otherwise had one strong identifier, which the `any()` rule could satisfy, but the CBC token alone could never match and under `all()` semantics would reject every listing).
 
-3. **Token overlap.** Tokenizes both `product.name` and the listing title into lowercase alphanumeric tokens. Computes `len(intersection) / len(product_tokens)`. This catches partial matches and word-order differences across retailers.
+The cleanup regex strips parentheticals whose content is all-uppercase-and-digits with at least 5 characters and no internal spaces:
 
-### Threshold
+```python
+_PRODUCT_CODE_IN_PAREN = re.compile(r"\s*\(\s*[A-Z0-9][A-Z0-9.\-/]{4,}\s*\)")
+```
 
-Listings scoring below **0.4** are excluded from `_pick_best_listing`. This threshold filters out clearly wrong products (different model, different spec) while allowing minor title variations across retailers (e.g. "Sony WH-1000XM5 Wireless Headphones" vs "Sony WH1000XM5 Noise Cancelling Headphone").
+Descriptive parentheticals like `(Teal)`, `(Black)`, `(1st gen)`, `(256 GB)` are kept because their content has a lowercase letter or an internal space. `_clean_product_name` is called at two sites:
 
-### Integration with `_pick_best_listing`
+- `_build_query(product)` — the search string sent to every retailer
+- `_score_listing_relevance(title, product)` — the basis for identifier extraction and token overlap
 
-The flow is: score all listings -> filter below 0.4 -> pick cheapest among remaining. If all listings for a retailer are below threshold, that retailer returns no result for the product (rather than a misleadingly cheap wrong product).
+The raw `product.name` is still what the DB stores and what the iOS app displays, so the visible product card is unaffected.
+
+### F.2 Rules, in order
+
+`_score_listing_relevance(listing_title, product)` returns 0.0 or a float in `[0.4, 1.0]`. Each rule is a hard gate — any failure returns 0.0.
+
+**Rule 0 — Accessory filter.** Reject listings whose title contains accessory keywords, unless the resolved product itself is an accessory:
+
+```python
+_ACCESSORY_KEYWORDS = frozenset({
+    "case", "cases", "cover", "covers", "protector", "protectors", "skin", "skins",
+    "charger", "chargers", "cable", "cables", "adapter", "adapters", "dock", "docks",
+    "stand", "stands", "mount", "mounts", "holder", "holders", "strap", "straps",
+    "pouch", "bag", "sleeve", "sleeves",
+    "compatible", "replacement", "accessory", "accessories",
+})
+_ACCESSORY_PHRASE_RE = re.compile(
+    r"\b(?:for|fits|designed\s+for|compatible\s+with)\s+(?:apple|sony|samsung|jbl|bose|google|microsoft|the|your|new)?\s*(?:i?Phone|i?Pad|i?Mac|AirPods|Galaxy|Pixel|Surface|MacBook|Watch)\b",
+    re.IGNORECASE,
+)
+```
+
+Killed the `SUPFINE Compatible Protection Translucent Anti-Fingerprint` screen-protector that was slipping through at 2/5 = 0.4 token overlap for an iPhone 16 query.
+
+**Rule 1 — Model-number hard gate.** Extract strong identifiers from the cleaned product name using the `_MODEL_PATTERNS` list. If any identifiers are extracted, **at least one** must appear in the listing title, matched with a word-boundary regex (not `in` substring) so `iPhone 16` does not match `iPhone 16e`:
+
+```python
+def _ident_to_regex(ident: str) -> re.Pattern:
+    parts = [re.escape(p) for p in re.split(r'\s+', ident.strip()) if p]
+    body = r'\s+'.join(parts)
+    return re.compile(r'(?<!\w)' + body + r'(?!\w)', re.IGNORECASE)
+```
+
+The `(?<!\w)` and `(?!\w)` lookarounds are stricter than `\b` for the hyphenated model numbers — `\bWH-1000XM5\b` matches at positions where `\b` straddles a hyphen, but `(?<!\w)WH-1000XM5(?!\w)` only fires when the model is flanked by non-word characters on both sides.
+
+**Rule 2 — Variant token equality.** Product and listing must contain **exactly** the same subset of known variant discriminator words:
+
+```python
+_VARIANT_TOKENS = frozenset({
+    "pro", "plus", "max", "mini", "ultra", "lite", "slim", "air",
+    "digital", "disc",
+    "se", "xl",
+    "cellular", "wifi", "gps",
+    "oled",
+})
+
+product_variants = product_tokens & _VARIANT_TOKENS
+listing_variants = listing_tokens & _VARIANT_TOKENS
+if product_variants != listing_variants:
+    return 0.0
+```
+
+Rejects iPhone 16 → iPhone 16 Pro/Plus/Pro Max, iPad Pro → iPad Air, PS5 Slim Disc → PS5 Slim Digital Edition, Nintendo Switch → Switch OLED → Switch Lite.
+
+**Rule 3 — Brand match.** If `product.brand` is known and non-empty, the cleaned brand (trailing `Inc/Corp/LLC/Ltd/Co` stripped) must appear (lowercase substring) in the listing title. Skipped if brand is unknown — Gemini-only resolution does not always populate brand.
+
+**Rule 4 — Token overlap tiebreaker.** Tokenize both cleaned product name and listing title into lowercase alphanumeric tokens with `_STOPWORDS` removed and `len > 1`. Score is `|intersection| / |product_tokens|`. Below **0.4** returns 0.0; otherwise return the raw score.
+
+### F.3 Regex pattern set (`_MODEL_PATTERNS`)
+
+| # | Pattern | Matches | Notes |
+|---|---|---|---|
+| 1 | `[A-Z]{1,3}-?\d{1,2}-?\d{3,5}[A-Z]*\d*(?:/[A-Z0-9]+)?` | `WH-1000XM5`, `WH1000XM5/B`, `SM-G998`, `MDR-1A` | IGNORECASE; optional hyphen between letters and digits + trailing alpha/digit for XM5 |
+| 2 | `\b(?:M[1-9]\d?\|Gen\s*\d+\|Series\s*[A-Z0-9]+\|v\d+)\b` | `M4`, `Gen 3`, `Series X`, `v2` | IGNORECASE; Apple Silicon + generation + version markers |
+| 3 | `\b[A-Z][a-z]{2,8}\s+\d+[A-Z]?\b` | `Flip 6`, `Clip 5`, `Charge 4`, `Stick 4K`, `Dot 5` | **No IGNORECASE** — Title-case only, avoids matching prose like "with 2 microphones" |
+| 4 | `\b[a-z][A-Z][a-z]{2,8}\s+\d+[A-Z]?\b` | `iPhone 16`, `iPad 12`, `iMac 24`, `eReader 3` | **No IGNORECASE** — camelCase starting with a lowercase letter |
+| 5 | `\b[A-Z][a-z]+[A-Z][a-z]+\s+\d+[A-Z]?\b` | `AirPods 2`, `PlayStation 5`, `MacBook 14`, `PowerBeats 4` | **No IGNORECASE** — brand camelCase (two title-case segments joined, then digit) |
+
+**Dropped from the hard gate (now only contribute via token overlap):** `256GB`, `1TB`, `27"`, `65-inch`, `11-inch`. These spec patterns were allowing `256GB` alone to satisfy `any()` and cleared the gate for iPhone SE listings on an iPhone 16 query. Specs are too weak to act as a model discriminator.
+
+### F.4 `_pick_best_listing` flow
+
+1. Filter `price > 0` (parse-failure guard — SP-7)
+2. Score each listing via `_score_listing_relevance`
+3. Drop listings scoring below 0.4
+4. Prefer `is_available == True` over `is_available == False`
+5. Return the cheapest survivor (or `(None, 0.0)` if nothing survives)
+
+Retailers with zero survivors yield a `no_match` status (Appendix G) rather than a misleadingly cheap wrong product.
+
+### F.5 Known limitations (not yet addressed)
+
+- **Generation-without-digit.** "Samsung Galaxy Buds Pro" (1st gen) has no digit in its name and matches any later "Galaxy Buds N Pro" via token overlap. Requires Gemini to emit an explicit `(1st gen)` tag.
+- **GPU SKUs.** `RTX 4090` vs `RTX 4080` — no current pattern matches `\b[A-Z]{2,5}\s+\d{3,5}\b` (letter group + space + digit group). Add a pattern 6 if GPUs become a demo category.
+- **Pro vs Pro Max within the variant set.** Currently both are recognised as variants, and `{pro} != {pro, max}` does reject Pro Max for a Pro query — but only because both are in `_VARIANT_TOKENS`. If a new variant word isn't in the set, it won't participate in the equality check.
+
+---
+
+## Appendix G — Per-Retailer Status System (post-2b-val, 2026-04-12)
+
+Before this system, the `prices` list in `PriceComparisonResponse` was success-only: retailers that returned an error, returned no listings, or had all listings filtered by relevance were simply absent from the response. The iOS app showed only the retailers with prices, and the user had no way to know whether a missing retailer was offline, blocked, or genuinely carried nothing relevant.
+
+### G.1 `retailer_results` field
+
+`PriceComparisonResponse` gained a new field alongside `prices`:
+
+```python
+class RetailerStatus(str, Enum):
+    SUCCESS = "success"          # matched a listing with a price
+    NO_MATCH = "no_match"        # searched, no matching product
+    UNAVAILABLE = "unavailable"  # couldn't search or couldn't parse response
+
+class RetailerResult(BaseModel):
+    retailer_id: str
+    retailer_name: str
+    status: RetailerStatus
+
+class PriceComparisonResponse(BaseModel):
+    product_id: uuid.UUID
+    product_name: str
+    prices: list[PriceResponse]              # success-only, sorted by price
+    retailer_results: list[RetailerResult] = []   # all 11 retailers, with status
+    total_retailers: int
+    retailers_succeeded: int
+    retailers_failed: int
+    cached: bool
+    fetched_at: datetime
+```
+
+`retailer_results` is sorted with successes first (alpha by retailer name), then `no_match`, then `unavailable`. The iOS side uses it to render all 11 retailers in the comparison view; missing retailers that carry the product show as a grayed-out row labeled "Not found", while offline/blocked retailers show as a grayed-out row labeled "Unavailable".
+
+### G.2 Error-code to status classification
+
+The service converts container error codes to statuses via `_classify_error_status`:
+
+```python
+_UNAVAILABLE_ERROR_CODES = frozenset({
+    "CONNECTION_FAILED",  # container offline / network refused
+    "GATHER_ERROR",        # asyncio.gather raised
+    "HTTP_ERROR",          # 4xx/5xx from container
+    "CLIENT_ERROR",        # local adapter code raised
+    "CHALLENGE",           # PerimeterX / Cloudflare / anti-bot page detected
+    "PARSE_ERROR",         # response received but couldn't be parsed
+    "BOT_DETECTED",        # explicit bot flag from extract.js
+    "TIMEOUT",             # request timed out
+})
+
+def _classify_error_status(code: str) -> str:
+    return "unavailable" if code in _UNAVAILABLE_ERROR_CODES else "no_match"
+```
+
+**The critical design principle:** any error code that means "we never got usable search results" maps to `unavailable`, not `no_match`. A PerimeterX block is not the same as "Walmart doesn't carry this product" — Walmart never even searched for it. Lumping them would lie to the user. Only an empty-but-successful response (container returned listings but none cleared relevance, OR container returned an empty listings array) is `no_match`.
+
+### G.3 `get_prices` integration
+
+```python
+for retailer_id, response in responses.items():
+    retailer_name = all_retailer_names.get(retailer_id, retailer_id)
+
+    if response.error is not None:
+        status = _classify_error_status(response.error.code)
+        failed += 1
+        retailer_results.append({"retailer_id": retailer_id, "retailer_name": retailer_name, "status": status})
+        continue
+
+    if not response.listings:
+        failed += 1
+        retailer_results.append({"retailer_id": retailer_id, "retailer_name": retailer_name, "status": "no_match"})
+        continue
+
+    best_listing, relevance = self._pick_best_listing(response, product)
+    if best_listing is None:
+        failed += 1
+        retailer_results.append({"retailer_id": retailer_id, "retailer_name": retailer_name, "status": "no_match"})
+        continue
+
+    succeeded += 1
+    retailer_results.append({"retailer_id": retailer_id, "retailer_name": retailer_name, "status": "success"})
+    # ... upsert price, append history, add to prices_data ...
+```
+
+### G.4 DB cache path
+
+`_check_db_prices` only persists the success rows (the `prices` table has no concept of "failed attempt"), so when the DB cache path is taken, `retailer_results` is populated only with the known-good rows. The iOS side treats an absent entry as "not shown" and the result is the pre-G.1 behavior (only successful retailers visible). Redis caching preserves the full `retailer_results` list across hits.
+
+### G.5 iOS rendering
+
+`PriceComparisonView.retailerList` iterates over `comparison.retailerResults` and switches on the status:
+
+```swift
+switch row {
+case .success(let retailerPrice):
+    Button { openRetailerURL(retailerPrice.url) } label: {
+        PriceRow(retailerPrice: retailerPrice)
+    }
+case .noMatch(let result):
+    inactiveRow(name: result.retailerName, label: "Not found")
+case .unavailable(let result):
+    inactiveRow(name: result.retailerName, label: "Unavailable")
+}
+```
+
+`inactiveRow` is a 0.6-opacity gray row with the retailer name on the left and the status label on the right; it is not tappable. Success rows that are the first in the sorted list still get the BEST BARKAIN badge.
+
+Old cached responses that predate `retailer_results` decode gracefully via `decodeIfPresent ?? []` — when the list is empty, the view falls back to iterating only successful `viewModel.sortedPrices` (pre-G.1 behavior).
+
+---
+
+## Appendix H — Carrier / Installment Filter (post-2b-val, 2026-04-12)
+
+Walmart Wireless, Best Buy, and Amazon phone listings often show a monthly installment (e.g. `$45/mo`, `$20/mo with AT&T activation`) as the prominent price when the phone is carrier-locked. The listing title and URL identify the carrier. Rendering these as full-price comparisons is misleading — the user sees a $20 iPhone 16 and clicks through to find it's really $800+ over 36 months.
+
+### H.1 Shared taxonomy
+
+Carrier keywords (case-insensitive, match in title OR URL path):
+
+```
+AT&T, AT and T, Verizon, T-Mobile, Sprint, Cricket, Metro by, Boost Mobile,
+Straight Talk, Tracfone, Xfinity Mobile, Visible, US Cellular,
+Spectrum Mobile, Simple Mobile
+```
+
+Installment markers (match in listing title OR in the context text around a price):
+
+```
+$N/mo, $N / mo, /month, per month, monthly payment, monthly plan,
+monthly cost, from $N/mo
+```
+
+A listing is rejected if **any** of those patterns match.
+
+### H.2 Walmart — `_walmart_parser._is_carrier_listing`
+
+`_walmart_parser.py` defines three regexes:
+
+```python
+_CARRIER_TITLE_MARKERS = re.compile(
+    r"\b(?:AT\s*&\s*T|AT&T|Verizon|T-?Mobile|Sprint|Cricket|Metro\s*by|Boost\s*Mobile"
+    r"|Straight\s*Talk|Tracfone|Xfinity\s*Mobile|Visible|US\s*Cellular|Spectrum\s*Mobile"
+    r"|Simple\s*Mobile)\b",
+    re.IGNORECASE,
+)
+_CARRIER_URL_MARKERS = re.compile(
+    r"/(?:AT-?T|Verizon|T-?Mobile|Sprint|Cricket|Metro-?by|Boost-?Mobile|Straight-?Talk"
+    r"|Tracfone|Xfinity-?Mobile|Visible|US-?Cellular|Spectrum-?Mobile|Simple-?Mobile)-",
+    re.IGNORECASE,
+)
+_MONTHLY_PRICE_MARKERS = re.compile(
+    r"\$[\d.,]+\s*/\s*mo\b|/\s*month\b|\bper\s*month\b|\bmonthly\s*payment\b",
+    re.IGNORECASE,
+)
+
+def _is_carrier_listing(title: str, url: str) -> bool:
+    if title and (_CARRIER_TITLE_MARKERS.search(title) or _MONTHLY_PRICE_MARKERS.search(title)):
+        return True
+    if url and _CARRIER_URL_MARKERS.search(url):
+        return True
+    return False
+```
+
+`extract_listings` calls `_is_carrier_listing(listing.title, listing.url)` in its per-item loop and skips matched items before the first-party filter runs.
+
+### H.3 Best Buy — `extract.js` `isCarrierListing`
+
+`containers/best_buy/extract.js` mirrors the Walmart logic in JS. The difference is that Best Buy has access to the full card innerText at extraction time, so the installment check can look at the rendered card body, not just the title:
+
+```js
+const CARRIER_TITLE_RE = /\b(?:AT\s*&\s*T|AT&T|Verizon|T-?Mobile|Sprint|Cricket|Metro\s*by|Boost\s*Mobile|Straight\s*Talk|Tracfone|Xfinity\s*Mobile|Visible|US\s*Cellular|Spectrum\s*Mobile|Simple\s*Mobile)\b/i;
+const CARRIER_URL_RE = /\/(?:att|at-?t|verizon|t-?mobile|sprint|cricket|metro-?by|boost-?mobile|straight-?talk|tracfone|xfinity-?mobile|visible|us-?cellular|spectrum-?mobile|simple-?mobile)(?:-|\/)/i;
+const MONTHLY_RE = /\$[\d,.]+\s*\/\s*mo\b|\/\s*month\b|\bper\s*month\b|\bmonthly\s+(?:payment|plan|cost)\b/i;
+
+function isCarrierListing(title, url, cardText) {
+  if (title && CARRIER_TITLE_RE.test(title)) return true;
+  if (url && CARRIER_URL_RE.test(url)) return true;
+  if (cardText && MONTHLY_RE.test(cardText)) return true;
+  return false;
+}
+```
+
+Cards that pass the filter then go through price extraction, which **also** strips `$X/mo` fragments from the card text before looking for dollar amounts:
+
+```js
+const priceSearchText = cardText.replace(/\$[\d,.]+\s*\/\s*mo\b[^\n]*/gi, ' ');
+const priceMatch = priceSearchText.match(/\$[\d,]+\.\d{2}/);
+```
+
+This belt-and-suspenders approach handles the case where a non-carrier Best Buy listing happens to show a financing option as a secondary price.
+
+### H.4 Amazon — `extract.js` `extractPrice` (Appendix E.4)
+
+Amazon doesn't get a carrier-keyword filter because Amazon itself rarely brands carrier listings with AT&T / Verizon in the title — instead, they show the monthly as a prominent `.a-price` element with a `/mo` sibling in the same row. Appendix E.4's row-context installment check is sufficient.
+
+### H.5 Test coverage
+
+- `backend/tests/modules/test_walmart_firecrawl_adapter.py` — currently has fixtures for first-party vs third-party and challenge detection. **Does not yet have a carrier-filter fixture.** Add before the next major Walmart change.
+- Best Buy `extract.js` changes are not covered by unit tests (the Best Buy container tests use respx mocks that don't exercise the JS evaluation path).
+- Amazon `extract.js` installment handling is not covered by unit tests for the same reason.
+
+All three are **live-validated** on real searches during the 2026-04-12 sim testing of the iPhone 16 and PS5 UPCs. Per Appendix D.4, adding real-API smoke tests to CI is the right long-term fix.

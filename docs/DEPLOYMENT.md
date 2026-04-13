@@ -397,6 +397,20 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 # 4. Iterate on backend code as normal — uvicorn hot-reloads. Container images only
 #    need rebuilding when extract.sh / extract.js / server.py / entrypoint.sh changes.
+#
+#    For rapid iteration on a single extract.js/extract.sh (e.g. debugging a live
+#    DOM drift), you can hot-patch a running container via `docker cp` instead of
+#    a full rebuild:
+#
+#      scp -i ~/.ssh/barkain-scrapers.pem containers/amazon/extract.js ubuntu@$EC2_IP:/tmp/extract.js
+#      ssh -i ~/.ssh/barkain-scrapers.pem ubuntu@$EC2_IP \
+#        "docker cp /tmp/extract.js amazon:/app/extract.js"
+#
+#    WARNING: hot-patches only survive until the container is stopped. A
+#    `docker stop <retailer>` or `aws ec2 stop-instances` reverts to the image's
+#    original file. Before closing a session, run `scripts/ec2_deploy.sh` (or
+#    equivalent) so the image on disk matches the repo. Otherwise the next
+#    stop/start wipes the patch silently.
 
 # 5. When done for the day:
 kill $(pgrep -f "ssh.*$EC2_IP.*-N")                   # close tunnel

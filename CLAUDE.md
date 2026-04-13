@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** April 2026 (v3.8 — Step 2b demo container reliability: cross-validation, relevance scoring, first-party filter, title fallback)
+> **Last updated:** April 2026 (v4.0 — per-retailer status system, sub-variant hard gate, Amazon refurb + installment fixes, supplier-code cleanup, accessory filter, manual UPC entry in iOS scanner)
 
 ---
 
@@ -278,6 +278,8 @@ This project uses a **two-tier AI workflow:**
 **Step 2a — Watchdog Supervisor + Health Monitoring + Pre-Fixes: COMPLETE** ✅ (2026-04-10)
 **Scan-to-Prices Live Demo (3 retailers): COMPLETE** ✅ (2026-04-10, branch `phase-2/scan-to-prices-deploy`)
 **Step 2b — Demo Container Reliability: COMPLETE** ✅ (2026-04-11)
+**Step 2b-val — Live Validation Pass: COMPLETE** ✅ (2026-04-12, 3 additional fixes on branch `phase-2/step-2b`)
+**Post-2b-val — Simulator + Relevance + Retailer-Status Hardening: COMPLETE** ✅ (2026-04-12, additional fixes on branch `phase-2/step-2b`)
 
 - AI abstraction: ✅ (Anthropic/Claude Opus added alongside Gemini — claude_generate, claude_generate_json, claude_generate_json_with_usage)
 - Watchdog supervisor: ✅ (nightly health checks, failure classification, self-healing via Opus, escalation)
@@ -368,9 +370,15 @@ This project uses a **two-tier AI workflow:**
 - Walmart Firecrawl adapter: ~30 s
 - iOS total: ~90–120 s, dominated by Best Buy
 
-**Known demo caveats (see `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md`):**
-- **fd-3 stdout pattern latent on 8 retailers (SP-L2, MEDIUM):** only `containers/amazon/extract.sh` and `containers/best_buy/extract.sh` were fixed this session. The other 8 retailer extract.sh files (target, home_depot, lowes, ebay_new, ebay_used, sams_club, backmarket, fb_marketplace, walmart_container) still have the same latent bug and must be backfilled before those retailers go live.
+**Known demo caveats (see `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md` and `Barkain Prompts/Step_2b_val_Results.md`):**
+- **fd-3 stdout pattern latent on 8 retailers (SP-L2, MEDIUM):** only `containers/amazon/extract.sh` and `containers/best_buy/extract.sh` were fixed. The other 8 retailer extract.sh files (target, home_depot, lowes, ebay_new, ebay_used, sams_club, backmarket, fb_marketplace, walmart_container) still have the same latent bug and must be backfilled before those retailers go live.
 - **GitHub PAT leaked in EC2 git config (SP-L1, HIGH):** `gho_UUsp9ML…` is embedded in `~/barkain/.git/config` on stopped EC2 instance `i-09ce25ed6df7a09b2`. Must be rotated.
+- **EC2 containers run stale code (2b-val-L1, MEDIUM):** `amazon/extract.js`, `best_buy/extract.js`, and `best_buy/base-extract.sh` are hot-patched via `docker cp` on the running instance. The image on disk is stale; next stop+start without redeploy will revert. Run `scripts/ec2_deploy.sh` before the next session.
+- **Best Buy ~91s per request, 78s in page loads (2b-val-L2, HIGH for UX):** Step 2b's 5→2 scroll reduction landed correctly (scroll stage is 4s), but `ab wait --load load` against `bestbuy.com` homepage (40s) + `/site/searchpage.jsp` (38s) dominates the total. Real fix is streaming per-retailer results to iPhone (SP-L7) or a `domcontentloaded` wait strategy — deferred to Step 2c.
+- **Integration test env loading (2b-val-L4, LOW):** `backend/tests/integration/test_real_api_contracts.py` reads env vars at module load, so pytest needs `set -a && source ../.env && set +a` before `BARKAIN_RUN_INTEGRATION_TESTS=1 pytest -m integration`. Conftest.py auto-load would fix this — deferred.
+- **Supplier codes persist in DB (v4.0-L1, LOW):** `_clean_product_name` strips codes like `(CBC998000002407)` at query/scoring time but leaves the raw Gemini/UPCitemdb name in the DB. The iOS app displays the raw (uncleaned) name. If you want the display to also be clean, strip on insert in `m1_product/service.py` — one-line change.
+- **Sub-variants without digits (v4.0-L2, MEDIUM):** the variant-token check only fires on the known set `{pro, plus, max, mini, ultra, lite, slim, air, digital, disc, se, xl, cellular, wifi, gps, oled}`. Products like "Samsung Galaxy Buds Pro" (1st gen) vs "Galaxy Buds 2 Pro" still pass token overlap because neither "1st gen" nor a distinguishing digit is present in the 1st-gen product name. Requires richer Gemini output.
+- **GPU SKUs not distinguished (v4.0-L3, LOW):** RTX 4090 vs RTX 4080 — neither `pattern 5` (Title word + digit) nor `pattern 6` (camelCase + digit) nor `pattern 7` (brand camelCase + digit) matches `RTX 4090` (space-separated letter group + digit group). Token overlap alone may let the wrong GPU through. Fix: add a pattern like `\b[A-Z]{2,5}\s+\d{3,5}\b` if GPUs become a demo category.
 
 ### Key Files Created (Step 1a)
 ```
@@ -619,6 +627,45 @@ backend/tests/modules/test_m2_prices.py                 # +8 relevance scoring t
 backend/tests/modules/test_walmart_firecrawl_adapter.py # +4 first-party filter tests
 ```
 
+### Key Files Created/Modified (Post-2b-val Hardening, 2026-04-12)
+```
+# Backend — relevance scoring refactor
+backend/modules/m2_prices/service.py                    # _clean_product_name, _ident_to_regex, _is_accessory_listing,
+                                                        # _VARIANT_TOKENS equality check, _UNAVAILABLE_ERROR_CODES,
+                                                        # new regex patterns 6 (iPhone/iPad camelCase) + 7 (AirPods/
+                                                        # PlayStation/MacBook camelCase), spec patterns dropped from
+                                                        # hard gate, word-boundary identifier regex, retailer_results
+                                                        # tracking in get_prices + _check_db_prices
+backend/modules/m2_prices/schemas.py                    # RetailerStatus enum + RetailerResult model +
+                                                        # retailer_results list on PriceComparisonResponse
+backend/modules/m2_prices/adapters/_walmart_parser.py   # Carrier/installment marker regexes + _is_carrier_listing;
+                                                        # condition mapping extended (Restored → refurbished)
+
+# Containers — extract.js hardening
+containers/amazon/extract.js                            # detectCondition(), extractPrice() with installment
+                                                        # rejection, joinSpans() title extractor, curly-apostrophe
+                                                        # sponsored-noise regex
+containers/best_buy/extract.js                          # detectCondition(), isCarrierListing(), $X/mo stripping
+                                                        # before dollar-amount parsing
+
+# iOS — manual entry + per-retailer status UI
+Barkain/Features/Scanner/ScannerView.swift              # Toolbar ⌨️ button + manualEntrySheet with TextField +
+                                                        # preset rows; submitManual() + isValidUPC() helpers
+Barkain/Features/Shared/Models/PriceComparison.swift    # RetailerResult struct + retailerResults field with
+                                                        # graceful decodeIfPresent fallback
+Barkain/Features/Recommendation/PriceComparisonView.swift # RetailerListRow enum + retailerList view; successes
+                                                        # as tappable PriceRow, no_match/unavailable as inactiveRow
+                                                        # with label; removed red "N unavailable" status bar count
+Config/Debug.xcconfig                                   # API_BASE_URL → localhost:8000 (simulator); Mac LAN IP
+                                                        # switch-back comment kept
+
+# Tests
+backend/tests/modules/test_walmart_http_adapter.py      # Updated condition assertion: Restored → refurbished
+```
+
+**Test counts:** 146 backend (unchanged — existing tests updated in-place where semantics changed), 21 iOS unit.
+**Build status:** 146 passed / 6 skipped. iOS builds clean for simulator + device. Manual entry sheet functional.
+
 ---
 
 ## What's Next
@@ -627,11 +674,30 @@ backend/tests/modules/test_walmart_firecrawl_adapter.py # +4 first-party filter 
 2. **Step 2a COMPLETE.** Walmart adapter routing (walmart_http + walmart_firecrawl) landed dormant with `WALMART_ADAPTER=container` default — flip to `firecrawl` for demo, `decodo_http` for production.
 3. **Scan-to-Prices Live Demo COMPLETE** (2026-04-10) — 3-retailer end-to-end validated on physical iPhone. 7 live-run bugs fixed on `phase-2/scan-to-prices-deploy`. EC2 instance `i-09ce25ed6df7a09b2` stopped, ready to start again with `aws ec2 start-instances`.
 4. **Step 2b COMPLETE** (2026-04-11) — Demo container reliability: UPCitemdb cross-validation (SP-L4), relevance scoring (SP-10), Amazon title fallback (SP-9), Walmart first-party filter (SP-L5). 146 backend tests passing.
-5. **Remaining pre-fixes (not blockers):**
+5. **Step 2b-val Live Validation COMPLETE** (2026-04-12) — 5-test protocol against real Gemini / UPCitemdb / Firecrawl / Amazon-BestBuy-Walmart containers. 6/6 UPCs resolved at confidence 1.0 `gemini_validated`. Three latent regressions caught and fixed on the same branch:
+   - **SP-9 regression** — Amazon title chain returned brand-only "Sony". Amazon now splits brand/product into sibling spans inside `h2` / `[data-cy="title-recipe"]`, and the sponsored-noise regex used ASCII `'` vs Amazon's curly `'`. Fix: rewrote `extractTitle()` to join all spans + added `['\u2019]` character class to sponsored noise regex. `containers/amazon/extract.js`.
+   - **SP-10 regression** — `_MODEL_PATTERNS[0]` couldn't match hyphenated letter+digit models like `WH-1000XM5`, extracting "WH1000XM" instead, so the hard gate failed against all listings. Fix: optional hyphen between letter group and digit group + trailing `\d*` after alpha suffix. `backend/modules/m2_prices/service.py`.
+   - **SP-10b new** — word+digit model names (`Flip 6`, `Clip 5`, `Stick 4K`) matched nothing in the old pattern list, so hard gate was skipped and a JBL Clip 5 listing cleared the 0.4 token-overlap floor for a JBL Flip 6 query. Fix: added `\b[A-Z][a-z]{2,8}\s+\d+[A-Z]?\b` (Title-case only, no IGNORECASE). `backend/modules/m2_prices/service.py`.
+6. **Post-2b-val hardening COMPLETE** (2026-04-12) — driven by live-sim testing of untested UPCs (iPhone 16, PS5, AirPods variants) from the iOS simulator. Ten additional fixes across backend + iOS on `phase-2/step-2b`. 146 tests still green:
+   - **Manual UPC entry in iOS scanner** — toolbar `⌨️` button + sheet with TextField and preset rows, wired into the existing `ScannerViewModel.handleBarcodeScan(upc:)`. Lets the sim test without a camera. `Barkain/Features/Scanner/ScannerView.swift`.
+   - **Per-retailer status system (backend + iOS)** — `PriceComparisonResponse.retailer_results: list[RetailerResult]` with per-retailer `status` enum `{success, no_match, unavailable}`. iOS `PriceComparisonView` renders all 11 retailers — successes as tappable price rows, `no_match` as gray "Not found", `unavailable` as gray "Unavailable". Old cached responses decode gracefully via `decodeIfPresent ?? []`. `backend/modules/m2_prices/{schemas.py,service.py}`, `Barkain/Features/Shared/Models/PriceComparison.swift`, `Barkain/Features/Recommendation/PriceComparisonView.swift`.
+   - **Error code classification** — `CHALLENGE`, `PARSE_ERROR`, `BOT_DETECTED`, `TIMEOUT`, `CONNECTION_FAILED`, `HTTP_ERROR`, `CLIENT_ERROR`, `GATHER_ERROR` → `unavailable` (scraper never got usable results). Empty listings + relevance-filtered → `no_match` (we searched, product not carried). Resolves the "Walmart shown as unavailable when it's really a Firecrawl PerimeterX block" taxonomy issue.
+   - **Supplier-code cleanup** — `_clean_product_name` strips parenthetical catalog codes like `(CBC998000002407)`, `(MWP22A...)`, `(JBLFLIP6TEALAM)` before query building and relevance scoring. Descriptive parentheticals like `(Teal)`, `(Black)`, `(1st gen)` are preserved. Fixes the iPhone 16 Amazon search fuzz-matching to iPhone SE.
+   - **Word-boundary identifier match** — replaced `ident.lower() in title_lower` substring check with `(?<!\w)<ident>(?!\w)` regex search so `iPhone 16` no longer matches `iPhone 16e` as a prefix.
+   - **Accessory hard filter** — `_is_accessory_listing()` rejects titles containing keywords `{case, cover, protector, charger, cable, stand, mount, holder, skin, adapter, dock, compatible, replacement, accessory, ...}` or phrases `for/fits/designed for/compatible with (iPhone|iPad|Galaxy|...)` — unless the resolved product itself contains any of those keywords. Killed the `SUPFINE Compatible Protection` screen-protector false positive that was slipping through at 0.4 token overlap.
+   - **camelCase brand + digit regex (pattern 7)** — `\b[A-Z][a-z]+[A-Z][a-z]+\s+\d+[A-Z]?\b` catches `AirPods 2`, `PlayStation 5`, `MacBook 14`. Complements pattern 5 (single Title-case word + digit) and pattern 6 (lowercase-start camelCase + digit for iPhone/iPad).
+   - **Variant token equality check** — `_VARIANT_TOKENS = {pro, plus, max, mini, ultra, lite, slim, air, digital, disc, se, xl, cellular, wifi, gps, oled}`. Product and listing must agree on which variant words they contain. Kills iPhone 16 → iPhone 16 Pro/Plus/Max matches, PS5 Slim Disc → PS5 Slim Digital Edition matches, iPad Pro → iPad Air matches.
+   - **Amazon extract.js hardening** — `detectCondition(title)` parses `Renewed/Refurbished/Recertified/Pre-Owned/Open Box/Used` and sets the condition field. `extractPrice(el)` scans all `.a-price:not([data-a-strike])` elements, rejects any whose containing row matches `/mo` / `per month` / `monthly payment`, returns `max(candidates)`. Fixes the "$45/mo shown as $45" installment-as-price bug.
+   - **Best Buy extract.js hardening** — same `detectCondition()` helper (adds `Geek Squad Certified` too), plus `isCarrierListing(title, url, cardText)` that rejects AT&T/Verizon/T-Mobile/etc. listings in both title and URL. `$X/mo` fragments are stripped from `priceSearchText` before dollar-amount parsing.
+   - **Walmart parser hardening** — `_walmart_parser.py` adds carrier/installment filter (same regex set as Best Buy) + `Restored/Refurbished/Renewed/Recertified/Pre-Owned` → `refurbished`, `Used/Open Box` → `used`, else `new`. Previously `Restored` mapped to `used`; test updated in `test_walmart_http_adapter.py`.
+7. **Remaining pre-fixes (not blockers):**
    - **Backfill fd-3 stdout pattern (SP-L2):** 8 retailer extract.sh files still have latent bug — must be fixed before those retailers go live.
    - **Rotate leaked GitHub PAT (SP-L1):** `gho_UUsp9ML…` in `~/barkain/.git/config` on EC2.
-   - **Streaming per-retailer results (SP-L7):** iOS progressive loading is cosmetic — real streaming to iPhone instead of blocking needed for production UX.
-6. **Phase 2 continues:** Step 2c (M5 Identity Profile) or Step 2d (streaming per-retailer results to iPhone).
+   - **Redeploy EC2 containers (2b-val-L1):** run `scripts/ec2_deploy.sh` to sync `i-09ce25ed6df7a09b2` with the repo — currently hot-patched via `docker cp` for `amazon/extract.js`, `bestbuy/extract.js`, and `bestbuy/base-extract.sh`. Next stop+start without redeploy will revert.
+   - **Streaming per-retailer results (SP-L7 / 2b-val-L2):** iOS progressive loading is cosmetic — real streaming to iPhone instead of blocking needed for production UX, and is also the real fix for Best Buy's 91s leg.
+   - **Generation-without-digit matching:** "Samsung Galaxy Buds Pro" (1st gen) still token-overlaps with "Galaxy Buds 2 Pro" because the 1st gen product name has no digit to distinguish it. Requires Gemini to emit explicit `(1st gen)` or a richer product taxonomy.
+   - **GPU letter-space-digit pattern:** RTX 4090 vs RTX 4080 still relies on token overlap because no current `_MODEL_PATTERN` matches `\b[A-Z]{2,5}\s+\d{3,5}\b`. Add if GPU SKUs become a demo category.
+8. **Phase 2 continues:** Step 2c (M5 Identity Profile) or Step 2d (streaming per-retailer results to iPhone).
 
 ---
 
@@ -689,3 +755,15 @@ backend/tests/modules/test_walmart_firecrawl_adapter.py # +4 first-party filter 
 | UPCitemdb cross-validation | Always call UPCitemdb as second opinion after Gemini | Gemini resolved 3/3 test UPCs wrong; brand agreement check catches mismatches | Apr 2026 |
 | Relevance scoring | Model-number hard gate + brand match + token overlap (threshold 0.4) | _pick_best_listing returned wrong-spec products; gate catches M4 vs M2 Mac mini | Apr 2026 |
 | Walmart first-party filter | Filter third-party resellers via sellerName field; fall back to cheapest if all third-party | Demo returned RHEA-Sony reseller listing at $50.25 instead of Walmart's price | Apr 2026 |
+| Per-retailer status system | Response includes `retailer_results: [{retailer_id, retailer_name, status}]` for all 11 retailers, status ∈ `{success, no_match, unavailable}` | iOS showed only successful retailers — user couldn't tell whether a missing retailer was offline, blocked, or had no match. Now all 11 render with distinct visual states. `success` = price row; `no_match` = gray "Not found" (searched, no result); `unavailable` = gray "Unavailable" (never got a usable response). See `docs/SCRAPING_AGENT_ARCHITECTURE.md` Appendix G | Apr 2026 |
+| Error code → status mapping | `CHALLENGE/PARSE_ERROR/BOT_DETECTED/TIMEOUT/CONNECTION_FAILED/HTTP_ERROR/CLIENT_ERROR/GATHER_ERROR` → `unavailable`; empty listings or relevance-filtered → `no_match` | Live PS5 query showed Walmart Firecrawl returning a PerimeterX challenge page — it was never a "no match" because Walmart never searched. Bot blocks and parse failures belong with offline containers (we couldn't determine anything), not with empty-result searches | Apr 2026 |
+| Manual UPC entry in iOS scanner | Toolbar ⌨️ button opens a sheet with TextField + preset rows, submits via the existing `ScannerViewModel.handleBarcodeScan(upc:)` | iOS simulator has no camera, so barcode scanning can't be tested there. Manual entry unblocks fast iteration against the local backend. Works on physical devices too as a fallback for damaged barcodes | Apr 2026 |
+| Supplier-code cleanup | `_clean_product_name` strips `(CODE)` parentheticals before query/scoring; descriptive parens like `(Teal)` preserved | Gemini/UPCitemdb bake supplier catalog codes like `(CBC998000002407)` into the product name. Retailer search engines fuzz-match on them and return the wrong product (Amazon returned iPhone SE for "iPhone 16 … (CBC998000002407)"). Cleanup regex: `\(\s*[A-Z0-9][A-Z0-9.\-/]{4,}\s*\)` | Apr 2026 |
+| Word-boundary identifier match | Hard gate uses `(?<!\w)ident(?!\w)` regex search instead of `ident in title_lower` substring check | "iPhone 16" was slipping through to match "iPhone 16e" as a substring prefix. Word boundaries prevent prefix/suffix false matches (also fixes "Flip 6" vs "Flip 60" and similar) | Apr 2026 |
+| Accessory hard filter | `_is_accessory_listing()` rejects `{case, cover, protector, charger, cable, stand, mount, holder, skin, adapter, dock, compatible, replacement, …}` and `for/fits/compatible with (iPhone\|iPad\|…)` phrases, unless the product itself contains any of those words | iPhone 16 Amazon search returned a `SUPFINE Compatible Protection Translucent Anti-Fingerprint` screen protector at $6.79 — "iPhone" and "16" overlap gave it a 2/5=0.4 token score, exactly at threshold. Deterministic keyword rejection is more reliable than threshold tuning | Apr 2026 |
+| Variant token equality check | `_VARIANT_TOKENS = {pro, plus, max, mini, ultra, lite, slim, air, digital, disc, se, xl, cellular, wifi, gps, oled}` — product_tokens ∩ VARIANT must equal listing_tokens ∩ VARIANT | iPhone 16 was matching iPhone 16 Pro/Plus/Pro Max via token overlap because "iPhone 16" is a word-boundary substring of those. PS5 Slim Disc was matching PS5 Slim Digital Edition. The equality check is strict and symmetric: `{} ≠ {pro}`, `{slim, disc} ≠ {slim, digital}` | Apr 2026 |
+| Amazon condition detection | `detectCondition(title)` in `containers/amazon/extract.js` parses `Renewed/Refurbished/Recertified/Pre-Owned/Open Box/Used` and sets the `condition` field; Best Buy extract.js mirrors this + `Geek Squad Certified`; Walmart `_map_item_to_listing` uses lowercased-name markers | Amazon listings were hardcoded `condition="new"` even when the title clearly said `(Renewed)`. User saw "New" in the app but Amazon showed Renewed | Apr 2026 |
+| Amazon installment-price rejection | `extractPrice(el)` scans non-strikethrough `.a-price` elements, rejects any whose surrounding `.a-row`/`.a-section` contains `/mo`, `per month`, or `monthly payment`, returns `max(candidates)` | Amazon phone listings sometimes show `$45/mo` as the prominent price (e.g. Mint Mobile sponsored). The old selector-based price extraction picked the monthly as the full price. Walking up to the row level and rejecting by context text is deterministic | Apr 2026 |
+| Carrier/installment listing filter | Walmart parser and Best Buy extract.js both reject listings with title or URL matching `{AT&T, Verizon, T-Mobile, Sprint, Cricket, Metro by, Boost Mobile, Straight Talk, Tracfone, Xfinity Mobile, Visible, US Cellular, Spectrum Mobile, Simple Mobile}` | Walmart Wireless and Best Buy phone listings often show a monthly installment (e.g. $20/mo) as the prominent price when the phone is carrier-locked. Dropping these outright is cleaner than trying to detect the full price buried elsewhere in the card | Apr 2026 |
+| camelCase model regex patterns | Pattern 6: `\b[a-z][A-Z][a-z]{2,8}\s+\d+[A-Z]?\b` (iPhone 16, iPad 12, iMac 24). Pattern 7: `\b[A-Z][a-z]+[A-Z][a-z]+\s+\d+[A-Z]?\b` (AirPods 2, PlayStation 5, MacBook 14) | The existing Title-case-word + digit pattern (Flip 6, Clip 5) didn't catch these Apple/Sony-style brand names. Pattern 6 handles lowercase-start camelCase; pattern 7 handles uppercase-start two-segment camelCase | Apr 2026 |
+| Spec patterns dropped from hard gate | `256GB`, `27"`, `11-inch` no longer participate in the model-number hard gate — they flow through token overlap only | With `any()` semantics, having `256GB` match in both an iPhone 16 query and an iPhone SE listing was enough to clear the gate. Specs are too weak to act as a model discriminator; they belong in the tiebreaker, not the hard filter | Apr 2026 |
