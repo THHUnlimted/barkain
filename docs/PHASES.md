@@ -3,6 +3,8 @@
 > Source: Project Planning Questionnaire + Architecture Sessions, March–April 2026
 > Scope: All planned phases, current position, infrastructure dependencies
 > Last updated: April 2026 (v3.1 — first live 3-retailer scan-to-prices demo validated on physical iPhone; 7 live-run bug fixes landed on `phase-2/scan-to-prices-deploy`)
+>
+> For per-step file inventories and decision rationale, see `docs/CHANGELOG.md`.
 
 ---
 
