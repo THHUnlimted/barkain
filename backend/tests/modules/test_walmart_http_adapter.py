@@ -99,9 +99,9 @@ async def test_fetch_walmart_success_returns_listings():
     assert result.listings[0].condition == "new"
     assert result.listings[0].is_available is True
     assert result.listings[0].extraction_method == "decodo_http_next_data"
-    # Restored item maps to used condition and retains original_price
+    # Restored is Walmart's factory-refurb program — maps to "refurbished", not "used".
     restored = next(it for it in result.listings if "Restored" in it.title)
-    assert restored.condition == "used"
+    assert restored.condition == "refurbished"
     assert restored.original_price == 249.0
 
 
