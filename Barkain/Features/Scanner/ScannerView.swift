@@ -128,14 +128,23 @@ struct ScannerView: View {
     private func scannerContent(_ viewModel: ScannerViewModel) -> some View {
         if viewModel.isLoading {
             LoadingState(message: "Resolving product...")
-        } else if viewModel.isPriceLoading, let product = viewModel.product {
-            priceLoadingView(product: product)
         } else if let comparison = viewModel.priceComparison, let product = viewModel.product {
+            // Step 2c: PriceComparisonView is the progressive UI — the retailer
+            // list fills in as each SSE event arrives. No separate loading view.
             PriceComparisonView(
                 product: product,
                 comparison: comparison,
                 viewModel: viewModel
             )
+        } else if viewModel.isPriceLoading, let product = viewModel.product {
+            // Brief window before the first stream event seeds `priceComparison`.
+            ScrollView {
+                VStack(spacing: Spacing.lg) {
+                    ProductCard(product: product)
+                    LoadingState(message: "Sniffing out deals...")
+                }
+                .padding(Spacing.lg)
+            }
         } else if viewModel.priceError != nil, let product = viewModel.product {
             priceErrorView(product: product, viewModel: viewModel)
         } else if let error = viewModel.error {
@@ -174,34 +183,6 @@ struct ScannerView: View {
             .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadius))
             .padding(.bottom, Spacing.xxl)
         }
-    }
-
-    // MARK: - Price Loading
-
-    private func priceLoadingView(product: Product) -> some View {
-        ScrollView {
-            VStack(spacing: Spacing.lg) {
-                ProductCard(product: product)
-                ProgressiveLoadingView(retailers: loadingRetailerItems)
-            }
-            .padding(Spacing.lg)
-        }
-    }
-
-    private var loadingRetailerItems: [RetailerLoadingItem] {
-        [
-            ("amazon", "Amazon"),
-            ("best_buy", "Best Buy"),
-            ("walmart", "Walmart"),
-            ("target", "Target"),
-            ("home_depot", "Home Depot"),
-            ("lowes", "Lowe's"),
-            ("ebay_new", "eBay (New)"),
-            ("ebay_used", "eBay (Used)"),
-            ("sams_club", "Sam's Club"),
-            ("backmarket", "BackMarket"),
-            ("fb_marketplace", "Facebook Marketplace"),
-        ].map { RetailerLoadingItem(id: $0.0, name: $0.1, status: .loading) }
     }
 
     // MARK: - Price Error

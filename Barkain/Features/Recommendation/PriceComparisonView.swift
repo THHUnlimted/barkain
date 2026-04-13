@@ -136,6 +136,9 @@ struct PriceComparisonView: View {
                 }
             }
         }
+        // Step 2c: animate row transitions as SSE events arrive.
+        .animation(.default, value: comparison.retailerResults)
+        .animation(.default, value: comparison.prices)
     }
 
     private func inactiveRow(name: String, label: String) -> some View {
@@ -277,5 +280,8 @@ private struct PreviewAPIClient: APIClientProtocol {
     }
     func getPrices(productId: UUID, forceRefresh: Bool) async throws -> PriceComparison {
         fatalError("Preview only")
+    }
+    func streamPrices(productId: UUID, forceRefresh: Bool) -> AsyncThrowingStream<RetailerStreamEvent, Error> {
+        AsyncThrowingStream { $0.finish() }
     }
 }

@@ -412,28 +412,46 @@ product:{upc} → {product_id, name, brand, category}      TTL: 30 days
 
 ## Progressive Loading UX Contract
 
+**Step 2c update (2026-04-13):** The contract below is delivered via Server-Sent Events on `GET /api/v1/prices/{product_id}/stream`. Each retailer emits a `retailer_result` event the moment its data lands, terminated by a `done` event. The iOS `ScannerViewModel` consumes the stream and mutates `PriceComparison` in place so SwiftUI re-renders on each event. The batch endpoint `GET /api/v1/prices/{product_id}` remains as a fallback if the stream fails.
+
 ### Cache Hit Path (~80%+ of queries after ramp-up)
 
 | Time | What the User Sees |
 |---|---|
 | 0ms | Scan animation |
 | ~200ms | Product identified — name, image, category |
-| **~250ms** | **All retail prices from DB + AI recommendation** |
+| **~250ms** | **All retail prices replayed from cache via SSE** (one rapid-fire event per retailer + `done.cached=true`) |
 | 1-2s | Secondary market results (eBay live query) |
 
-### Cache Miss Path (first search for a product)
+### Cache Miss Path — Demo Reality (Step 2c SSE streaming, 2026-04-13)
+
+Post-streaming: the user sees retailers arrive at their natural completion time, cheapest-first as they land. Best Buy's 91s leg no longer blocks the iPhone.
+
+| Time | What the User Sees |
+|---|---|
+| 0ms | Scan animation |
+| 2-4s | Product identified (Gemini + UPCitemdb) |
+| ~4s | Empty retailer list opens; spinner in place |
+| **~16s** | **Walmart row fills** (~12s after dispatch — Firecrawl adapter leg) |
+| **~34s** | **Amazon row fills** (~30s after dispatch — EC2 container) |
+| **~95s** | **Best Buy row fills** (~91s after dispatch — dominant leg, but non-blocking for the other two) |
+| ~95s | `done` event arrives, "Best Barkain" badge settles on the cheapest of the three |
+
+Compare the pre-2c blocking contract: the user saw a spinner for ~90-120s with no feedback, then the entire list popped in at once. Streaming replaces the wall with a flowing list.
+
+### Cache Miss Path — Aspirational (11 retailers, once 8 more come online)
 
 | Time | What the User Sees |
 |---|---|
 | 0ms | Scan animation |
 | ~200ms | Product identified from cache — name, image, category |
 | ~200ms (miss) | Cache miss → Gemini API UPC lookup (4-6s) — loading spinner shown |
-| ~300ms | **Progressive loading UI appears** — 11 retailers listed with spinner icons |
+| ~300ms | **11 retailer rows rendered with spinners** via SSE stream open |
 | ~300ms | **Onboarding filter questions appear** ("New or used?", "Preferred stores?") — buys scraping time |
-| 3-5s | First container results stream in (fastest retailers: Sam's Club, Facebook Marketplace) |
+| 3-5s | First container results stream in (fastest retailers: Sam's Club, Facebook Marketplace) — each as a `retailer_result` SSE event |
 | 3-8s | Remaining container results populate progressively (Walmart, Amazon, Target, etc.) |
 | ~5s | User finishes filter questions → results already populating |
-| ~8s | All results in — sorted by price, savings badge shown |
+| ~8s | All results in — sorted by price, savings badge shown — `done` event closes the stream |
 | ~10s | AI recommendation banner appears (Phase 3 — updates as more data arrives) |
 
 > **Production optimization (Phase 4):** Adding free APIs (Best Buy, eBay Browse) and Keepa brings the first 3 results down to ~500ms-1.5s, dramatically improving perceived speed while containers fill in the rest.

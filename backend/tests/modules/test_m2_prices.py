@@ -15,8 +15,6 @@ from modules.m2_prices.schemas import (
     ContainerResponse,
 )
 
-pytestmark = pytest.mark.asyncio
-
 
 # MARK: - Helpers
 
@@ -594,3 +592,282 @@ async def test_relevance_cheapest_after_filter(db_session):
     assert result is not None
     assert result.price == 278.00
     assert score >= 0.4
+
+
+# MARK: - Gemini model field relevance (Step 2b-final)
+
+
+def test_relevance_generation_marker_distinguishes_galaxy_buds():
+    """Gemini's `model` field with (1st Gen) blocks 2nd-gen listings via ordinal equality."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Samsung Galaxy Buds Pro",
+        brand="Samsung",
+        source="gemini_validated",
+        source_raw={"gemini_model": "Galaxy Buds Pro (1st Gen)"},
+    )
+    score = _score_listing_relevance(
+        "Samsung Galaxy Buds 2 Pro Wireless Earbuds", product
+    )
+    assert score == 0.0
+
+
+def test_relevance_generation_marker_passes_exact_match():
+    """Same product + listing that contains the matching 1st Gen marker passes."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Samsung Galaxy Buds Pro",
+        brand="Samsung",
+        source="gemini_validated",
+        source_raw={"gemini_model": "Galaxy Buds Pro (1st Gen)"},
+    )
+    score = _score_listing_relevance(
+        "Samsung Galaxy Buds Pro 1st Gen Wireless Earbuds", product
+    )
+    assert score >= 0.4
+
+
+def test_relevance_gpu_model_distinguishes_rtx_4090():
+    """GPU _MODEL_PATTERNS[5] + gemini_model reject RTX 4080 listings for an RTX 4090 product."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="NVIDIA GeForce RTX 4090",
+        brand="NVIDIA",
+        source="gemini_validated",
+        source_raw={"gemini_model": "RTX 4090"},
+    )
+    score = _score_listing_relevance(
+        "MSI NVIDIA GeForce RTX 4080 Founders Edition 16GB", product
+    )
+    assert score == 0.0
+
+
+def test_relevance_gpu_model_passes_exact_match():
+    """RTX 4090 product vs RTX 4090 listing: hard gate + all downstream rules pass."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="NVIDIA GeForce RTX 4090",
+        brand="NVIDIA",
+        source="gemini_validated",
+        source_raw={"gemini_model": "RTX 4090"},
+    )
+    score = _score_listing_relevance(
+        "ASUS NVIDIA GeForce RTX 4090 TUF Gaming OC Edition 24GB", product
+    )
+    assert score >= 0.4
+
+
+def test_relevance_no_gemini_model_backward_compat():
+    """Product with source_raw=None scores identically to pre-upgrade code."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Sony WH-1000XM5 Wireless Headphones",
+        brand="Sony",
+        source="test",
+        source_raw=None,
+    )
+    score = _score_listing_relevance(
+        "Sony WH-1000XM5 Wireless Noise Canceling Headphones", product
+    )
+    assert score >= 0.4
+
+
+# MARK: - Post-2b-val Hardening Unit Tests (Step 2b-final)
+
+
+def test_clean_product_name_strips_supplier_code():
+    """Supplier-code parentheticals (all-caps + digits) are stripped."""
+    from modules.m2_prices.service import _clean_product_name
+
+    assert _clean_product_name("iPhone 16 (CBC998000002407)") == "iPhone 16"
+
+
+def test_clean_product_name_strips_alphanumeric_code():
+    """All-caps alphanumeric supplier codes are stripped."""
+    from modules.m2_prices.service import _clean_product_name
+
+    assert _clean_product_name("JBL Flip 6 (JBLFLIP6TEALAM)") == "JBL Flip 6"
+
+
+def test_clean_product_name_preserves_color_paren():
+    """Lowercase parentheticals (color descriptors) are preserved."""
+    from modules.m2_prices.service import _clean_product_name
+
+    assert _clean_product_name("JBL Flip 6 (Teal)") == "JBL Flip 6 (Teal)"
+
+
+def test_clean_product_name_preserves_generation_paren():
+    """Generation markers with lowercase letters are preserved — feed the ordinal check."""
+    from modules.m2_prices.service import _clean_product_name
+
+    assert _clean_product_name("Galaxy Buds Pro (1st Gen)") == "Galaxy Buds Pro (1st Gen)"
+
+
+def test_is_accessory_listing_rejects_screen_protector():
+    """Screen protector listing is flagged when product is not itself an accessory."""
+    from modules.m2_prices.service import _is_accessory_listing
+
+    assert (
+        _is_accessory_listing(
+            "iPhone 16 Screen Protector Tempered Glass", {"iphone", "16"}
+        )
+        is True
+    )
+
+
+def test_is_accessory_listing_rejects_case():
+    """Compatible-with case listing is flagged via accessory phrase regex."""
+    from modules.m2_prices.service import _is_accessory_listing
+
+    assert (
+        _is_accessory_listing(
+            "Compatible with iPhone 16 Rugged Case", {"iphone", "16"}
+        )
+        is True
+    )
+
+
+def test_is_accessory_listing_passes_real_product():
+    """Real phone listing (no accessory keywords) is not flagged."""
+    from modules.m2_prices.service import _is_accessory_listing
+
+    assert (
+        _is_accessory_listing(
+            "Apple iPhone 16 Pro Max 256GB Unlocked", {"iphone", "pro", "max"}
+        )
+        is False
+    )
+
+
+def test_is_accessory_listing_skipped_when_product_is_case():
+    """If the product itself is a case, accessory filter is disabled."""
+    from modules.m2_prices.service import _is_accessory_listing
+
+    assert (
+        _is_accessory_listing(
+            "Rugged Case for iPhone", {"rugged", "case"}
+        )
+        is False
+    )
+
+
+def test_ident_to_regex_word_boundary_rejects_prefix():
+    """'iPhone 16' regex does NOT match 'iPhone 16e' — word-boundary anchored."""
+    from modules.m2_prices.service import _ident_to_regex
+
+    pattern = _ident_to_regex("iPhone 16")
+    assert pattern.search("Apple iPhone 16e 128GB") is None
+
+
+def test_ident_to_regex_matches_exact():
+    """'iPhone 16' regex matches 'iPhone 16 Pro' (Pro is after a space, still word-bounded)."""
+    from modules.m2_prices.service import _ident_to_regex
+
+    pattern = _ident_to_regex("iPhone 16")
+    assert pattern.search("Apple iPhone 16 Pro 256GB") is not None
+
+
+def test_ident_to_regex_flexible_whitespace():
+    """Internal whitespace in the identifier loosens to \\s+ for the regex."""
+    from modules.m2_prices.service import _ident_to_regex
+
+    pattern = _ident_to_regex("Flip 6")
+    assert pattern.search("JBL Flip  6 Portable Speaker") is not None  # double space
+
+
+def test_variant_token_equality_rejects_pro_max_for_pro():
+    """Product 'iPhone 16 Pro' must not match listing 'iPhone 16 Pro Max'."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(name="Apple iPhone 16 Pro", brand="Apple", source="test")
+    score = _score_listing_relevance(
+        "Apple iPhone 16 Pro Max 256GB Natural Titanium", product
+    )
+    assert score == 0.0
+
+
+def test_variant_token_equality_accepts_same_variant():
+    """Product 'iPhone 16 Pro' matches listing 'iPhone 16 Pro 256GB'."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(name="Apple iPhone 16 Pro", brand="Apple", source="test")
+    score = _score_listing_relevance(
+        "Apple iPhone 16 Pro 256GB Natural Titanium Unlocked", product
+    )
+    assert score >= 0.4
+
+
+def test_classify_error_status_challenge_maps_to_unavailable():
+    """CHALLENGE error code (bot block) maps to 'unavailable' not 'no_match'."""
+    from modules.m2_prices.service import _classify_error_status
+
+    assert _classify_error_status("CHALLENGE") == "unavailable"
+
+
+def test_classify_error_status_unknown_maps_to_no_match():
+    """Unknown error codes default to 'no_match' (the safe fallback)."""
+    from modules.m2_prices.service import _classify_error_status
+
+    assert _classify_error_status("SOME_UNKNOWN_CODE") == "no_match"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "CONNECTION_FAILED",
+        "GATHER_ERROR",
+        "HTTP_ERROR",
+        "CLIENT_ERROR",
+        "CHALLENGE",
+        "PARSE_ERROR",
+        "BOT_DETECTED",
+        "TIMEOUT",
+    ],
+)
+def test_classify_error_status_all_unavailable_codes(code):
+    """Every member of _UNAVAILABLE_ERROR_CODES maps to 'unavailable'."""
+    from modules.m2_prices.service import _classify_error_status, _UNAVAILABLE_ERROR_CODES
+
+    assert code in _UNAVAILABLE_ERROR_CODES
+    assert _classify_error_status(code) == "unavailable"
+
+
+async def test_retailer_results_mixed_statuses_end_to_end(client, db_session):
+    """3 retailers: success, no_match (empty listings), unavailable (CHALLENGE) — each maps correctly."""
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon", "walmart", "target"])
+
+    mock_responses = {
+        "amazon": _make_container_response("amazon", 278.00),
+        "walmart": ContainerResponse(
+            retailer_id="walmart",
+            query="Sony WH-1000XM5 Sony",
+            extraction_time_ms=500,
+            listings=[],
+        ),
+        "target": ContainerResponse(
+            retailer_id="target",
+            query="Sony WH-1000XM5 Sony",
+            error=ContainerError(code="CHALLENGE", message="bot block"),
+        ),
+    }
+
+    with patch("modules.m2_prices.service.ContainerClient") as MockClient:
+        instance = MockClient.return_value
+        instance.extract_all = AsyncMock(return_value=mock_responses)
+
+        resp = await client.get(f"/api/v1/prices/{product.id}")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    statuses = {r["retailer_id"]: r["status"] for r in data["retailer_results"]}
+    assert statuses == {
+        "amazon": "success",
+        "walmart": "no_match",
+        "target": "unavailable",
+    }

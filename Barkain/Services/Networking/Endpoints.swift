@@ -12,6 +12,7 @@ nonisolated enum HTTPMethod: String {
 nonisolated enum Endpoint {
     case resolveProduct(upc: String)
     case getPrices(productId: UUID, forceRefresh: Bool = false)
+    case streamPrices(productId: UUID, forceRefresh: Bool = false)
     case health
 
     // MARK: - Properties
@@ -22,6 +23,8 @@ nonisolated enum Endpoint {
             return "/api/v1/products/resolve"
         case .getPrices(let productId, _):
             return "/api/v1/prices/\(productId.uuidString)"
+        case .streamPrices(let productId, _):
+            return "/api/v1/prices/\(productId.uuidString)/stream"
         case .health:
             return "/api/v1/health"
         }
@@ -31,14 +34,14 @@ nonisolated enum Endpoint {
         switch self {
         case .resolveProduct:
             return .post
-        case .getPrices, .health:
+        case .getPrices, .streamPrices, .health:
             return .get
         }
     }
 
     var queryItems: [URLQueryItem]? {
         switch self {
-        case .getPrices(_, let forceRefresh) where forceRefresh:
+        case .getPrices(_, true), .streamPrices(_, true):
             return [URLQueryItem(name: "force_refresh", value: "true")]
         default:
             return nil

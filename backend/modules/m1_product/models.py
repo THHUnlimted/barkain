@@ -38,6 +38,13 @@ class Product(Base):
             return self.source_raw.get("confidence", 0.0)
         return 0.0
 
+    @property
+    def model(self) -> Optional[str]:
+        """Shortest unambiguous product identifier from Gemini (stored in source_raw.gemini_model)."""
+        if self.source_raw and isinstance(self.source_raw, dict):
+            return self.source_raw.get("gemini_model")
+        return None
+
     __table_args__ = (
         Index("idx_products_upc", "upc", postgresql_where=text("upc IS NOT NULL")),
         Index("idx_products_asin", "asin", postgresql_where=text("asin IS NOT NULL")),

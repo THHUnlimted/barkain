@@ -5,6 +5,7 @@ import Foundation
 protocol APIClientProtocol: Sendable {
     func resolveProduct(upc: String) async throws -> Product
     func getPrices(productId: UUID, forceRefresh: Bool) async throws -> PriceComparison
+    func streamPrices(productId: UUID, forceRefresh: Bool) -> AsyncThrowingStream<RetailerStreamEvent, Error>
 }
 
 // MARK: - APIClient
@@ -85,6 +86,110 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
 
     func getPrices(productId: UUID, forceRefresh: Bool = false) async throws -> PriceComparison {
         try await request(endpoint: .getPrices(productId: productId, forceRefresh: forceRefresh))
+    }
+
+    // MARK: - Streaming (Step 2c)
+
+    func streamPrices(
+        productId: UUID,
+        forceRefresh: Bool = false
+    ) -> AsyncThrowingStream<RetailerStreamEvent, Error> {
+        // Capture the parts the background Task needs up-front — `self` is
+        // @unchecked Sendable but the closure body only needs these immutables.
+        let session = self.session
+        let baseURL = self.baseURL
+        let decoder = self.decoder
+
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let url = Endpoint.streamPrices(
+                        productId: productId,
+                        forceRefresh: forceRefresh
+                    ).url(base: baseURL)
+                    var urlRequest = URLRequest(url: url)
+                    urlRequest.httpMethod = "GET"
+                    urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    urlRequest.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+                    // Bearer token placeholder — Clerk SDK integration in Phase 2.
+
+                    let (bytes, response) = try await session.bytes(for: urlRequest)
+
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        throw APIError.unknown(0, "Invalid response type")
+                    }
+
+                    guard (200..<300).contains(httpResponse.statusCode) else {
+                        // Drain error body for decoding — status-code mapping mirrors request<T>().
+                        var body = Data()
+                        for try await byte in bytes {
+                            body.append(byte)
+                            if body.count > 8_192 { break }
+                        }
+                        throw Self.apiErrorFor(statusCode: httpResponse.statusCode, body: body, decoder: decoder)
+                    }
+
+                    for try await sseEvent in SSEParser.events(from: bytes) {
+                        guard let data = sseEvent.data.data(using: .utf8) else { continue }
+                        let streamEvent: RetailerStreamEvent
+                        switch sseEvent.event {
+                        case "retailer_result":
+                            let update = try decoder.decode(RetailerResultUpdate.self, from: data)
+                            streamEvent = .retailerResult(update)
+                        case "done":
+                            let summary = try decoder.decode(StreamSummary.self, from: data)
+                            streamEvent = .done(summary)
+                        case "error":
+                            let err = try decoder.decode(StreamError.self, from: data)
+                            streamEvent = .error(err)
+                        default:
+                            continue
+                        }
+                        continuation.yield(streamEvent)
+                    }
+                    continuation.finish()
+                } catch let apiError as APIError {
+                    continuation.finish(throwing: apiError)
+                } catch let urlError as URLError {
+                    continuation.finish(throwing: APIError.network(urlError))
+                } catch let decodingError as DecodingError {
+                    continuation.finish(throwing: APIError.decodingFailed(decodingError.localizedDescription))
+                } catch {
+                    continuation.finish(throwing: APIError.unknown(0, error.localizedDescription))
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private static func apiErrorFor(
+        statusCode: Int,
+        body: Data,
+        decoder: JSONDecoder
+    ) -> APIError {
+        switch statusCode {
+        case 401:
+            return .unauthorized
+        case 404:
+            return .notFound
+        case 422:
+            if let resp = try? decoder.decode(APIErrorResponse.self, from: body) {
+                return .validation(resp.error.message)
+            }
+            return .validation("Validation failed")
+        case 429:
+            return .rateLimited
+        case 500...599:
+            if let resp = try? decoder.decode(APIErrorResponse.self, from: body) {
+                return .server(resp.error.message)
+            }
+            return .server("Internal server error")
+        default:
+            if let resp = try? decoder.decode(APIErrorResponse.self, from: body) {
+                return .unknown(statusCode, resp.error.message)
+            }
+            return .unknown(statusCode, "Unexpected error")
+        }
     }
 
     // MARK: - Private

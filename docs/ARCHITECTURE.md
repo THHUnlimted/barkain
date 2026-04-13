@@ -242,7 +242,7 @@ All LLM interactions go through `abstraction.py`. No module imports `google.gena
 
 | Task | Model | Rationale | Phase |
 |---|---|---|---|
-| UPC product resolution | Gemini 3.1 Flash Lite Preview | Fast, cost-effective UPC lookup with thinking + Google Search grounding. System instruction (9-step reasoning, cached by Gemini); user prompt (bare UPC + output format). Returns `device_name` only | 1 |
+| UPC product resolution | Gemini 3.1 Flash Lite Preview | Fast, cost-effective UPC lookup with thinking + Google Search grounding. System instruction (9-step reasoning, cached by Gemini); user prompt (bare UPC + output format). Returns `device_name` (fully specified name) + `model` (shortest unambiguous identifier — generation markers, capacity, GPU SKUs) | 1 |
 | Full-stack recommendation | Claude Sonnet | Multi-variable reasoning across all 9 layers | 3 |
 | Image product identification | Claude Sonnet (vision) | Best vision quality in testing | 3 |
 | Receipt OCR interpretation | Claude Sonnet (vision) | Structured data extraction from text | 3 |
@@ -253,7 +253,7 @@ All LLM interactions go through `abstraction.py`. No module imports `google.gena
 
 ### Prompt Templates
 
-Stored in `backend/ai/prompts/` as Python string templates with variable injection. Each module that uses AI has a corresponding prompt file. The UPC lookup prompt uses a two-part architecture: `UPC_LOOKUP_SYSTEM_INSTRUCTION` contains full 9-step reasoning instructions (cached by Gemini across calls), while the user prompt is just the bare UPC string + output format constraint (`device_name` only). The service parses only `device_name` from the response (mapped to `name`), setting `source=gemini_upc`. Brand, category, ASIN, and description are left as None — populated by UPCitemdb fallback or future enrichment.
+Stored in `backend/ai/prompts/` as Python string templates with variable injection. Each module that uses AI has a corresponding prompt file. The UPC lookup prompt uses a two-part architecture: `UPC_LOOKUP_SYSTEM_INSTRUCTION` contains full 9-step reasoning instructions (cached by Gemini across calls), while the user prompt is just the bare UPC string + output format constraint (`device_name` + `model`). The service parses both fields: `device_name` becomes `products.name`, `model` (shortest unambiguous identifier — generation markers like "1st Gen", capacity like "256GB", GPU SKUs like "RTX 4090") is stored in `products.source_raw.gemini_model` and exposed on the API response as `ProductResponse.model`. The M2 relevance scorer pulls `gemini_model` from `source_raw` and unions its tokens + identifiers into the product's scoring input, which is how the F.5 generation-without-digit and GPU-SKU limitations are resolved. Brand, category, ASIN, and description are populated by UPCitemdb cross-validation or left None.
 
 ### Structured Outputs
 
@@ -269,7 +269,8 @@ All AI calls request JSON output. Use Instructor library for Pydantic model vali
 |---|---|---|---|---|
 | GET | /api/v1/health | core | Health check (DB + Redis connectivity) | Exempt |
 | POST | /api/v1/products/resolve | M1 | UPC/barcode → product (Gemini API, UPCitemdb backup) | 60/min |
-| GET | /api/v1/prices/{product_id} | M2 | Get prices from all 11 retailers (via containers) | 60/min |
+| GET | /api/v1/prices/{product_id} | M2 | Batch price comparison across all 11 retailers (blocks until every retailer completes) | 60/min |
+| GET | /api/v1/prices/{product_id}/stream | M2 | **Step 2c** — SSE stream of per-retailer results using `asyncio.as_completed`. Each retailer yields a `retailer_result` event the moment it finishes (walmart ~12s, amazon ~30s, best_buy ~91s), terminated by a `done` event. Cache hit replays all events instantly. Fallback surface if the stream fails: the batch endpoint above. `?force_refresh=true` bypasses cache. | 60/min |
 
 ### Phase 2 Endpoints
 

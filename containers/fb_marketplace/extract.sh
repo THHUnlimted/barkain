@@ -36,6 +36,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Reserve fd 3 as the real stdout and redirect fd 1 to stderr for all other commands.
+# Why: agent-browser writes progress lines ("✓ Done", page titles, "✓ Browser closed")
+# to stdout, which used to pollute the JSON we hand back to server.py and broke json.loads.
+# Only the final extraction JSON should land on fd 3.
+exec 3>&1
+exec 1>&2
+
 # Step 1: Kill stale Chrome / agent-browser sessions
 pkill -f "chromium.*--remote-debugging-port=$CDP_PORT" 2>/dev/null || true
 sleep 1
@@ -104,7 +111,7 @@ while [ $attempt -lt $RETRY_MAX ]; do
     continue
   fi
 
-  # Step 9: Unwrap agent-browser JSON string quoting and output to stdout
+  # Step 9: Unwrap agent-browser JSON string quoting and emit the JSON on fd 3 (real stdout).
   python3 -c "
 import json, sys
 raw = sys.stdin.read().strip()
@@ -112,12 +119,12 @@ if raw.startswith('\"'):
     raw = json.loads(raw)
 data = json.loads(raw)
 json.dump(data, sys.stdout, indent=2, ensure_ascii=False)
-" <<< "$RAW_OUTPUT"
+" <<< "$RAW_OUTPUT" >&3
 
   exit 0
 done
 
 # All attempts failed
 log "Failed after $RETRY_MAX attempts"
-echo '{"listings":[],"metadata":{"url":"","extracted_at":"","bot_detected":true}}'
+echo '{"listings":[],"metadata":{"url":"","extracted_at":"","bot_detected":true}}' >&3
 exit 1

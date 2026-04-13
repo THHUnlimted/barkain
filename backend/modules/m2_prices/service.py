@@ -12,10 +12,12 @@ Pipeline:
 9. Return sorted by price ascending
 """
 
+import asyncio
 import json
 import logging
 import re
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -103,6 +105,10 @@ _MODEL_PATTERNS = [
     # Brand camelCase + digit (e.g. "AirPods 2", "PlayStation 5", "MacBook 14").
     # Two title-case segments joined with no space (brand name camelCasing), then digit.
     re.compile(r'\b[A-Z][a-z]+[A-Z][a-z]+\s+\d+[A-Z]?\b'),
+    # GPU-style: 2-5 uppercase letters + space + 3-5 digits (RTX 4090, GTX 1080, RX 7900).
+    # Fed by Gemini's new `model` field — distinguishes RTX 4090 from RTX 4080 at the
+    # hard-gate layer since the ident_to_regex is word-bounded.
+    re.compile(r'\b[A-Z]{2,5}\s+\d{3,5}\b'),
 ]
 
 # Variant / sub-model discriminator words. If two titles disagree on which of
@@ -115,6 +121,17 @@ _VARIANT_TOKENS = frozenset({
     "se", "xl",
     "cellular", "wifi", "gps",
     "oled",
+})
+
+# Ordinal/generation marker tokens. Gemini's `model` field emits "(1st Gen)" for
+# 1st-gen products that would otherwise token-overlap with later generations
+# (e.g. "Galaxy Buds Pro (1st Gen)" vs "Galaxy Buds 2 Pro"). If product and
+# listing disagree on which ordinals they contain, they are different generations.
+# Symmetric — protects both directions. Trade-off: a real 1st-gen product whose
+# retailer listing omits the "1st Gen" marker will fail this rule; in practice
+# Gemini emits the marker only when it's load-bearing.
+_ORDINAL_TOKENS = frozenset({
+    "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th",
 })
 
 # NOTE: Size/spec patterns (256GB, 27", 11-inch) used to be in _MODEL_PATTERNS,
@@ -224,12 +241,27 @@ def _score_listing_relevance(listing_title: str, product: Product) -> float:
     2. Variant token equality: if product and listing differ in which variant
        words they contain ({pro, plus, max, mini, disc, digital, ...}), they're
        different SKUs — reject.
+    2b. Ordinal equality: same check over generation markers (1st / 2nd / 3rd …)
+        fed by Gemini's `model` field.
     3. Brand match: product.brand must appear in listing title.
     4. Token overlap tiebreaker: |intersection| / |product_tokens|.
     """
     clean_name = _clean_product_name(product.name)
     product_identifiers = _extract_model_identifiers(clean_name)
     product_tokens_set = _tokenize(clean_name)
+
+    # Pull Gemini's richer `model` identifier from source_raw if present.
+    # The model field adds generation markers ("1st Gen"), clean model numbers
+    # ("RTX 4090"), and capacity ("256GB") that product.name may lack. Union
+    # identifiers + tokens so downstream rules see both signals.
+    gemini_model = None
+    if product.source_raw and isinstance(product.source_raw, dict):
+        gemini_model = product.source_raw.get("gemini_model")
+    if gemini_model:
+        clean_model = _clean_product_name(gemini_model)
+        product_identifiers = product_identifiers + _extract_model_identifiers(clean_model)
+        product_tokens_set = product_tokens_set | _tokenize(clean_model)
+
     title_lower = listing_title.lower()
     listing_tokens = _tokenize(listing_title)
 
@@ -250,7 +282,16 @@ def _score_listing_relevance(listing_title: str, product: Product) -> float:
     if product_variants != listing_variants:
         return 0.0
 
-    # Rule 2: Brand match (skip if brand is unknown)
+    # Rule 2b: Ordinal/generation marker equality. Gemini's `model` field emits
+    # "(1st Gen)" for 1st-gen products that would otherwise token-overlap with
+    # later generations. {1st} != {} rejects "Galaxy Buds 2 Pro" for a
+    # "Galaxy Buds Pro (1st Gen)" query. Symmetric.
+    product_ordinals = product_tokens_set & _ORDINAL_TOKENS
+    listing_ordinals = listing_tokens & _ORDINAL_TOKENS
+    if product_ordinals != listing_ordinals:
+        return 0.0
+
+    # Rule 3: Brand match (skip if brand is unknown)
     if product.brand:
         clean_brand = _BRAND_SUFFIXES.sub("", product.brand).strip()
         if clean_brand and clean_brand.lower() not in title_lower:
@@ -424,6 +465,253 @@ class PriceAggregationService:
         await self._cache_to_redis(product_id, result)
 
         return result
+
+    # MARK: - Streaming (Step 2c)
+
+    async def stream_prices(
+        self,
+        product_id: uuid.UUID,
+        force_refresh: bool = False,
+    ) -> AsyncGenerator[tuple[str, dict], None]:
+        """Yield per-retailer SSE events (`retailer_result`, `done`, `error`) as
+        results arrive. Uses `asyncio.as_completed` over per-retailer tasks so
+        the iPhone sees each retailer the moment it finishes — Walmart ~12s,
+        Amazon ~30s, and Best Buy ~91s arrive independently instead of the
+        caller waiting ~120s for the whole batch.
+
+        NOTE: duplicates the classification loop from `get_prices()` by design.
+        The two paths differ in iteration strategy (as_completed vs gather) and
+        error semantics (errors become events, not raises), which made a shared
+        helper more awkward than the duplication.
+        """
+        product = await self._validate_product(product_id)
+
+        # Cache path — replay stored results and short-circuit.
+        if not force_refresh:
+            cached = await self._check_redis(product_id)
+            if cached is None:
+                cached = await self._check_db_prices(product_id, product.name)
+                if cached is not None:
+                    await self._cache_to_redis(product_id, cached)
+            if cached is not None:
+                logger.info("stream_prices cache hit for product %s", product_id)
+                prices_by_rid = {
+                    p["retailer_id"]: p for p in cached.get("prices", [])
+                }
+                for r in cached.get("retailer_results", []):
+                    yield (
+                        "retailer_result",
+                        {
+                            "retailer_id": r["retailer_id"],
+                            "retailer_name": r["retailer_name"],
+                            "status": r["status"],
+                            "price": prices_by_rid.get(r["retailer_id"]),
+                        },
+                    )
+                yield (
+                    "done",
+                    {
+                        "product_id": str(product_id),
+                        "product_name": cached.get("product_name", product.name),
+                        "total_retailers": cached.get("total_retailers", 0),
+                        "retailers_succeeded": cached.get("retailers_succeeded", 0),
+                        "retailers_failed": cached.get("retailers_failed", 0),
+                        "cached": True,
+                        "fetched_at": cached.get("fetched_at"),
+                    },
+                )
+                return
+
+        # Live path — dispatch every retailer, yield as each completes.
+        query = self._build_query(product)
+        ids = list(self.container_client.ports.keys())
+        names = await self._load_retailer_names(ids)
+        logger.info(
+            "stream_prices dispatching %d retailers for product %s: %s",
+            len(ids),
+            product_id,
+            query,
+        )
+
+        async def _fetch_one(rid: str) -> tuple[str, ContainerResponse]:
+            resp = await self.container_client._extract_one(
+                rid, query, product.name, product.upc, 10
+            )
+            return rid, resp
+
+        tasks = [asyncio.create_task(_fetch_one(rid)) for rid in ids]
+
+        now = datetime.now(UTC)
+        prices_data: list[dict] = []
+        retailer_results: list[dict] = []
+        succeeded = 0
+        failed = 0
+        history_offset = 0
+
+        try:
+            for fut in asyncio.as_completed(tasks):
+                retailer_id, response = await fut
+                retailer_name = names.get(retailer_id, retailer_id)
+
+                # Error path — render as unavailable/no_match based on error code.
+                if response.error is not None:
+                    status = _classify_error_status(response.error.code)
+                    failed += 1
+                    retailer_results.append(
+                        {
+                            "retailer_id": retailer_id,
+                            "retailer_name": retailer_name,
+                            "status": status,
+                        }
+                    )
+                    yield (
+                        "retailer_result",
+                        {
+                            "retailer_id": retailer_id,
+                            "retailer_name": retailer_name,
+                            "status": status,
+                            "price": None,
+                        },
+                    )
+                    continue
+
+                if not response.listings:
+                    failed += 1
+                    retailer_results.append(
+                        {
+                            "retailer_id": retailer_id,
+                            "retailer_name": retailer_name,
+                            "status": "no_match",
+                        }
+                    )
+                    yield (
+                        "retailer_result",
+                        {
+                            "retailer_id": retailer_id,
+                            "retailer_name": retailer_name,
+                            "status": "no_match",
+                            "price": None,
+                        },
+                    )
+                    continue
+
+                best_listing, relevance = self._pick_best_listing(response, product)
+                if best_listing is None:
+                    failed += 1
+                    retailer_results.append(
+                        {
+                            "retailer_id": retailer_id,
+                            "retailer_name": retailer_name,
+                            "status": "no_match",
+                        }
+                    )
+                    yield (
+                        "retailer_result",
+                        {
+                            "retailer_id": retailer_id,
+                            "retailer_name": retailer_name,
+                            "status": "no_match",
+                            "price": None,
+                        },
+                    )
+                    continue
+
+                # Success — persist and emit.
+                succeeded += 1
+                await self._upsert_price(
+                    product_id, retailer_id, best_listing, now
+                )
+                for listing in response.listings:
+                    history_time = now + timedelta(microseconds=history_offset)
+                    history_offset += 1
+                    await self._append_price_history(
+                        product_id, retailer_id, listing, history_time
+                    )
+
+                price_payload = {
+                    "retailer_id": retailer_id,
+                    "retailer_name": retailer_name,
+                    "price": best_listing.price,
+                    "original_price": best_listing.original_price,
+                    "currency": best_listing.currency or "USD",
+                    "url": best_listing.url or None,
+                    "condition": best_listing.condition or "new",
+                    "is_available": (
+                        best_listing.is_available
+                        if best_listing.is_available is not None
+                        else True
+                    ),
+                    "is_on_sale": (
+                        best_listing.original_price is not None
+                        and best_listing.price < best_listing.original_price
+                    ),
+                    "last_checked": now.isoformat(),
+                    "relevance_score": relevance,
+                }
+                prices_data.append(price_payload)
+                retailer_results.append(
+                    {
+                        "retailer_id": retailer_id,
+                        "retailer_name": retailer_name,
+                        "status": "success",
+                    }
+                )
+                yield (
+                    "retailer_result",
+                    {
+                        "retailer_id": retailer_id,
+                        "retailer_name": retailer_name,
+                        "status": "success",
+                        "price": price_payload,
+                    },
+                )
+
+            await self.db.flush()
+        except asyncio.CancelledError:
+            # Client disconnected — cancel pending tasks and propagate.
+            for t in tasks:
+                t.cancel()
+            raise
+        except Exception as e:
+            logger.exception("stream_prices pipeline error")
+            yield ("error", {"code": "STREAM_ERROR", "message": str(e)})
+            return
+
+        # Sort + cache the aggregate (same shape get_prices builds).
+        prices_data.sort(key=lambda p: p["price"])
+        _status_order = {"success": 0, "no_match": 1, "unavailable": 2}
+        retailer_results.sort(
+            key=lambda r: (
+                _status_order.get(r["status"], 99),
+                r["retailer_name"],
+            )
+        )
+
+        final = {
+            "product_id": str(product_id),
+            "product_name": product.name,
+            "prices": prices_data,
+            "retailer_results": retailer_results,
+            "total_retailers": len(ids),
+            "retailers_succeeded": succeeded,
+            "retailers_failed": failed,
+            "cached": False,
+            "fetched_at": now.isoformat(),
+        }
+        await self._cache_to_redis(product_id, final)
+
+        yield (
+            "done",
+            {
+                "product_id": str(product_id),
+                "product_name": product.name,
+                "total_retailers": len(ids),
+                "retailers_succeeded": succeeded,
+                "retailers_failed": failed,
+                "cached": False,
+                "fetched_at": now.isoformat(),
+            },
+        )
 
     # MARK: - Private Helpers
 

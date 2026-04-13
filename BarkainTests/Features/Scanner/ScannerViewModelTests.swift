@@ -212,4 +212,165 @@ final class ScannerViewModelTests: XCTestCase {
         XCTAssertEqual(mockClient.getPricesCallCount, 0)
         XCTAssertNil(viewModel.priceComparison)
     }
+
+    // MARK: - Streaming Tests (Step 2c)
+
+    private func makePriceUpdate(
+        retailerId: String,
+        retailerName: String,
+        price: Double,
+        status: RetailerResult.Status = .success
+    ) -> RetailerStreamEvent {
+        let priceObj: RetailerPrice? = status == .success
+            ? RetailerPrice(
+                retailerId: retailerId,
+                retailerName: retailerName,
+                price: price,
+                originalPrice: nil,
+                currency: "USD",
+                url: "https://\(retailerId).com/p",
+                condition: "new",
+                isAvailable: true,
+                isOnSale: false,
+                lastChecked: Date()
+            )
+            : nil
+        return .retailerResult(RetailerResultUpdate(
+            retailerId: retailerId,
+            retailerName: retailerName,
+            status: status,
+            price: priceObj
+        ))
+    }
+
+    private func makeDoneSummary(
+        total: Int = 3,
+        succeeded: Int = 3,
+        failed: Int = 0,
+        cached: Bool = false
+    ) -> RetailerStreamEvent {
+        .done(StreamSummary(
+            productId: TestFixtures.sampleProductId,
+            productName: "Sony WH-1000XM5",
+            totalRetailers: total,
+            retailersSucceeded: succeeded,
+            retailersFailed: failed,
+            cached: cached,
+            fetchedAt: Date()
+        ))
+    }
+
+    func test_fetchPrices_streams_results_incrementally() async {
+        // Given — prefetch product and configure stream events
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+        mockClient.streamPricesEvents = [
+            makePriceUpdate(retailerId: "walmart", retailerName: "Walmart", price: 289.99),
+            makePriceUpdate(retailerId: "amazon", retailerName: "Amazon", price: 298.00),
+            makePriceUpdate(retailerId: "best_buy", retailerName: "Best Buy", price: 329.99),
+            makeDoneSummary(total: 3, succeeded: 3, failed: 0),
+        ]
+
+        // When
+        await viewModel.fetchPrices()
+
+        // Then — all three retailers landed + done applied
+        XCTAssertEqual(viewModel.priceComparison?.retailerResults.count, 3)
+        XCTAssertEqual(viewModel.priceComparison?.prices.count, 3)
+        XCTAssertEqual(viewModel.priceComparison?.retailersSucceeded, 3)
+        XCTAssertEqual(viewModel.priceComparison?.cached, false)
+        XCTAssertFalse(viewModel.isPriceLoading)
+        // Stream was consumed (in addition to the original handleBarcodeScan fetch)
+        XCTAssertGreaterThanOrEqual(mockClient.streamPricesCallCount, 1)
+    }
+
+    func test_fetchPrices_stream_updates_sortedPrices_live() async {
+        // Given
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+        mockClient.streamPricesEvents = [
+            makePriceUpdate(retailerId: "amazon", retailerName: "Amazon", price: 350.00),
+            makePriceUpdate(retailerId: "walmart", retailerName: "Walmart", price: 289.99),
+            makeDoneSummary(total: 2, succeeded: 2),
+        ]
+
+        // When
+        await viewModel.fetchPrices()
+
+        // Then — cheapest (walmart) is first
+        XCTAssertEqual(viewModel.sortedPrices.first?.retailerId, "walmart")
+        XCTAssertEqual(viewModel.bestPrice?.retailerId, "walmart")
+        XCTAssertEqual(viewModel.bestPrice?.price, 289.99)
+    }
+
+    func test_fetchPrices_error_event_sets_priceError_and_clears_comparison() async {
+        // Given
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+        mockClient.streamPricesEvents = [
+            makePriceUpdate(retailerId: "amazon", retailerName: "Amazon", price: 298.00),
+            .error(StreamError(code: "STREAM_ERROR", message: "pipeline failed")),
+        ]
+
+        // When
+        await viewModel.fetchPrices()
+
+        // Then
+        XCTAssertNil(viewModel.priceComparison)
+        XCTAssertEqual(viewModel.priceError, .server("pipeline failed"))
+        XCTAssertFalse(viewModel.isPriceLoading)
+    }
+
+    func test_fetchPrices_stream_thrown_error_falls_back_to_batch() async {
+        // Given — stream finishes with a network error, batch endpoint returns success
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+        let getPricesCountBefore = mockClient.getPricesCallCount
+        mockClient.streamPricesEvents = []
+        mockClient.streamPricesError = .network(URLError(.timedOut))
+        mockClient.getPricesResult = .success(TestFixtures.samplePriceComparison)
+
+        // When
+        await viewModel.fetchPrices()
+
+        // Then — fallback hit the batch endpoint and result replaced any stream state
+        XCTAssertEqual(mockClient.getPricesCallCount, getPricesCountBefore + 1)
+        XCTAssertNotNil(viewModel.priceComparison)
+        XCTAssertEqual(viewModel.priceComparison?.prices.count, 3)
+        XCTAssertNil(viewModel.priceError)
+        XCTAssertFalse(viewModel.isPriceLoading)
+    }
+
+    func test_fetchPrices_stream_closes_without_done_falls_back() async {
+        // Given — stream yields no events and closes cleanly (no done event)
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+        let getPricesCountBefore = mockClient.getPricesCallCount
+        mockClient.streamPricesEvents = []
+        mockClient.streamPricesError = nil
+        mockClient.getPricesResult = .success(TestFixtures.samplePriceComparison)
+
+        // When
+        await viewModel.fetchPrices()
+
+        // Then — fallback was triggered because no done event arrived
+        XCTAssertEqual(mockClient.getPricesCallCount, getPricesCountBefore + 1)
+        XCTAssertNotNil(viewModel.priceComparison)
+    }
+
+    func test_fetchPrices_bestPrice_updates_when_cheaper_retailer_arrives() async {
+        // Given
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+        mockClient.streamPricesEvents = [
+            makePriceUpdate(retailerId: "amazon", retailerName: "Amazon", price: 399.00),
+            makePriceUpdate(retailerId: "best_buy", retailerName: "Best Buy", price: 349.99),
+            makePriceUpdate(retailerId: "walmart", retailerName: "Walmart", price: 289.99),
+            makeDoneSummary(total: 3, succeeded: 3),
+        ]
+
+        // When
+        await viewModel.fetchPrices()
+
+        // Then — the final best_price is the cheapest one
+        XCTAssertEqual(viewModel.bestPrice?.retailerId, "walmart")
+        XCTAssertEqual(viewModel.bestPrice?.price, 289.99)
+        XCTAssertNotNil(viewModel.maxSavings)
+        // maxSavings == highest - lowest == 399 - 289.99
+        XCTAssertEqual(viewModel.maxSavings!, 109.01, accuracy: 0.01)
+    }
 }
