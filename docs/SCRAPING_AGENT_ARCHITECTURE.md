@@ -2029,11 +2029,11 @@ Rejects iPhone 16 → iPhone 16 Pro/Plus/Pro Max, iPad Pro → iPad Air, PS5 Sli
 
 Retailers with zero survivors yield a `no_match` status (Appendix G) rather than a misleadingly cheap wrong product.
 
-### F.5 Known limitations (not yet addressed)
+### F.5 Known limitations
 
-- **Generation-without-digit.** "Samsung Galaxy Buds Pro" (1st gen) has no digit in its name and matches any later "Galaxy Buds N Pro" via token overlap. Requires Gemini to emit an explicit `(1st gen)` tag.
-- **GPU SKUs.** `RTX 4090` vs `RTX 4080` — no current pattern matches `\b[A-Z]{2,5}\s+\d{3,5}\b` (letter group + space + digit group). Add a pattern 6 if GPUs become a demo category.
-- **Pro vs Pro Max within the variant set.** Currently both are recognised as variants, and `{pro} != {pro, max}` does reject Pro Max for a Pro query — but only because both are in `_VARIANT_TOKENS`. If a new variant word isn't in the set, it won't participate in the equality check.
+- **Generation-without-digit.** ~~"Samsung Galaxy Buds Pro" (1st gen) has no digit in its name and matches any later "Galaxy Buds N Pro" via token overlap. Requires Gemini to emit an explicit `(1st gen)` tag.~~ **(Resolved in Step 2b-final — 2026-04-13.)** The Gemini system instruction now emits a `model` field like `"Galaxy Buds Pro (1st Gen)"` that is stored in `products.source_raw.gemini_model` and union'd into the scorer's token set. A new `_ORDINAL_TOKENS` frozenset (`{"1st", "2nd", …, "10th"}`) is checked for set-equality between product and listing (Rule 2b), so a product carrying `{1st}` rejects a listing with `{}` ordinals.
+- **GPU SKUs.** ~~`RTX 4090` vs `RTX 4080` — no current pattern matches `\b[A-Z]{2,5}\s+\d{3,5}\b` (letter group + space + digit group).~~ **(Resolved in Step 2b-final — 2026-04-13.)** `_MODEL_PATTERNS[5]` added (letter group + space + digit group, e.g. `RTX 4090`, `GTX 1080`, `RX 7900`). Combined with the Gemini `model` field emitting the clean model identifier, the hard gate fires at the word-boundary-anchored regex and rejects `RTX 4080` listings for an `RTX 4090` product.
+- **Pro vs Pro Max within the variant set.** Currently both are recognised as variants, and `{pro} != {pro, max}` does reject Pro Max for a Pro query — but only because both are in `_VARIANT_TOKENS`. If a new variant word isn't in the set, it won't participate in the equality check. **(Still load-bearing — extend `_VARIANT_TOKENS` when new variant words surface in the wild.)**
 
 ---
 

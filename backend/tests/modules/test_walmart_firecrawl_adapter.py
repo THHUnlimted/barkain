@@ -220,3 +220,45 @@ def test_walmart_first_party_filter_disabled():
 
     listings = extract_listings(html, first_party_only=False)
     assert len(listings) == 2
+
+
+# MARK: - Carrier Listing Filter (Step 2b-final)
+
+
+def test_is_carrier_listing_detects_att():
+    """AT&T-branded listing title is flagged as a carrier installment offer."""
+    from modules.m2_prices.adapters._walmart_parser import _is_carrier_listing
+
+    assert _is_carrier_listing("AT&T iPhone 16 Pro 256GB", "") is True
+
+
+def test_is_carrier_listing_detects_monthly_price():
+    """Monthly installment price ($X/mo) in title is flagged regardless of carrier name."""
+    from modules.m2_prices.adapters._walmart_parser import _is_carrier_listing
+
+    assert _is_carrier_listing("Apple iPhone 16 $33.33/mo", "") is True
+
+
+def test_is_carrier_listing_detects_verizon_url():
+    """Carrier-marker in URL path is flagged even when title looks clean."""
+    from modules.m2_prices.adapters._walmart_parser import _is_carrier_listing
+
+    assert (
+        _is_carrier_listing(
+            "iPhone 16 Pro", "https://walmart.com/ip/Verizon-iPhone-16-Pro/12345"
+        )
+        is True
+    )
+
+
+def test_is_carrier_listing_passes_unlocked_phone():
+    """Unlocked retail listing (no carrier, no /mo) is not flagged."""
+    from modules.m2_prices.adapters._walmart_parser import _is_carrier_listing
+
+    assert (
+        _is_carrier_listing(
+            "Apple iPhone 16 Pro Max 256GB Unlocked",
+            "https://walmart.com/ip/Apple-iPhone-16-Pro-Max-256GB/12345",
+        )
+        is False
+    )

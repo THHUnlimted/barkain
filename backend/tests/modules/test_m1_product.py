@@ -315,8 +315,8 @@ async def test_resolve_same_upc_twice_uses_cache(
 @pytest.mark.asyncio
 async def test_gemini_null_retry_then_success(client, db_session, fake_redis):
     """Given Gemini returns null on first attempt, retry succeeds on second."""
-    null_response = {"device_name": None}
-    success_response = {"device_name": "Sony WH-1000XM5 Wireless Headphones"}
+    null_response = {"device_name": None, "model": None}
+    success_response = {"device_name": "Sony WH-1000XM5 Wireless Headphones", "model": "WH-1000XM5"}
 
     with (
         patch(
@@ -343,7 +343,7 @@ async def test_gemini_null_retry_both_null_falls_to_upcitemdb(
     client, db_session, fake_redis
 ):
     """Given Gemini returns null twice, falls through to UPCitemdb."""
-    null_response = {"device_name": None}
+    null_response = {"device_name": None, "model": None}
     upcitemdb_result = {
         "name": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
         "brand": "Sony",
@@ -379,7 +379,10 @@ CROSS_UPC = "194253397953"
 @pytest.mark.asyncio
 async def test_cross_validate_both_agree(client, db_session, fake_redis):
     """When Gemini and UPCitemdb agree on brand, Gemini name wins with confidence=1.0."""
-    gemini_response = {"device_name": "Sony WH-1000XM5 Wireless Headphones (WH1000XM5/B)"}
+    gemini_response = {
+        "device_name": "Sony WH-1000XM5 Wireless Headphones (WH1000XM5/B)",
+        "model": "WH-1000XM5",
+    }
     upcitemdb_result = {
         "name": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
         "brand": "Sony",
@@ -414,7 +417,10 @@ async def test_cross_validate_both_agree(client, db_session, fake_redis):
 @pytest.mark.asyncio
 async def test_cross_validate_brand_mismatch(client, db_session, fake_redis):
     """When Gemini and UPCitemdb disagree on brand, UPCitemdb wins with confidence=0.5."""
-    gemini_response = {"device_name": "Energizer CR2032 Lithium Battery Pack"}
+    gemini_response = {
+        "device_name": "Energizer CR2032 Lithium Battery Pack",
+        "model": "CR2032",
+    }
     upcitemdb_result = {
         "name": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
         "brand": "Sony",
@@ -448,7 +454,10 @@ async def test_cross_validate_brand_mismatch(client, db_session, fake_redis):
 @pytest.mark.asyncio
 async def test_cross_validate_gemini_only(client, db_session, fake_redis):
     """When UPCitemdb returns nothing, Gemini wins with confidence=0.7."""
-    gemini_response = {"device_name": "Sony WH-1000XM5 Wireless Headphones"}
+    gemini_response = {
+        "device_name": "Sony WH-1000XM5 Wireless Headphones",
+        "model": "WH-1000XM5",
+    }
 
     with (
         patch(
@@ -509,7 +518,7 @@ async def test_cross_validate_both_fail(client, db_session, fake_redis):
         patch(
             "modules.m1_product.service.gemini_generate_json",
             new_callable=AsyncMock,
-            return_value={"device_name": None},
+            return_value={"device_name": None, "model": None},
         ),
         patch(
             "modules.m1_product.service.upcitemdb_lookup",
@@ -555,3 +564,85 @@ async def test_redis_cache_skips_cross_validation(
     assert data["confidence"] == 1.0
     mock_gemini.assert_not_called()
     mock_upcitemdb.assert_not_called()
+
+
+# MARK: - Gemini model field (Step 2b-final)
+
+
+@pytest.mark.asyncio
+async def test_resolve_exposes_gemini_model_field(client, db_session, fake_redis):
+    """When Gemini returns a model field, it is stored in source_raw and exposed on the response."""
+    gemini_response = {
+        "device_name": "Sony WH-1000XM5 Wireless Noise Canceling Headphones (WH1000XM5/B)",
+        "model": "WH-1000XM5",
+    }
+    upcitemdb_result = {
+        "name": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+        "brand": "Sony",
+        "category": "Electronics > Audio > Headphones",
+        "description": "Premium noise canceling headphones.",
+        "asin": "B09XS7JWHH",
+        "image_url": "https://example.com/image.jpg",
+    }
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_response,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=upcitemdb_result,
+        ),
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": CROSS_UPC})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["model"] == "WH-1000XM5"
+    assert data["source"] == "gemini_validated"
+
+    # Verify the DB row actually persisted gemini_model in source_raw
+    from sqlalchemy import select
+
+    from modules.m1_product.models import Product as ProductModel
+
+    db_row = (
+        await db_session.execute(
+            select(ProductModel).where(ProductModel.upc == CROSS_UPC)
+        )
+    ).scalar_one()
+    assert db_row.source_raw is not None
+    assert db_row.source_raw.get("gemini_model") == "WH-1000XM5"
+    assert db_row.model == "WH-1000XM5"  # @property reads source_raw.gemini_model
+
+
+@pytest.mark.asyncio
+async def test_resolve_handles_null_gemini_model(client, db_session, fake_redis):
+    """When Gemini returns model: null, resolution still succeeds and model is None in response."""
+    gemini_response = {
+        "device_name": "Sony WH-1000XM5 Wireless Headphones",
+        "model": None,
+    }
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_response,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": CROSS_UPC})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["model"] is None
+    assert data["name"] == "Sony WH-1000XM5 Wireless Headphones"
+    assert data["source"] == "gemini_upc"

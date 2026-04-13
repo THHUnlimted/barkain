@@ -35,6 +35,7 @@ class ProductResponse(BaseModel):
     upc: str | None
     asin: str | None
     name: str
+    model: str | None = None
     brand: str | None
     category: str | None
     description: str | None
@@ -44,7 +45,7 @@ class ProductResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "protected_namespaces": ()}
 
 
 # MARK: - Error
