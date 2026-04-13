@@ -103,6 +103,10 @@ _MODEL_PATTERNS = [
     # Brand camelCase + digit (e.g. "AirPods 2", "PlayStation 5", "MacBook 14").
     # Two title-case segments joined with no space (brand name camelCasing), then digit.
     re.compile(r'\b[A-Z][a-z]+[A-Z][a-z]+\s+\d+[A-Z]?\b'),
+    # GPU-style: 2-5 uppercase letters + space + 3-5 digits (RTX 4090, GTX 1080, RX 7900).
+    # Fed by Gemini's new `model` field — distinguishes RTX 4090 from RTX 4080 at the
+    # hard-gate layer since the ident_to_regex is word-bounded.
+    re.compile(r'\b[A-Z]{2,5}\s+\d{3,5}\b'),
 ]
 
 # Variant / sub-model discriminator words. If two titles disagree on which of
@@ -115,6 +119,17 @@ _VARIANT_TOKENS = frozenset({
     "se", "xl",
     "cellular", "wifi", "gps",
     "oled",
+})
+
+# Ordinal/generation marker tokens. Gemini's `model` field emits "(1st Gen)" for
+# 1st-gen products that would otherwise token-overlap with later generations
+# (e.g. "Galaxy Buds Pro (1st Gen)" vs "Galaxy Buds 2 Pro"). If product and
+# listing disagree on which ordinals they contain, they are different generations.
+# Symmetric — protects both directions. Trade-off: a real 1st-gen product whose
+# retailer listing omits the "1st Gen" marker will fail this rule; in practice
+# Gemini emits the marker only when it's load-bearing.
+_ORDINAL_TOKENS = frozenset({
+    "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th",
 })
 
 # NOTE: Size/spec patterns (256GB, 27", 11-inch) used to be in _MODEL_PATTERNS,
@@ -224,12 +239,27 @@ def _score_listing_relevance(listing_title: str, product: Product) -> float:
     2. Variant token equality: if product and listing differ in which variant
        words they contain ({pro, plus, max, mini, disc, digital, ...}), they're
        different SKUs — reject.
+    2b. Ordinal equality: same check over generation markers (1st / 2nd / 3rd …)
+        fed by Gemini's `model` field.
     3. Brand match: product.brand must appear in listing title.
     4. Token overlap tiebreaker: |intersection| / |product_tokens|.
     """
     clean_name = _clean_product_name(product.name)
     product_identifiers = _extract_model_identifiers(clean_name)
     product_tokens_set = _tokenize(clean_name)
+
+    # Pull Gemini's richer `model` identifier from source_raw if present.
+    # The model field adds generation markers ("1st Gen"), clean model numbers
+    # ("RTX 4090"), and capacity ("256GB") that product.name may lack. Union
+    # identifiers + tokens so downstream rules see both signals.
+    gemini_model = None
+    if product.source_raw and isinstance(product.source_raw, dict):
+        gemini_model = product.source_raw.get("gemini_model")
+    if gemini_model:
+        clean_model = _clean_product_name(gemini_model)
+        product_identifiers = product_identifiers + _extract_model_identifiers(clean_model)
+        product_tokens_set = product_tokens_set | _tokenize(clean_model)
+
     title_lower = listing_title.lower()
     listing_tokens = _tokenize(listing_title)
 
@@ -250,7 +280,16 @@ def _score_listing_relevance(listing_title: str, product: Product) -> float:
     if product_variants != listing_variants:
         return 0.0
 
-    # Rule 2: Brand match (skip if brand is unknown)
+    # Rule 2b: Ordinal/generation marker equality. Gemini's `model` field emits
+    # "(1st Gen)" for 1st-gen products that would otherwise token-overlap with
+    # later generations. {1st} != {} rejects "Galaxy Buds 2 Pro" for a
+    # "Galaxy Buds Pro (1st Gen)" query. Symmetric.
+    product_ordinals = product_tokens_set & _ORDINAL_TOKENS
+    listing_ordinals = listing_tokens & _ORDINAL_TOKENS
+    if product_ordinals != listing_ordinals:
+        return 0.0
+
+    # Rule 3: Brand match (skip if brand is unknown)
     if product.brand:
         clean_brand = _BRAND_SUFFIXES.sub("", product.brand).strip()
         if clean_brand and clean_brand.lower() not in title_lower:

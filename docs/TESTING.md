@@ -391,8 +391,9 @@ Update this table after every step:
 | Scan-to-Prices Live Demo (2026-04-10) | 128 | 21 | 0 | 0 | **0 new** — live validation session, not a code-gen step. 7 live-run bugs fixed but no tests added; test gap documented below and deferred to Step 2b |
 | Step 2b | 152 | 21 | 0 | 0 | 24 (cross_validation×6: gemini→upcitemdb second-opinion, confidence scoring, category mismatch detection, fallback trigger, cache invalidation on correction, wrong-product rejection + relevance_scoring×8: model_number_hard_gate×2, brand_match×2, token_overlap×2, threshold_filter×1, pick_best_with_scoring×1 + walmart_first_party×4: first_party_filter×2, sponsored_exclusion×1, seller_name_extraction×1) + 6 integration tests with skip guard |
 | Step 2b-val Live Validation (2026-04-12) | 152 | 21 | 0 | 0 | **0 new** — live validation session, 3 extract.js + regex fixes landed without new tests. See `Barkain Prompts/Step_2b_val_Results.md`. Same gap as Scan-to-Prices Live Demo; real-API smoke tests deferred to a dedicated CI step |
-| Post-2b-val Hardening (2026-04-12) | 152 | 21 | 0 | 0 | **0 new**, 1 existing test updated (`test_walmart_http_adapter::test_fetch_walmart_success_returns_listings` now asserts `Restored → refurbished` instead of `used`). Session added: per-retailer status system, sub-variant hard gate, Amazon refurb + installment fixes, supplier-code cleanup, accessory filter, manual UPC entry — all live-validated against real Amazon/Walmart/Best Buy but not unit-tested. **Covering these with real-API smoke tests is the most load-bearing test-debt item carried into Step 2c.** See CLAUDE.md § "Post-2b-val hardening COMPLETE" |
-| **Total** | **152** | **21** | **0** | **0** | |
+| Post-2b-val Hardening (2026-04-12) | 152 | 21 | 0 | 0 | **0 new**, 1 existing test updated (`test_walmart_http_adapter::test_fetch_walmart_success_returns_listings` now asserts `Restored → refurbished` instead of `used`). Session added: per-retailer status system, sub-variant hard gate, Amazon refurb + installment fixes, supplier-code cleanup, accessory filter, manual UPC entry — all live-validated against real Amazon/Walmart/Best Buy but not unit-tested. Test-debt paid down in Step 2b-final. See CLAUDE.md § "Post-2b-val hardening COMPLETE" |
+| Step 2b-final (2026-04-13) | 181 | 21 | 0 | 0 | 35 new: M1 model-field×2 (resolve_exposes_gemini_model + resolve_handles_null_gemini_model), M2 gemini_model relevance×5 (generation_marker×2, gpu_model×2, backward_compat×1), hardening×24 (clean_product_name×4, is_accessory×4, ident_to_regex×3, variant_equality×2, classify_error×2 + 8-code parametrize, retailer_results_e2e×1), carrier-listing×4. Paid down the "most load-bearing test-debt item" from post-2b-val. `_MODEL_PATTERNS[5]` + `_ORDINAL_TOKENS` added for GPU + generation-marker scoring. |
+| **Total** | **181** | **21** | **0** | **0** | |
 
 ---
 
@@ -415,14 +416,23 @@ Every integration test is decorated with:
 @pytest.mark.integration
 ```
 
-The `conftest.py` at `backend/tests/integration/` registers the marker and auto-skips when `BARKAIN_RUN_INTEGRATION_TESTS` is not set to `1`:
+The marker is registered in `backend/pyproject.toml` via `[tool.pytest.ini_options]` → `markers`. The individual skip guard lives on `test_real_api_contracts.py` itself as a module-level `pytestmark` check for `BARKAIN_RUN_INTEGRATION_TESTS`.
+
+`backend/tests/integration/conftest.py` (added in Step 2b-final) auto-loads `.env` into `os.environ` when `BARKAIN_RUN_INTEGRATION_TESTS=1`, so developers no longer need `set -a && source ../.env && set +a` before every run:
+
 ```python
-def pytest_collection_modifyitems(config, items):
-    if not os.environ.get("BARKAIN_RUN_INTEGRATION_TESTS") == "1":
-        skip = pytest.mark.skip(reason="Set BARKAIN_RUN_INTEGRATION_TESTS=1 to run")
-        for item in items:
-            if "integration" in item.keywords:
-                item.add_marker(skip)
+def pytest_configure(config):
+    if os.environ.get("BARKAIN_RUN_INTEGRATION_TESTS") != "1":
+        return
+    env_path = Path(__file__).resolve().parents[3] / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 ```
 
 ### Why separate from unit tests
@@ -465,9 +475,12 @@ Every adapter and every retailer container must have a companion real-API smoke 
 | Future Keepa adapter | n/a | Nightly GET against real Keepa API |
 | Future UPCitemdb fallback | n/a | Nightly GET against real UPCitemdb API |
 
+**Step 2b-final partial paydown (2026-04-13):** `_clean_product_name`, `_is_accessory_listing`, `_ident_to_regex`, `_classify_error_status`, `retailer_results` construction, `_is_carrier_listing`, and the new `gemini_model` relevance path all now have dedicated unit coverage in `test_m2_prices.py` and `test_walmart_firecrawl_adapter.py`. The real-API smoke tests in `test_real_api_contracts.py` remain the definitive check against schema drift and real subprocess boundaries.
+
 ### Cadence and enforcement
 
-- **Nightly** in CI against the real endpoints, not every push (cost + rate limits).
+- **Every PR** touching `backend/**` or `containers/**` runs unit tests via `.github/workflows/backend-tests.yml` (added Step 2b-final). TimescaleDB + Redis service containers, fake API keys, `BARKAIN_DEMO_MODE=1`.
+- **Nightly** in CI against the real endpoints, not every push (cost + rate limits). Still to wire up.
 - Alert on failure via Slack / email / PagerDuty.
 - A smoke test failure is **not a build break** but creates a P1 issue for the next morning.
 - These tests do **not** replace the respx unit tests — unit tests stay fast and run on every push. Smoke tests catch schema drift and environmental regressions the unit tests can't see.

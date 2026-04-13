@@ -282,6 +282,7 @@ This project uses a **two-tier AI workflow:**
 **Step 2b-val — Live Validation Pass: COMPLETE** ✅ (2026-04-12, branch `phase-2/step-2b`)
 **Post-2b-val — Simulator + Relevance + Retailer-Status Hardening: COMPLETE** ✅ (2026-04-12)
 **Chore — CHANGELOG.md created, CLAUDE.md slimmed from ~74K → ≤35K chars** ✅ (2026-04-13)
+**Step 2b-final — Close Out (Gemini model field + post-2b-val test coverage + CI + EC2 verification): COMPLETE** ✅ (2026-04-13)
 
 - AI abstraction: ✅ (Gemini + Claude Opus)
 - Watchdog supervisor: ✅ (nightly health checks, self-healing via Opus)
@@ -314,7 +315,7 @@ This project uses a **two-tier AI workflow:**
 - Rate limiting: ✅ (Redis sliding window, per-user, 3 tiers)
 - Retailer seed: ✅ (11 Phase 1 retailers)
 - AI abstraction layer: ✅ (`backend/ai/abstraction.py` — google-genai async, thinking + grounding)
-- UPC lookup prompt: ✅ (`backend/ai/prompts/upc_lookup.py` — cached system prompt, returns `device_name`)
+- UPC lookup prompt: ✅ (`backend/ai/prompts/upc_lookup.py` — cached system prompt, returns `device_name` + `model` shortest unambiguous identifier)
 - M1 Product resolution: ✅ (POST `/api/v1/products/resolve` — Gemini + UPCitemdb cross-validation, Redis 24hr cache)
 - Container template: ✅ (`containers/template/`)
 - Container Dockerfile: ✅ (Chromium + agent-browser + Xvfb + FastAPI)
@@ -339,8 +340,8 @@ This project uses a **two-tier AI workflow:**
 - iOS price comparison UI: ✅ (PriceComparisonView — per-retailer status rows for all 11 retailers)
 - iOS scan→compare flow: ✅ (full demo loop)
 
-**Test counts:** 146 backend (146 passed / 6 skipped), 21 iOS unit, 0 UI, 0 snapshot.
-**Build status:** Backend + iOS build clean. Backend serves health + product resolve + price comparison + retailer health endpoints; Amazon + Best Buy containers on EC2 `t3.xlarge`; Walmart via Firecrawl v2 adapter; iOS scans barcode → resolves via Gemini → fetches 3 retailers → displays comparison on physical iPhone in ~90–120 s. `ruff check` clean. Manual entry sheet functional on simulator.
+**Test counts:** 181 backend (181 passed / 6 skipped), 21 iOS unit, 0 UI, 0 snapshot.
+**Build status:** Backend + iOS build clean. Backend serves health + product resolve + price comparison + retailer health endpoints; Amazon + Best Buy containers on EC2 `t3.xlarge`; Walmart via Firecrawl v2 adapter; iOS scans barcode → resolves via Gemini → fetches 3 retailers → displays comparison on physical iPhone in ~90–120 s. `ruff check` clean. Manual entry sheet functional on simulator. GitHub Actions backend-tests workflow runs unit tests on every PR touching `backend/**` or `containers/**`.
 
 **Live demo runtime profile (2026-04-10, physical iPhone):**
 - Gemini UPC resolve: 2–4 s
@@ -383,14 +384,18 @@ This project uses a **two-tier AI workflow:**
    - Variant-token equality check (kills iPhone 16 → iPhone 16 Pro/Plus/Max matches, PS5 Slim Disc → Digital Edition, iPad Pro → iPad Air).
    - camelCase model regex patterns 6 + 7 (AirPods 2, PlayStation 5, MacBook 14, iPhone/iPad).
    - Amazon + Best Buy + Walmart: condition detection, carrier/installment filter, $X/mo stripping.
-7. **Remaining pre-fixes (not blockers):**
+7. **Step 2b-final COMPLETE** (2026-04-13) — closes PR #3 loose ends before merge to main:
+   - Gemini system instruction upgraded to emit `device_name` + `model` (shortest unambiguous identifier). `model` is threaded through `_cross_validate` → `source_raw.gemini_model` → `ProductResponse.model` → `_score_listing_relevance`.
+   - `_MODEL_PATTERNS[5]` (GPU `\b[A-Z]{2,5}\s+\d{3,5}\b`) + `_ORDINAL_TOKENS` equality rule fix the F.5 generation-without-digit and GPU-SKU limitations.
+   - 35 new unit tests: 2 M1 model-field, 5 M2 gemini_model relevance, 24 post-2b-val hardening (`_clean_product_name`, `_is_accessory_listing`, `_ident_to_regex`, variant equality, `_classify_error_status`, retailer_results end-to-end), 4 carrier-listing. `TESTING.md` "most load-bearing test-debt item" paid down.
+   - `.github/workflows/backend-tests.yml` runs unit tests on every PR touching `backend/**` or `containers/**`. TimescaleDB + Redis services, fake API keys, `BARKAIN_DEMO_MODE=1`. Integration tests remain gated on `BARKAIN_RUN_INTEGRATION_TESTS=1`.
+   - `scripts/ec2_deploy.sh` appends MD5 comparison of each container's `/app/extract.js` against the repo copy — makes hot-patch drift visible on next deploy.
+   - `backend/tests/integration/conftest.py` auto-loads `.env` when `BARKAIN_RUN_INTEGRATION_TESTS=1`. `test_upcitemdb_lookup` opt-out via `UPCITEMDB_SKIP=1`.
+8. **Remaining pre-fixes (not blockers):**
    - **Backfill fd-3 stdout pattern (SP-L2):** 8 retailer extract.sh files still have latent bug — must be fixed before those retailers go live.
-   - **Rotate leaked GitHub PAT (SP-L1):** `gho_UUsp9ML…` in `~/barkain/.git/config` on EC2.
-   - **Redeploy EC2 containers (2b-val-L1):** run `scripts/ec2_deploy.sh` to sync `i-09ce25ed6df7a09b2` with the repo — currently hot-patched via `docker cp` for `amazon/extract.js`, `bestbuy/extract.js`, and `bestbuy/base-extract.sh`. Next stop+start without redeploy will revert.
+   - **Redeploy EC2 containers (2b-val-L1):** run `scripts/ec2_deploy.sh` to sync `i-09ce25ed6df7a09b2` with the repo — currently hot-patched via `docker cp` for `amazon/extract.js`, `bestbuy/extract.js`, and `bestbuy/base-extract.sh`. Next stop+start without redeploy will revert. Post-deploy MD5 verification block now flags drift automatically.
    - **Streaming per-retailer results (SP-L7 / 2b-val-L2):** iOS progressive loading is cosmetic — real streaming to iPhone instead of blocking needed for production UX, and is also the real fix for Best Buy's 91s leg.
-   - **Generation-without-digit matching:** "Samsung Galaxy Buds Pro" (1st gen) still token-overlaps with "Galaxy Buds 2 Pro" because the 1st gen product name has no digit to distinguish it. Requires Gemini to emit explicit `(1st gen)` or a richer product taxonomy.
-   - **GPU letter-space-digit pattern:** RTX 4090 vs RTX 4080 still relies on token overlap because no current `_MODEL_PATTERN` matches `\b[A-Z]{2,5}\s+\d{3,5}\b`. Add if GPU SKUs become a demo category.
-8. **Phase 2 continues:** Step 2c (M5 Identity Profile) or Step 2d (streaming per-retailer results to iPhone).
+9. **Phase 2 continues:** Step 2c (M5 Identity Profile) or Step 2d (streaming per-retailer results to iPhone).
 
 ---
 
@@ -403,6 +408,8 @@ This project uses a **two-tier AI workflow:**
 > - Walmart adapter: `WALMART_ADAPTER` env var routes to container/firecrawl/decodo
 > - fd-3 stdout convention: all extract.sh files must use `exec 3>&1; exec 1>&2`
 > - EXTRACT_TIMEOUT: 180s default, env-overridable
-> - Relevance scoring: model-number hard gate + brand match + 0.4 token overlap threshold
+> - Relevance scoring: model-number hard gate + variant-token equality + ordinal equality + brand match + 0.4 token overlap threshold
 > - UPCitemdb cross-validation: always called alongside Gemini, brand agreement picks winner
 > - Product-match relevance: required before any user-facing demo
+> - Gemini output: `device_name` + `model` (shortest unambiguous identifier — generation markers, capacity, GPU SKUs); `model` is stored in `source_raw.gemini_model` and feeds relevance scoring
+> - CI: `.github/workflows/backend-tests.yml` runs unit tests on every PR touching `backend/**` or `containers/**`; integration tests stay behind `BARKAIN_RUN_INTEGRATION_TESTS=1`

@@ -133,11 +133,16 @@ class ProductResolutionService:
 
         product_data, confidence, source_label = result
 
+        # Pull gemini_model out of product_data so it doesn't leak into
+        # _persist_product (Product has no `model` column — it lives in source_raw).
+        gemini_model = product_data.pop("gemini_model", None)
+
         # Store both raw responses and confidence in source_raw.
         # Use shallow copies to avoid circular references (product_data may
         # BE one of the raw dicts when _cross_validate returns it directly).
         product_data["source_raw"] = {
             "confidence": confidence,
+            "gemini_model": gemini_model,
             "gemini_raw": dict(gemini_data) if gemini_data else None,
             "upcitemdb_raw": dict(upcitemdb_data) if upcitemdb_data else None,
         }
@@ -161,6 +166,7 @@ class ProductResolutionService:
             )
 
             device_name = raw.get("device_name")
+            model = raw.get("model")
 
             # Retry once with broader prompt if null
             if not device_name:
@@ -171,12 +177,13 @@ class ProductResolutionService:
                     system_instruction=UPC_LOOKUP_SYSTEM_INSTRUCTION,
                 )
                 device_name = raw.get("device_name")
+                model = raw.get("model")
 
             if not device_name:
                 logger.info("Gemini could not identify UPC %s after retry", upc)
                 return None
 
-            return {"name": device_name}
+            return {"name": device_name, "gemini_model": model}
         except Exception:
             logger.warning(
                 "Gemini resolution failed for UPC %s", upc, exc_info=True
@@ -216,6 +223,7 @@ class ProductResolutionService:
                 return (
                     {
                         "name": gemini_name,
+                        "gemini_model": gemini_data.get("gemini_model"),
                         "brand": upcitemdb_data.get("brand"),
                         "category": upcitemdb_data.get("category"),
                         "description": upcitemdb_data.get("description"),

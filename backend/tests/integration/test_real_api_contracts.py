@@ -148,7 +148,10 @@ async def test_best_buy_container_extract():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not UPCITEMDB_API_KEY, reason="UPCITEMDB_API_KEY not set")
+@pytest.mark.skipif(
+    os.environ.get("UPCITEMDB_SKIP") == "1",
+    reason="Set UPCITEMDB_SKIP=1 to opt out; trial endpoint works without a key",
+)
 async def test_upcitemdb_lookup():
     """Known UPC returns product with brand field via UPCitemdb API."""
     from modules.m1_product.upcitemdb import lookup_upc

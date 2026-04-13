@@ -130,3 +130,33 @@ if [ "$ALL_HEALTHY" = true ]; then
 else
     echo "Some containers unhealthy. Check logs: docker logs <container_name>"
 fi
+
+# ── Post-Deploy Verification (Step 2b-final) ─────────────────────
+# Compare MD5 of extract.js inside each running container against the repo
+# copy so a previous `docker cp` hot-patch is visible. Fixes 2b-val-L1 where
+# amazon/best_buy/walmart extract.js was hot-patched on EC2 and silently
+# reverted on the next stop+start.
+
+echo ""
+echo "========================================="
+echo "  Post-Deploy Verification"
+echo "========================================="
+
+for pair in $RETAILERS; do
+    retailer="${pair%%:*}"
+    container_name="${retailer//_/}"
+
+    if [ ! -f "containers/${retailer}/extract.js" ]; then
+        echo "  [SKIP] ${retailer}: no extract.js in repo (uses extract.sh only)"
+        continue
+    fi
+
+    HASH=$(docker exec "${container_name}" md5sum /app/extract.js 2>/dev/null | cut -d' ' -f1 || echo "missing")
+    LOCAL_HASH=$(md5sum "containers/${retailer}/extract.js" | cut -d' ' -f1)
+
+    if [ "$HASH" = "$LOCAL_HASH" ]; then
+        echo "  [PASS] ${retailer}: extract.js matches repo (${LOCAL_HASH:0:12})"
+    else
+        echo "  [WARN] ${retailer}: extract.js STALE — container=${HASH:0:12} repo=${LOCAL_HASH:0:12}"
+    fi
+done
