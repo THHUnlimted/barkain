@@ -84,7 +84,7 @@
 
 | Feature | Status | Phase | Class | Data Source | Notes |
 |---------|--------|-------|-------|-------------|-------|
-| Barcode scanning (AVFoundation) | 🚧 | 1 | T | Native iOS since iOS 7. UPC sent to backend for resolution | Triggers full price comparison pipeline. Step 1g: scanner captures barcodes, resolves product via backend. Step 1h: scan → resolve → price comparison UI complete |
+| Barcode scanning (AVFoundation) | 🚧 | 1 | T | Native iOS since iOS 7. UPC sent to backend for resolution | Triggers full price comparison pipeline. Step 1g: scanner captures barcodes, resolves product via backend. Step 1h: scan → resolve → price comparison UI complete. Post-2b-val: `ScannerView` also exposes a `⌨️` toolbar button that opens a manual UPC entry sheet — same code path via `ScannerViewModel.handleBarcodeScan(upc:)` — used for simulator testing (no camera) and as a fallback for damaged/missing barcodes |
 | Image-based product identification | ⬜ | 3 | AI | Claude Sonnet vision via backend; no deterministic path | Camera → backend → Claude Vision → product resolution |
 | Receipt scanning (OCR → savings calc) | ⬜ | 3 | H | **On-device:** VisionKit `VNDocumentCameraViewController` (iOS 13+) for capture, Vision `VNRecognizeTextRequest` (iOS 13+) for text extraction. Backend receives structured text only (not images) — cost optimization | Code matches products + calcs savings (T) |
 | Product resolution (UPC → canonical) | 🚧 | 1 | H | Gemini API UPC lookup (primary, 4-6s, high accuracy, YC credits) → UPCitemdb API (backup, free 100/day) → PostgreSQL persistent + Redis cache (24hr TTL) | AI resolves barcode to product name/brand/category. Cached aggressively — most barcodes only looked up once. **Step 1b: backend service + endpoint operational** |

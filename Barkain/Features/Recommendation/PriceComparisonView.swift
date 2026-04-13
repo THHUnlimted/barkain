@@ -1,5 +1,21 @@
 import SwiftUI
 
+// MARK: - RetailerListRow
+
+private enum RetailerListRow: Identifiable {
+    case success(RetailerPrice)
+    case noMatch(RetailerResult)
+    case unavailable(RetailerResult)
+
+    var id: String {
+        switch self {
+        case .success(let price): return "s-" + price.id
+        case .noMatch(let result): return "n-" + result.retailerId
+        case .unavailable(let result): return "u-" + result.retailerId
+        }
+    }
+}
+
 // MARK: - PriceComparisonView
 
 struct PriceComparisonView: View {
@@ -18,25 +34,58 @@ struct PriceComparisonView: View {
                 ProductCard(product: product)
                 savingsSection
 
-                if viewModel.sortedPrices.isEmpty {
-                    EmptyState(
-                        icon: "bag.badge.questionmark",
-                        title: "No prices found",
-                        subtitle: "None of the \(comparison.totalRetailers) retailers had this product available.",
-                        actionTitle: "Refresh"
-                    ) {
-                        Task { await viewModel.fetchPrices(forceRefresh: true) }
-                    }
-                } else {
-                    sectionHeader
-                    priceList
-                }
+                sectionHeader
+                retailerList
 
                 statusBar
                 actionButtons
             }
             .padding(Spacing.lg)
         }
+    }
+
+    // MARK: - Row data
+
+    private var priceByRetailer: [String: RetailerPrice] {
+        Dictionary(uniqueKeysWithValues: viewModel.sortedPrices.map { ($0.retailerId, $0) })
+    }
+
+    /// Combined row list: success rows (sorted by price) first, then no_match, then unavailable.
+    /// Falls back to `sortedPrices` alone when the backend hasn't supplied retailer_results
+    /// (e.g. an old cached response decoded from Redis before the schema change).
+    private var allRetailerRows: [RetailerListRow] {
+        if comparison.retailerResults.isEmpty {
+            return viewModel.sortedPrices.map { .success($0) }
+        }
+
+        let lookup = priceByRetailer
+        var successRows: [RetailerListRow] = []
+        var noMatchRows: [RetailerListRow] = []
+        var unavailableRows: [RetailerListRow] = []
+
+        for result in comparison.retailerResults {
+            switch result.status {
+            case .success:
+                if let price = lookup[result.retailerId] {
+                    successRows.append(.success(price))
+                } else {
+                    // Status says success but price missing — treat as unavailable defensively.
+                    unavailableRows.append(.unavailable(result))
+                }
+            case .noMatch:
+                noMatchRows.append(.noMatch(result))
+            case .unavailable:
+                unavailableRows.append(.unavailable(result))
+            }
+        }
+
+        successRows.sort { lhs, rhs in
+            switch (lhs, rhs) {
+            case (.success(let a), .success(let b)): return a.price < b.price
+            default: return false
+            }
+        }
+        return successRows + noMatchRows + unavailableRows
     }
 
     // MARK: - Savings
@@ -60,24 +109,50 @@ struct PriceComparisonView: View {
         }
     }
 
-    // MARK: - Price List
+    // MARK: - Retailer List (all 11)
 
-    private var priceList: some View {
+    private var retailerList: some View {
         VStack(spacing: Spacing.xs) {
-            ForEach(Array(viewModel.sortedPrices.enumerated()), id: \.element.id) { index, retailerPrice in
-                Button {
-                    openRetailerURL(retailerPrice.url)
-                } label: {
-                    PriceRow(retailerPrice: retailerPrice)
+            ForEach(Array(allRetailerRows.enumerated()), id: \.element.id) { index, row in
+                Group {
+                    switch row {
+                    case .success(let retailerPrice):
+                        Button {
+                            openRetailerURL(retailerPrice.url)
+                        } label: {
+                            PriceRow(retailerPrice: retailerPrice)
+                        }
+                        .buttonStyle(.plain)
+                    case .noMatch(let result):
+                        inactiveRow(name: result.retailerName, label: "Not found")
+                    case .unavailable(let result):
+                        inactiveRow(name: result.retailerName, label: "Unavailable")
+                    }
                 }
-                .buttonStyle(.plain)
                 .overlay(alignment: .topTrailing) {
-                    if index == 0 {
+                    if index == 0, case .success = row {
                         bestBarkainBadge
                     }
                 }
             }
         }
+    }
+
+    private func inactiveRow(name: String, label: String) -> some View {
+        HStack {
+            Text(name)
+                .font(.barkainBody)
+                .foregroundStyle(Color.barkainOnSurfaceVariant)
+            Spacer()
+            Text(label)
+                .font(.barkainCaption)
+                .foregroundStyle(Color.barkainOnSurfaceVariant)
+        }
+        .padding(.horizontal, Spacing.md)
+        .padding(.vertical, Spacing.sm)
+        .background(Color.barkainSurfaceContainerLow.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadius))
+        .opacity(0.6)
     }
 
     // MARK: - Best Barkain Badge
@@ -102,15 +177,10 @@ struct PriceComparisonView: View {
 
     private var statusBar: some View {
         HStack {
-            Text("Showing \(comparison.retailersSucceeded) of \(comparison.totalRetailers) retailers")
+            Text("\(comparison.retailersSucceeded) of \(comparison.totalRetailers) retailers have this product")
                 .font(.barkainCaption)
                 .foregroundStyle(Color.barkainOnSurfaceVariant)
             Spacer()
-            if comparison.retailersFailed > 0 && !comparison.cached {
-                Text("\(comparison.retailersFailed) unavailable")
-                    .font(.barkainCaption)
-                    .foregroundStyle(Color.barkainError)
-            }
         }
         .padding(.horizontal, Spacing.xs)
     }
@@ -178,9 +248,17 @@ struct PriceComparisonView: View {
                 RetailerPrice(retailerId: "best_buy", retailerName: "Best Buy", price: 329.99, originalPrice: nil, currency: "USD", url: nil, condition: "new", isAvailable: true, isOnSale: false, lastChecked: Date()),
                 RetailerPrice(retailerId: "walmart", retailerName: "Walmart", price: 299.99, originalPrice: nil, currency: "USD", url: nil, condition: "new", isAvailable: true, isOnSale: false, lastChecked: Date()),
             ],
+            retailerResults: [
+                RetailerResult(retailerId: "amazon", retailerName: "Amazon", status: .success),
+                RetailerResult(retailerId: "best_buy", retailerName: "Best Buy", status: .success),
+                RetailerResult(retailerId: "walmart", retailerName: "Walmart", status: .success),
+                RetailerResult(retailerId: "target", retailerName: "Target", status: .noMatch),
+                RetailerResult(retailerId: "home_depot", retailerName: "Home Depot", status: .noMatch),
+                RetailerResult(retailerId: "ebay_new", retailerName: "eBay New", status: .unavailable),
+            ],
             totalRetailers: 11,
             retailersSucceeded: 3,
-            retailersFailed: 0,
+            retailersFailed: 3,
             cached: false,
             fetchedAt: Date()
         ),

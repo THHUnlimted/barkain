@@ -6,11 +6,74 @@ nonisolated struct PriceComparison: Codable, Equatable, Sendable {
     let productId: UUID
     let productName: String
     let prices: [RetailerPrice]
+    let retailerResults: [RetailerResult]
     let totalRetailers: Int
     let retailersSucceeded: Int
     let retailersFailed: Int
     let cached: Bool
     let fetchedAt: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case productId, productName, prices, retailerResults
+        case totalRetailers, retailersSucceeded, retailersFailed, cached, fetchedAt
+    }
+
+    init(
+        productId: UUID,
+        productName: String,
+        prices: [RetailerPrice],
+        retailerResults: [RetailerResult] = [],
+        totalRetailers: Int,
+        retailersSucceeded: Int,
+        retailersFailed: Int,
+        cached: Bool,
+        fetchedAt: Date
+    ) {
+        self.productId = productId
+        self.productName = productName
+        self.prices = prices
+        self.retailerResults = retailerResults
+        self.totalRetailers = totalRetailers
+        self.retailersSucceeded = retailersSucceeded
+        self.retailersFailed = retailersFailed
+        self.cached = cached
+        self.fetchedAt = fetchedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.productId = try c.decode(UUID.self, forKey: .productId)
+        self.productName = try c.decode(String.self, forKey: .productName)
+        self.prices = try c.decode([RetailerPrice].self, forKey: .prices)
+        // retailerResults is optional for graceful upgrade — old Redis cache entries
+        // written before the schema change won't have it.
+        self.retailerResults = try c.decodeIfPresent([RetailerResult].self, forKey: .retailerResults) ?? []
+        self.totalRetailers = try c.decode(Int.self, forKey: .totalRetailers)
+        self.retailersSucceeded = try c.decode(Int.self, forKey: .retailersSucceeded)
+        self.retailersFailed = try c.decode(Int.self, forKey: .retailersFailed)
+        self.cached = try c.decode(Bool.self, forKey: .cached)
+        self.fetchedAt = try c.decode(Date.self, forKey: .fetchedAt)
+    }
+}
+
+// MARK: - RetailerResult
+
+nonisolated struct RetailerResult: Codable, Equatable, Sendable, Identifiable {
+    var id: String { retailerId }
+
+    let retailerId: String
+    let retailerName: String
+    let status: Status
+
+    enum Status: String, Codable, Sendable {
+        case success
+        case noMatch = "no_match"
+        case unavailable
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case retailerId, retailerName, status
+    }
 }
 
 // MARK: - RetailerPrice

@@ -10,6 +10,8 @@ struct ScannerView: View {
     @State private var viewModel: ScannerViewModel?
     @State private var scanner = BarcodeScanner()
     @State private var scannerError: BarcodeScannerError?
+    @State private var showManualEntry = false
+    @State private var manualUPC = ""
 
     // MARK: - Body
 
@@ -24,6 +26,19 @@ struct ScannerView: View {
             }
         }
         .navigationTitle("Scan")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showManualEntry = true
+                } label: {
+                    Image(systemName: "keyboard")
+                        .accessibilityLabel("Enter UPC manually")
+                }
+            }
+        }
+        .sheet(isPresented: $showManualEntry) {
+            manualEntrySheet
+        }
         .task {
             let vm = ScannerViewModel(apiClient: apiClient)
             viewModel = vm
@@ -37,6 +52,74 @@ struct ScannerView: View {
         .onDisappear {
             scanner.stopScanning()
         }
+    }
+
+    // MARK: - Manual Entry
+
+    private var manualEntrySheet: some View {
+        NavigationStack {
+            Form {
+                Section("Enter UPC") {
+                    TextField("12 or 13 digit UPC", text: $manualUPC)
+                        .font(.system(.body, design: .monospaced))
+                        .autocorrectionDisabled(true)
+                        .textInputAutocapitalization(.never)
+                        .submitLabel(.go)
+                        .onSubmit { submitManual(manualUPC) }
+                    Button("Resolve") {
+                        submitManual(manualUPC)
+                    }
+                }
+
+                Section("Quick picks — untested UPCs") {
+                    ForEach(manualUPCPresets, id: \.upc) { preset in
+                        Button {
+                            submitManual(preset.upc)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(preset.label)
+                                    .font(.barkainBody)
+                                    .foregroundStyle(Color.barkainOnSurface)
+                                Text(preset.upc)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(Color.barkainOnSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Manual UPC")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { showManualEntry = false }
+                }
+            }
+        }
+    }
+
+    private func submitManual(_ upc: String) {
+        let trimmed = upc
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .filter(\.isNumber)
+        guard !trimmed.isEmpty, let viewModel else { return }
+        showManualEntry = false
+        manualUPC = ""
+        Task { await viewModel.handleBarcodeScan(upc: trimmed) }
+    }
+
+    private var manualUPCPresets: [(upc: String, label: String)] {
+        [
+            ("194252818381", "Apple AirPods 3rd Gen (MagSafe)"),
+            ("190199098428", "Apple AirPods 2nd Gen"),
+            ("887276546810", "Samsung Galaxy Buds 2 (Graphite)"),
+            ("887276303987", "Samsung Galaxy Buds (Black)"),
+            ("050036359306", "JBL Flip 5 (Teal)"),
+            ("050036325455", "JBL Flip 3 (Black)"),
+            ("840080537252", "Amazon Fire TV Stick 3rd Gen"),
+            ("840080588964", "Amazon Fire TV Stick 4K"),
+            ("829610001999", "Roku Streaming Stick+"),
+        ]
     }
 
     // MARK: - Content

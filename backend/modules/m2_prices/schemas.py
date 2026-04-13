@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from enum import Enum
 
 from pydantic import BaseModel, field_validator
 
@@ -110,12 +111,37 @@ class PriceResponse(BaseModel):
     last_checked: datetime
 
 
+class RetailerStatus(str, Enum):
+    """Per-retailer outcome of a price comparison run.
+
+    - SUCCESS: retailer returned at least one listing that passed relevance scoring
+    - NO_MATCH: retailer was reachable but produced no usable listing (returned 0 items,
+      all items were filtered by relevance, or returned a bot-detection / challenge page).
+      Render as "Not found" — the product isn't available or identifiable at this retailer.
+    - UNAVAILABLE: retailer was unreachable (connection failed, HTTP 5xx, container offline).
+      Render as "Unavailable" — a true outage, not a lack of results.
+    """
+
+    SUCCESS = "success"
+    NO_MATCH = "no_match"
+    UNAVAILABLE = "unavailable"
+
+
+class RetailerResult(BaseModel):
+    """Per-retailer status for the full 11-retailer set, regardless of outcome."""
+
+    retailer_id: str
+    retailer_name: str
+    status: RetailerStatus
+
+
 class PriceComparisonResponse(BaseModel):
     """Full price comparison response across all retailers."""
 
     product_id: uuid.UUID
     product_name: str
     prices: list[PriceResponse]
+    retailer_results: list[RetailerResult] = []
     total_retailers: int
     retailers_succeeded: int
     retailers_failed: int

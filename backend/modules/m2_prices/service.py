@@ -46,6 +46,35 @@ class ProductNotFoundError(Exception):
         super().__init__(f"No product found with id {product_id}")
 
 
+# Container error codes that represent a failure to search — render as
+# "Unavailable" in the UI. This includes outages (CONNECTION_FAILED, HTTP_ERROR)
+# AND cases where the scraper was blocked before it could actually search
+# (CHALLENGE = PerimeterX / anti-bot page, PARSE_ERROR = response unintelligible,
+# BOT_DETECTED = explicit bot flag). These are all "we couldn't determine anything",
+# which is distinct from "we searched and the retailer doesn't carry this product".
+_UNAVAILABLE_ERROR_CODES = frozenset({
+    "CONNECTION_FAILED",
+    "GATHER_ERROR",
+    "HTTP_ERROR",
+    "CLIENT_ERROR",
+    "CHALLENGE",
+    "PARSE_ERROR",
+    "BOT_DETECTED",
+    "TIMEOUT",
+})
+
+
+def _classify_error_status(code: str) -> str:
+    """Map a ContainerError.code to a RetailerStatus value (string form).
+
+    Any error code that means "we never got usable search results" → unavailable.
+    Only an empty-but-successful response (handled elsewhere) → no_match.
+    """
+    if code in _UNAVAILABLE_ERROR_CODES:
+        return "unavailable"
+    return "no_match"
+
+
 def _json_serializer(obj: object) -> str:
     """Custom JSON serializer for datetime and UUID."""
     if isinstance(obj, datetime):
@@ -58,17 +87,98 @@ def _json_serializer(obj: object) -> str:
 # MARK: - Relevance Scoring
 
 _MODEL_PATTERNS = [
-    re.compile(r'[A-Z]{1,3}\d{1,2}-?\d{3,5}[A-Z]*(?:/[A-Z0-9]+)?', re.IGNORECASE),
+    # Letters + digits (optional hyphen between letters and digits, trailing alpha/digit).
+    # Matches WH-1000XM5, WH1000XM5/B, SM-G998, MDR-1A.
+    re.compile(r'[A-Z]{1,3}-?\d{1,2}-?\d{3,5}[A-Z]*\d*(?:/[A-Z0-9]+)?', re.IGNORECASE),
+    # M-series / generation markers (M1, M4, Gen 3, Series X, v2).
     re.compile(r'\b(?:M[1-9]\d?|Gen\s*\d+|Series\s*[A-Z0-9]+|v\d+)\b', re.IGNORECASE),
-    re.compile(r'\d{2,3}["\u201d]'),
-    re.compile(r'\d{3,4}\s*GB', re.IGNORECASE),
-    re.compile(r'\d{1,2}[.-]inch', re.IGNORECASE),
+    # Title-case word + digit model names (e.g. "Flip 6", "Clip 5", "Stick 4K").
+    # No IGNORECASE — model words are written as Title Case in product listings,
+    # so we avoid matching random prose like "with 2 microphones".
+    re.compile(r'\b[A-Z][a-z]{2,8}\s+\d+[A-Z]?\b'),
+    # camelCase word + digit (e.g. "iPhone 16", "iPad 12", "iMac 24", "eReader 3").
+    # Apple/Amazon brand naming: first letter lowercase, second uppercase, rest lowercase,
+    # then a digit. Requires a word boundary so "onPro 5" (in running text) doesn't match.
+    re.compile(r'\b[a-z][A-Z][a-z]{2,8}\s+\d+[A-Z]?\b'),
+    # Brand camelCase + digit (e.g. "AirPods 2", "PlayStation 5", "MacBook 14").
+    # Two title-case segments joined with no space (brand name camelCasing), then digit.
+    re.compile(r'\b[A-Z][a-z]+[A-Z][a-z]+\s+\d+[A-Z]?\b'),
 ]
+
+# Variant / sub-model discriminator words. If two titles disagree on which of
+# these words they contain, they describe different SKUs and must not match each
+# other. Covers iPhone 16 vs 16 Pro/Plus/Max, iPad Air vs iPad Pro, PS5 Slim Disc
+# vs PS5 Slim Digital, Nintendo Switch vs Switch OLED vs Switch Lite, etc.
+_VARIANT_TOKENS = frozenset({
+    "pro", "plus", "max", "mini", "ultra", "lite", "slim", "air",
+    "digital", "disc",
+    "se", "xl",
+    "cellular", "wifi", "gps",
+    "oled",
+})
+
+# NOTE: Size/spec patterns (256GB, 27", 11-inch) used to be in _MODEL_PATTERNS,
+# but they were letting iPhone SE slip through for an iPhone 16 query — both titles
+# contain "256GB", so any() matched on the spec alone. Specs are still captured
+# through token overlap; they just don't act as a hard gate anymore.
+
+
+# Supplier / catalog codes that Gemini or UPCitemdb sometimes bake into product names,
+# e.g. "Apple iPhone 16 256GB Black (CBC998000002407)" or "… (JBLFLIP6TEALAM)". These
+# codes never appear in retailer listing titles and break both search queries (Amazon's
+# fuzzy matcher falls back to the wrong product) and the relevance hard gate. Strip them
+# before using product.name for queries or relevance scoring. Descriptive parentheticals
+# like "(Teal)", "(Black)", or "(1st gen)" are kept because their content has a lowercase
+# letter or an internal space.
+_PRODUCT_CODE_IN_PAREN = re.compile(r"\s*\(\s*[A-Z0-9][A-Z0-9.\-/]{4,}\s*\)")
+
+
+def _clean_product_name(name: str) -> str:
+    """Strip supplier/catalog codes from a resolved product name."""
+    cleaned = _PRODUCT_CODE_IN_PAREN.sub("", name)
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 _STOPWORDS = frozenset({
     "the", "a", "an", "and", "or", "for", "with", "in", "of", "to",
     "is", "it", "by", "on", "at", "from", "new", "black", "white",
 })
+
+# Keywords that signal a listing is an accessory for the product, not the product
+# itself. Match on whole words in the listing title. If the product name ALSO contains
+# any of these tokens we do not apply the filter (e.g. a user searching for a "case"
+# legitimately wants case listings).
+_ACCESSORY_KEYWORDS = frozenset({
+    "case", "cases", "cover", "covers", "protector", "protectors", "skin", "skins",
+    "charger", "chargers", "cable", "cables", "adapter", "adapters", "dock", "docks",
+    "stand", "stands", "mount", "mounts", "holder", "holders", "strap", "straps",
+    "pouch", "bag", "sleeve", "sleeves",
+    "compatible",
+    "replacement",
+    "accessory", "accessories",
+})
+# Pattern for "for iPhone", "fits iPad", "designed for" — prepositional accessory markers.
+_ACCESSORY_PHRASE_RE = re.compile(
+    r"\b(?:for|fits|designed\s+for|compatible\s+with)\s+(?:apple|sony|samsung|jbl|bose|google|microsoft|the|your|new)?\s*(?:i?Phone|i?Pad|i?Mac|AirPods|Galaxy|Pixel|Surface|MacBook|Watch)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_accessory_listing(listing_title: str, product_tokens: set[str]) -> bool:
+    """Return True if the listing title looks like an accessory FOR a product,
+    not the product itself. Skipped if the resolved product name contains any
+    of the accessory keywords (so someone searching for a case gets cases)."""
+    if not listing_title:
+        return False
+    # If the product itself is an accessory, don't filter.
+    if product_tokens & _ACCESSORY_KEYWORDS:
+        return False
+    lower = listing_title.lower()
+    tokens = set(re.findall(r"[a-z0-9]+", lower))
+    if tokens & _ACCESSORY_KEYWORDS:
+        return True
+    if _ACCESSORY_PHRASE_RE.search(listing_title):
+        return True
+    return False
 
 _BRAND_SUFFIXES = re.compile(r'\s*(?:Inc\.?|Corp\.?|LLC|Ltd\.?|Co\.?)$', re.IGNORECASE)
 
@@ -76,7 +186,7 @@ RELEVANCE_THRESHOLD = 0.4
 
 
 def _extract_model_identifiers(name: str) -> list[str]:
-    """Extract model numbers and spec markers from a product name."""
+    """Extract model numbers from a product name (spec-only patterns excluded)."""
     identifiers = []
     for pattern in _MODEL_PATTERNS:
         identifiers.extend(pattern.findall(name))
@@ -89,21 +199,56 @@ def _tokenize(text: str) -> set[str]:
     return {t for t in tokens if t not in _STOPWORDS and len(t) > 1}
 
 
+def _ident_to_regex(ident: str) -> re.Pattern:
+    """Build a case-insensitive regex with word-boundary anchors for an identifier.
+
+    Whitespace in the identifier is loosened to ``\\s+`` so "Flip 6" matches any
+    whitespace between the word and the digit. The ``\\b`` anchors prevent spurious
+    prefix matches — "iPhone 16" must NOT match "iPhone 16e" (a different model)
+    or "iPhone 160" (hypothetical).
+    """
+    parts = [re.escape(p) for p in re.split(r'\s+', ident.strip()) if p]
+    body = r'\s+'.join(parts)
+    return re.compile(r'(?<!\w)' + body + r'(?!\w)', re.IGNORECASE)
+
+
 def _score_listing_relevance(listing_title: str, product: Product) -> float:
     """Score how relevant a listing title is to the resolved product (0.0–1.0).
 
     Rules applied in order:
-    1. Model number hard gate: if product has identifiers, at least one must appear.
-    2. Brand match: product.brand must appear in listing title.
-    3. Token overlap tiebreaker: |intersection| / |product_tokens|.
+    0. Accessory filter: reject listings that are cases/covers/protectors/etc.
+       when the product itself is not an accessory.
+    1. Model number hard gate: if product has strong identifiers, at least one
+       must appear in the listing title with word-boundary anchors
+       (so "iPhone 16" doesn't match "iPhone 16e").
+    2. Variant token equality: if product and listing differ in which variant
+       words they contain ({pro, plus, max, mini, disc, digital, ...}), they're
+       different SKUs — reject.
+    3. Brand match: product.brand must appear in listing title.
+    4. Token overlap tiebreaker: |intersection| / |product_tokens|.
     """
-    product_identifiers = _extract_model_identifiers(product.name)
+    clean_name = _clean_product_name(product.name)
+    product_identifiers = _extract_model_identifiers(clean_name)
+    product_tokens_set = _tokenize(clean_name)
     title_lower = listing_title.lower()
+    listing_tokens = _tokenize(listing_title)
 
-    # Rule 1: Model number hard gate
+    # Rule 0: Accessory filter (rejects "case/cover/protector/compatible with X" listings)
+    if _is_accessory_listing(listing_title, product_tokens_set):
+        return 0.0
+
+    # Rule 1: Model number hard gate (word-boundary regex, not substring)
     if product_identifiers:
-        if not any(ident.lower() in title_lower for ident in product_identifiers):
+        patterns = [_ident_to_regex(ident) for ident in product_identifiers]
+        if not any(p.search(listing_title) for p in patterns):
             return 0.0
+
+    # Rule 2: Variant token equality — product and listing must agree on which
+    # sub-variant words they contain (pro / plus / max / disc / digital / …).
+    product_variants = product_tokens_set & _VARIANT_TOKENS
+    listing_variants = listing_tokens & _VARIANT_TOKENS
+    if product_variants != listing_variants:
+        return 0.0
 
     # Rule 2: Brand match (skip if brand is unknown)
     if product.brand:
@@ -111,9 +256,8 @@ def _score_listing_relevance(listing_title: str, product: Product) -> float:
         if clean_brand and clean_brand.lower() not in title_lower:
             return 0.0
 
-    # Rule 3: Token overlap
-    product_tokens = _tokenize(product.name)
-    listing_tokens = _tokenize(listing_title)
+    # Rule 4: Token overlap (use cleaned name so supplier codes don't pollute tokens)
+    product_tokens = product_tokens_set
 
     if not product_tokens:
         return 0.5  # Can't score — assume passable
@@ -171,19 +315,48 @@ class PriceAggregationService:
         # Step 5-8: Normalize, upsert, record history, build response
         now = datetime.now(UTC)
         prices_data: list[dict] = []
+        retailer_results: list[dict] = []  # per-retailer status for all 11
         succeeded = 0
         failed = 0
         history_offset = 0  # Microsecond offset to avoid PK collision on price_history
 
+        # Pre-load all retailer display names so we can label every row, even failed ones.
+        all_retailer_ids = list(responses.keys())
+        all_retailer_names = await self._load_retailer_names(all_retailer_ids)
+
         for retailer_id, response in responses.items():
-            if response.error is not None or not response.listings:
+            retailer_name = all_retailer_names.get(retailer_id, retailer_id)
+
+            if response.error is not None:
+                # Distinguish true outages from "ran but got nothing useful".
+                status = _classify_error_status(response.error.code)
                 failed += 1
+                retailer_results.append(
+                    {"retailer_id": retailer_id, "retailer_name": retailer_name, "status": status}
+                )
+                continue
+
+            if not response.listings:
+                # Retailer reachable, searched, returned 0 listings.
+                failed += 1
+                retailer_results.append(
+                    {"retailer_id": retailer_id, "retailer_name": retailer_name, "status": "no_match"}
+                )
+                continue
+
+            best_listing, relevance = self._pick_best_listing(response, product)
+            if best_listing is None:
+                # Retailer reachable, returned listings, but none cleared relevance scoring.
+                failed += 1
+                retailer_results.append(
+                    {"retailer_id": retailer_id, "retailer_name": retailer_name, "status": "no_match"}
+                )
                 continue
 
             succeeded += 1
-            best_listing, relevance = self._pick_best_listing(response, product)
-            if best_listing is None:
-                continue
+            retailer_results.append(
+                {"retailer_id": retailer_id, "retailer_name": retailer_name, "status": "success"}
+            )
 
             # Upsert to prices table
             await self._upsert_price(product_id, retailer_id, best_listing, now)
@@ -229,10 +402,17 @@ class PriceAggregationService:
         # Sort by price ascending
         prices_data.sort(key=lambda p: p["price"])
 
+        # Sort retailer_results so success rows come first, then no_match, then unavailable.
+        _status_order = {"success": 0, "no_match": 1, "unavailable": 2}
+        retailer_results.sort(
+            key=lambda r: (_status_order.get(r["status"], 99), r["retailer_name"])
+        )
+
         result = {
             "product_id": str(product_id),
             "product_name": product.name,
             "prices": prices_data,
+            "retailer_results": retailer_results,
             "total_retailers": len(responses),
             "retailers_succeeded": succeeded,
             "retailers_failed": failed,
@@ -307,10 +487,23 @@ class PriceAggregationService:
 
         prices_data.sort(key=lambda x: x["price"])
 
+        # DB cache path only retains rows that produced prices. We don't know why
+        # other retailers failed in the original run, so only label the known-good
+        # ones here. The iOS side treats an absent entry as "not shown".
+        retailer_results = [
+            {
+                "retailer_id": p["retailer_id"],
+                "retailer_name": p["retailer_name"],
+                "status": "success",
+            }
+            for p in prices_data
+        ]
+
         return {
             "product_id": str(product_id),
             "product_name": product_name,
             "prices": prices_data,
+            "retailer_results": retailer_results,
             "total_retailers": len(prices_data),
             "retailers_succeeded": len(prices_data),
             "retailers_failed": 0,
@@ -319,8 +512,13 @@ class PriceAggregationService:
         }
 
     def _build_query(self, product: Product) -> str:
-        """Build search query from product name and brand."""
-        parts = [product.name]
+        """Build search query from product name and brand.
+
+        Supplier codes (e.g. the CBC… in 'Apple iPhone 16 256GB Black (CBC998000002407)')
+        are stripped — retailer search engines fuzzy-match on them and return the wrong
+        product. Descriptive parentheticals like '(Teal)' are preserved.
+        """
+        parts = [_clean_product_name(product.name)]
         if product.brand:
             parts.append(product.brand)
         return " ".join(parts)

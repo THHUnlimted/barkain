@@ -37,6 +37,35 @@ CHALLENGE_MARKERS = (
     "access denied",
 )
 
+# Carrier / installment markers in listing titles and URLs. Walmart Wireless and
+# similar storefronts sell phones on payment plans where the prominent price is
+# a monthly installment (e.g. $20/mo for an iPhone) rather than the full retail
+# price. Reject these so we don't mislead the user into thinking a phone is $20.
+_CARRIER_TITLE_MARKERS = re.compile(
+    r"\b(?:AT\s*&\s*T|AT&T|Verizon|T-?Mobile|Sprint|Cricket|Metro\s*by|Boost\s*Mobile"
+    r"|Straight\s*Talk|Tracfone|Xfinity\s*Mobile|Visible|US\s*Cellular|Spectrum\s*Mobile"
+    r"|Simple\s*Mobile)\b",
+    re.IGNORECASE,
+)
+_CARRIER_URL_MARKERS = re.compile(
+    r"/(?:AT-?T|Verizon|T-?Mobile|Sprint|Cricket|Metro-?by|Boost-?Mobile|Straight-?Talk"
+    r"|Tracfone|Xfinity-?Mobile|Visible|US-?Cellular|Spectrum-?Mobile|Simple-?Mobile)-",
+    re.IGNORECASE,
+)
+_MONTHLY_PRICE_MARKERS = re.compile(
+    r"\$[\d.,]+\s*/\s*mo\b|/\s*month\b|\bper\s*month\b|\bmonthly\s*payment\b",
+    re.IGNORECASE,
+)
+
+
+def _is_carrier_listing(title: str, url: str) -> bool:
+    """Return True if the listing title/URL looks like a carrier installment offer."""
+    if title and (_CARRIER_TITLE_MARKERS.search(title) or _MONTHLY_PRICE_MARKERS.search(title)):
+        return True
+    if url and _CARRIER_URL_MARKERS.search(url):
+        return True
+    return False
+
 # Known Walmart first-party seller names (lowercase for comparison)
 WALMART_FIRST_PARTY_SELLERS = frozenset({
     "walmart", "walmart.com", "walmart inc", "walmart inc.",
@@ -87,8 +116,13 @@ def extract_listings(
     all_listings: list[ContainerListing] = []
     for raw in items:
         listing = _map_item_to_listing(raw)
-        if listing is not None:
-            all_listings.append(listing)
+        if listing is None:
+            continue
+        # Drop carrier / installment listings outright — they expose a monthly
+        # payment as the prominent price and mislead the downstream comparison.
+        if _is_carrier_listing(listing.title or "", listing.url or ""):
+            continue
+        all_listings.append(listing)
 
     if not first_party_only:
         return all_listings[:max_listings]
@@ -216,9 +250,16 @@ def _map_item_to_listing(item: dict) -> ContainerListing | None:
     elif isinstance(avail_raw, bool):
         is_available = avail_raw
 
-    condition = "new"
-    if "Pre-Owned" in name or "Refurbished" in name or "Restored" in name:
+    # Condition: Walmart uses "Restored" (typically their Geek-Squad-equivalent program)
+    # and "Refurbished" for re-packaged units. "Pre-Owned" / "Used" / "Open Box" are used
+    # for second-hand items — distinct from factory-certified refurbs.
+    lowered_name = name.lower()
+    if any(marker in lowered_name for marker in ("refurbished", "restored", "renewed", "recertified", "certified pre-owned", "pre-owned")):
+        condition = "refurbished"
+    elif any(marker in lowered_name for marker in ("used", "open box", "open-box")):
         condition = "used"
+    else:
+        condition = "new"
 
     # Classify first-party vs third-party seller
     seller_name = item.get("sellerName") or ""
