@@ -10,6 +10,32 @@
 (() => {
   const MAX = __MAX_LISTINGS__;
 
+  // Carrier / installment markers — Best Buy sells phones tied to Verizon, AT&T,
+  // etc. where the prominent price is an activation fee or monthly plan, not the
+  // full retail price. Reject these so we don't show a $23/mo phone as $23 total.
+  const CARRIER_TITLE_RE = /\b(?:AT\s*&\s*T|AT&T|Verizon|T-?Mobile|Sprint|Cricket|Metro\s*by|Boost\s*Mobile|Straight\s*Talk|Tracfone|Xfinity\s*Mobile|Visible|US\s*Cellular|Spectrum\s*Mobile|Simple\s*Mobile)\b/i;
+  const CARRIER_URL_RE = /\/(?:att|at-?t|verizon|t-?mobile|sprint|cricket|metro-?by|boost-?mobile|straight-?talk|tracfone|xfinity-?mobile|visible|us-?cellular|spectrum-?mobile|simple-?mobile)(?:-|\/)/i;
+  const MONTHLY_RE = /\$[\d,.]+\s*\/\s*mo\b|\/\s*month\b|\bper\s*month\b|\bmonthly\s+(?:payment|plan|cost)\b/i;
+
+  function isCarrierListing(title, url, cardText) {
+    if (title && CARRIER_TITLE_RE.test(title)) return true;
+    if (url && CARRIER_URL_RE.test(url)) return true;
+    if (cardText && MONTHLY_RE.test(cardText)) return true;
+    return false;
+  }
+
+  function detectCondition(title) {
+    if (!title) return 'new';
+    const lower = title.toLowerCase();
+    if (/\brenewed\b|\brefurbished\b|\brecertified\b|\bcertified\s+pre-?owned\b|\bpre-?owned\b|\bgeek\s*squad\s+certified\b/.test(lower)) {
+      return 'refurbished';
+    }
+    if (/\bused\b|\bopen\s*box\b/.test(lower)) {
+      return 'used';
+    }
+    return 'new';
+  }
+
   // 1. Select all product title links — a.sku-title is the stable anchor
   //    (also tolerates future className changes by matching startsWith)
   let titleLinks = document.querySelectorAll('a.sku-title');
@@ -52,18 +78,25 @@
     if (cards.length >= MAX) break;
   }
 
-  // 3. Extract fields from each card
-  const listings = cards.map(({ link, card, text, href }, i) => {
+  // 3. Extract fields from each card (skip carrier/installment listings)
+  const listings = cards
+    .filter(({ text, href, card }) => {
+      return !isCarrierListing(text, href, card.innerText || '');
+    })
+    .map(({ link, card, text, href }, i) => {
     // Title — use the link text (already cleaned)
     const title = text;
 
-    // Price — find the first currency amount in the card
+    // Price — find the first currency amount in the card, but skip monthlies
     let price = 0;
     let original_price = null;
     const cardText = card.innerText || '';
 
+    // Strip any "$X/mo" fragments before looking for the full price
+    const priceSearchText = cardText.replace(/\$[\d,.]+\s*\/\s*mo\b[^\n]*/gi, ' ');
+
     // Current price: first $XXX.XX pattern
-    const priceMatch = cardText.match(/\$[\d,]+\.\d{2}/);
+    const priceMatch = priceSearchText.match(/\$[\d,]+\.\d{2}/);
     if (priceMatch) {
       price = parseFloat(priceMatch[0].replace(/[$,]/g, ''));
     }
@@ -76,7 +109,7 @@
     }
     // Alternative: if two distinct prices appear and one is higher, treat higher as original
     if (!original_price) {
-      const allPrices = Array.from(cardText.matchAll(/\$[\d,]+\.\d{2}/g))
+      const allPrices = Array.from(priceSearchText.matchAll(/\$[\d,]+\.\d{2}/g))
         .map(m => parseFloat(m[0].replace(/[$,]/g, '')))
         .filter(v => v > 0);
       const unique = [...new Set(allPrices)];
@@ -103,7 +136,7 @@
       original_price,
       currency: 'USD',
       url,
-      condition: 'new',
+      condition: detectCondition(title),
       is_available: true,
       image_url,
       seller: null,
