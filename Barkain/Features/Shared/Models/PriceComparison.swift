@@ -3,15 +3,18 @@ import Foundation
 // MARK: - PriceComparison
 
 nonisolated struct PriceComparison: Codable, Equatable, Sendable {
-    let productId: UUID
-    let productName: String
-    let prices: [RetailerPrice]
-    let retailerResults: [RetailerResult]
-    let totalRetailers: Int
-    let retailersSucceeded: Int
-    let retailersFailed: Int
-    let cached: Bool
-    let fetchedAt: Date
+    // Step 2c: mutable so ScannerViewModel can mutate in place as SSE events
+    // arrive. SwiftUI @Observable triggers a re-render on each reassignment of
+    // the whole struct on the parent model.
+    var productId: UUID
+    var productName: String
+    var prices: [RetailerPrice]
+    var retailerResults: [RetailerResult]
+    var totalRetailers: Int
+    var retailersSucceeded: Int
+    var retailersFailed: Int
+    var cached: Bool
+    var fetchedAt: Date
 
     private enum CodingKeys: String, CodingKey {
         case productId, productName, prices, retailerResults

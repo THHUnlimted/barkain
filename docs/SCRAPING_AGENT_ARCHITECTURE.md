@@ -2039,6 +2039,8 @@ Retailers with zero survivors yield a `no_match` status (Appendix G) rather than
 
 ## Appendix G — Per-Retailer Status System (post-2b-val, 2026-04-12)
 
+> **Step 2c update (2026-04-13):** `retailer_results` now arrives in two flavors. The batch endpoint `GET /api/v1/prices/{id}` still returns the full list in a single JSON body. The streaming endpoint `GET /api/v1/prices/{id}/stream` yields one `retailer_result` SSE event per retailer the moment it finishes (via `asyncio.as_completed`), each event carrying the same `{retailer_id, retailer_name, status}` shape plus an embedded `price` object on success. The streaming variant bypasses the classification loop's batch-at-the-end step — status is emitted inline as each retailer resolves, followed by a terminal `done` event with the aggregate counts. The rendering rules in G.5 are unchanged because `PriceComparison.retailerResults` is mutated in place on iOS as each event arrives.
+
 Before this system, the `prices` list in `PriceComparisonResponse` was success-only: retailers that returned an error, returned no listings, or had all listings filtered by relevance were simply absent from the response. The iOS app showed only the retailers with prices, and the user had no way to know whether a missing retailer was offline, blocked, or genuinely carried nothing relevant.
 
 ### G.1 `retailer_results` field

@@ -12,10 +12,12 @@ Pipeline:
 9. Return sorted by price ascending
 """
 
+import asyncio
 import json
 import logging
 import re
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -463,6 +465,253 @@ class PriceAggregationService:
         await self._cache_to_redis(product_id, result)
 
         return result
+
+    # MARK: - Streaming (Step 2c)
+
+    async def stream_prices(
+        self,
+        product_id: uuid.UUID,
+        force_refresh: bool = False,
+    ) -> AsyncGenerator[tuple[str, dict], None]:
+        """Yield per-retailer SSE events (`retailer_result`, `done`, `error`) as
+        results arrive. Uses `asyncio.as_completed` over per-retailer tasks so
+        the iPhone sees each retailer the moment it finishes — Walmart ~12s,
+        Amazon ~30s, and Best Buy ~91s arrive independently instead of the
+        caller waiting ~120s for the whole batch.
+
+        NOTE: duplicates the classification loop from `get_prices()` by design.
+        The two paths differ in iteration strategy (as_completed vs gather) and
+        error semantics (errors become events, not raises), which made a shared
+        helper more awkward than the duplication.
+        """
+        product = await self._validate_product(product_id)
+
+        # Cache path — replay stored results and short-circuit.
+        if not force_refresh:
+            cached = await self._check_redis(product_id)
+            if cached is None:
+                cached = await self._check_db_prices(product_id, product.name)
+                if cached is not None:
+                    await self._cache_to_redis(product_id, cached)
+            if cached is not None:
+                logger.info("stream_prices cache hit for product %s", product_id)
+                prices_by_rid = {
+                    p["retailer_id"]: p for p in cached.get("prices", [])
+                }
+                for r in cached.get("retailer_results", []):
+                    yield (
+                        "retailer_result",
+                        {
+                            "retailer_id": r["retailer_id"],
+                            "retailer_name": r["retailer_name"],
+                            "status": r["status"],
+                            "price": prices_by_rid.get(r["retailer_id"]),
+                        },
+                    )
+                yield (
+                    "done",
+                    {
+                        "product_id": str(product_id),
+                        "product_name": cached.get("product_name", product.name),
+                        "total_retailers": cached.get("total_retailers", 0),
+                        "retailers_succeeded": cached.get("retailers_succeeded", 0),
+                        "retailers_failed": cached.get("retailers_failed", 0),
+                        "cached": True,
+                        "fetched_at": cached.get("fetched_at"),
+                    },
+                )
+                return
+
+        # Live path — dispatch every retailer, yield as each completes.
+        query = self._build_query(product)
+        ids = list(self.container_client.ports.keys())
+        names = await self._load_retailer_names(ids)
+        logger.info(
+            "stream_prices dispatching %d retailers for product %s: %s",
+            len(ids),
+            product_id,
+            query,
+        )
+
+        async def _fetch_one(rid: str) -> tuple[str, ContainerResponse]:
+            resp = await self.container_client._extract_one(
+                rid, query, product.name, product.upc, 10
+            )
+            return rid, resp
+
+        tasks = [asyncio.create_task(_fetch_one(rid)) for rid in ids]
+
+        now = datetime.now(UTC)
+        prices_data: list[dict] = []
+        retailer_results: list[dict] = []
+        succeeded = 0
+        failed = 0
+        history_offset = 0
+
+        try:
+            for fut in asyncio.as_completed(tasks):
+                retailer_id, response = await fut
+                retailer_name = names.get(retailer_id, retailer_id)
+
+                # Error path — render as unavailable/no_match based on error code.
+                if response.error is not None:
+                    status = _classify_error_status(response.error.code)
+                    failed += 1
+                    retailer_results.append(
+                        {
+                            "retailer_id": retailer_id,
+                            "retailer_name": retailer_name,
+                            "status": status,
+                        }
+                    )
+                    yield (
+                        "retailer_result",
+                        {
+                            "retailer_id": retailer_id,
+                            "retailer_name": retailer_name,
+                            "status": status,
+                            "price": None,
+                        },
+                    )
+                    continue
+
+                if not response.listings:
+                    failed += 1
+                    retailer_results.append(
+                        {
+                            "retailer_id": retailer_id,
+                            "retailer_name": retailer_name,
+                            "status": "no_match",
+                        }
+                    )
+                    yield (
+                        "retailer_result",
+                        {
+                            "retailer_id": retailer_id,
+                            "retailer_name": retailer_name,
+                            "status": "no_match",
+                            "price": None,
+                        },
+                    )
+                    continue
+
+                best_listing, relevance = self._pick_best_listing(response, product)
+                if best_listing is None:
+                    failed += 1
+                    retailer_results.append(
+                        {
+                            "retailer_id": retailer_id,
+                            "retailer_name": retailer_name,
+                            "status": "no_match",
+                        }
+                    )
+                    yield (
+                        "retailer_result",
+                        {
+                            "retailer_id": retailer_id,
+                            "retailer_name": retailer_name,
+                            "status": "no_match",
+                            "price": None,
+                        },
+                    )
+                    continue
+
+                # Success — persist and emit.
+                succeeded += 1
+                await self._upsert_price(
+                    product_id, retailer_id, best_listing, now
+                )
+                for listing in response.listings:
+                    history_time = now + timedelta(microseconds=history_offset)
+                    history_offset += 1
+                    await self._append_price_history(
+                        product_id, retailer_id, listing, history_time
+                    )
+
+                price_payload = {
+                    "retailer_id": retailer_id,
+                    "retailer_name": retailer_name,
+                    "price": best_listing.price,
+                    "original_price": best_listing.original_price,
+                    "currency": best_listing.currency or "USD",
+                    "url": best_listing.url or None,
+                    "condition": best_listing.condition or "new",
+                    "is_available": (
+                        best_listing.is_available
+                        if best_listing.is_available is not None
+                        else True
+                    ),
+                    "is_on_sale": (
+                        best_listing.original_price is not None
+                        and best_listing.price < best_listing.original_price
+                    ),
+                    "last_checked": now.isoformat(),
+                    "relevance_score": relevance,
+                }
+                prices_data.append(price_payload)
+                retailer_results.append(
+                    {
+                        "retailer_id": retailer_id,
+                        "retailer_name": retailer_name,
+                        "status": "success",
+                    }
+                )
+                yield (
+                    "retailer_result",
+                    {
+                        "retailer_id": retailer_id,
+                        "retailer_name": retailer_name,
+                        "status": "success",
+                        "price": price_payload,
+                    },
+                )
+
+            await self.db.flush()
+        except asyncio.CancelledError:
+            # Client disconnected — cancel pending tasks and propagate.
+            for t in tasks:
+                t.cancel()
+            raise
+        except Exception as e:
+            logger.exception("stream_prices pipeline error")
+            yield ("error", {"code": "STREAM_ERROR", "message": str(e)})
+            return
+
+        # Sort + cache the aggregate (same shape get_prices builds).
+        prices_data.sort(key=lambda p: p["price"])
+        _status_order = {"success": 0, "no_match": 1, "unavailable": 2}
+        retailer_results.sort(
+            key=lambda r: (
+                _status_order.get(r["status"], 99),
+                r["retailer_name"],
+            )
+        )
+
+        final = {
+            "product_id": str(product_id),
+            "product_name": product.name,
+            "prices": prices_data,
+            "retailer_results": retailer_results,
+            "total_retailers": len(ids),
+            "retailers_succeeded": succeeded,
+            "retailers_failed": failed,
+            "cached": False,
+            "fetched_at": now.isoformat(),
+        }
+        await self._cache_to_redis(product_id, final)
+
+        yield (
+            "done",
+            {
+                "product_id": str(product_id),
+                "product_name": product.name,
+                "total_retailers": len(ids),
+                "retailers_succeeded": succeeded,
+                "retailers_failed": failed,
+                "cached": False,
+                "fetched_at": now.isoformat(),
+            },
+        )
 
     # MARK: - Private Helpers
 

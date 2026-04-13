@@ -269,7 +269,8 @@ All AI calls request JSON output. Use Instructor library for Pydantic model vali
 |---|---|---|---|---|
 | GET | /api/v1/health | core | Health check (DB + Redis connectivity) | Exempt |
 | POST | /api/v1/products/resolve | M1 | UPC/barcode → product (Gemini API, UPCitemdb backup) | 60/min |
-| GET | /api/v1/prices/{product_id} | M2 | Get prices from all 11 retailers (via containers) | 60/min |
+| GET | /api/v1/prices/{product_id} | M2 | Batch price comparison across all 11 retailers (blocks until every retailer completes) | 60/min |
+| GET | /api/v1/prices/{product_id}/stream | M2 | **Step 2c** — SSE stream of per-retailer results using `asyncio.as_completed`. Each retailer yields a `retailer_result` event the moment it finishes (walmart ~12s, amazon ~30s, best_buy ~91s), terminated by a `done` event. Cache hit replays all events instantly. Fallback surface if the stream fails: the batch endpoint above. `?force_refresh=true` bypasses cache. | 60/min |
 
 ### Phase 2 Endpoints
 

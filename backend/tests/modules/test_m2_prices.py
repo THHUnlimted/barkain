@@ -15,8 +15,6 @@ from modules.m2_prices.schemas import (
     ContainerResponse,
 )
 
-pytestmark = pytest.mark.asyncio
-
 
 # MARK: - Helpers
 

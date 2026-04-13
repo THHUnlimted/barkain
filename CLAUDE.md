@@ -283,6 +283,7 @@ This project uses a **two-tier AI workflow:**
 **Post-2b-val — Simulator + Relevance + Retailer-Status Hardening: COMPLETE** ✅ (2026-04-12)
 **Chore — CHANGELOG.md created, CLAUDE.md slimmed from ~74K → ≤35K chars** ✅ (2026-04-13)
 **Step 2b-final — Close Out (Gemini model field + post-2b-val test coverage + CI + EC2 verification): COMPLETE** ✅ (2026-04-13)
+**Step 2c — Streaming Per-Retailer Results (SSE): COMPLETE** ✅ (2026-04-13)
 
 - AI abstraction: ✅ (Gemini + Claude Opus)
 - Watchdog supervisor: ✅ (nightly health checks, self-healing via Opus)
@@ -326,6 +327,7 @@ This project uses a **two-tier AI workflow:**
 - Retailer containers batch 2: ✅ (Best Buy, Home Depot, Lowe's, eBay New, eBay Used, BackMarket)
 - M2 Price Aggregation Service: ✅ (`backend/modules/m2_prices/service.py` — cache → dispatch → normalize → upsert → cache)
 - M2 Price endpoint: ✅ (GET `/api/v1/prices/{product_id}`)
+- M2 Price streaming (Step 2c): ✅ (GET `/api/v1/prices/{product_id}/stream` — SSE, `asyncio.as_completed`, per-retailer results arrive as they complete)
 - M2 Redis caching: ✅ (3-tier: Redis → DB → containers)
 - M2 Price upsert: ✅ (ON CONFLICT on product_id+retailer_id+condition)
 - M2 Price history: ✅ (append-only TimescaleDB hypertable)
@@ -333,6 +335,7 @@ This project uses a **two-tier AI workflow:**
 - iOS design system: ✅ (Colors, Spacing, Typography)
 - iOS data models: ✅ (Product, PriceComparison, RetailerPrice)
 - iOS API client: ✅ (APIClientProtocol + APIClient async, typed)
+- iOS SSE consumer (Step 2c): ✅ (`Barkain/Services/Networking/Streaming/SSEParser.swift` + `RetailerStreamEvent.swift` + `APIClient.streamPrices` returns `AsyncThrowingStream<RetailerStreamEvent, Error>`; `ScannerViewModel` mutates `priceComparison` in place as events land; fallback to batch on stream failure)
 - iOS barcode scanner: ✅ (AVFoundation EAN-13/UPC-A + UPC-A normalization + manual entry sheet)
 - iOS navigation shell: ✅ (TabView: Scan/Search/Savings/Profile)
 - iOS scanner feature: ✅ (ScannerView + ScannerViewModel)
@@ -340,8 +343,8 @@ This project uses a **two-tier AI workflow:**
 - iOS price comparison UI: ✅ (PriceComparisonView — per-retailer status rows for all 11 retailers)
 - iOS scan→compare flow: ✅ (full demo loop)
 
-**Test counts:** 181 backend (181 passed / 6 skipped), 21 iOS unit, 0 UI, 0 snapshot.
-**Build status:** Backend + iOS build clean. Backend serves health + product resolve + price comparison + retailer health endpoints; Amazon + Best Buy containers on EC2 `t3.xlarge`; Walmart via Firecrawl v2 adapter; iOS scans barcode → resolves via Gemini → fetches 3 retailers → displays comparison on physical iPhone in ~90–120 s. `ruff check` clean. Manual entry sheet functional on simulator. GitHub Actions backend-tests workflow runs unit tests on every PR touching `backend/**` or `containers/**`.
+**Test counts:** 192 backend (192 passed / 6 skipped), 32 iOS unit, 0 UI, 0 snapshot.
+**Build status:** Backend + iOS build clean. Backend serves health + product resolve + batch price comparison + streaming price comparison + retailer health endpoints; Amazon + Best Buy containers on EC2 `t3.xlarge`; Walmart via Firecrawl v2 adapter. With Step 2c SSE, iOS now scans barcode → resolves via Gemini → streams 3 retailers → displays walmart result at ~12s, amazon ~30s, best_buy ~91s (each arriving independently instead of blocking for ~90-120s). Batch endpoint still available as fallback. `ruff check` clean. Manual entry sheet functional on simulator. GitHub Actions backend-tests workflow runs unit tests on every PR touching `backend/**` or `containers/**`.
 
 **Live demo runtime profile (2026-04-10, physical iPhone):**
 - Gemini UPC resolve: 2–4 s
@@ -351,10 +354,10 @@ This project uses a **two-tier AI workflow:**
 - iOS total: ~90–120 s, dominated by Best Buy
 
 **Known demo caveats (see `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md` and `Barkain Prompts/Step_2b_val_Results.md`):**
-- **fd-3 stdout pattern latent on 8 retailers (SP-L2, MEDIUM):** only `containers/amazon/extract.sh` and `containers/best_buy/extract.sh` were fixed. The other 8 retailer extract.sh files (target, home_depot, lowes, ebay_new, ebay_used, sams_club, backmarket, fb_marketplace, walmart_container) still have the same latent bug and must be backfilled before those retailers go live.
+- ~~**fd-3 stdout pattern latent on 8 retailers (SP-L2, MEDIUM):**~~ **RESOLVED in Step 2c** — backfilled to all 9 remaining `extract.sh` files (target, home_depot, lowes, ebay_new, ebay_used, sams_club, backmarket, fb_marketplace, walmart). All 11 retailer extract.sh files now use `exec 3>&1; exec 1>&2` + `>&3` on the final output.
 - **GitHub PAT leaked in EC2 git config (SP-L1, HIGH):** `gho_UUsp9ML…` is embedded in `~/barkain/.git/config` on stopped EC2 instance `i-09ce25ed6df7a09b2`. Must be rotated.
 - **EC2 containers run stale code (2b-val-L1, MEDIUM):** `amazon/extract.js`, `best_buy/extract.js`, and `best_buy/base-extract.sh` are hot-patched via `docker cp` on the running instance. The image on disk is stale; next stop+start without redeploy will revert. Run `scripts/ec2_deploy.sh` before the next session.
-- **Best Buy ~91s per request, 78s in page loads (2b-val-L2, HIGH for UX):** Step 2b's 5→2 scroll reduction landed correctly (scroll stage is 4s), but `ab wait --load load` against `bestbuy.com` homepage (40s) + `/site/searchpage.jsp` (38s) dominates the total. Real fix is streaming per-retailer results to iPhone (SP-L7) or a `domcontentloaded` wait strategy — deferred to Step 2c.
+- ~~**Best Buy ~91s per request, 78s in page loads (2b-val-L2, HIGH for UX):**~~ **RESOLVED in Step 2c** via SSE streaming. The 91s Best Buy leg no longer blocks the iPhone — walmart (~12s) and amazon (~30s) now render the moment they complete, while best_buy streams in when it finishes. A `domcontentloaded` wait strategy on Best Buy itself is still a potential further speedup but no longer a UX blocker.
 - **Integration test env loading (2b-val-L4, LOW):** `backend/tests/integration/test_real_api_contracts.py` reads env vars at module load, so pytest needs `set -a && source ../.env && set +a` before `BARKAIN_RUN_INTEGRATION_TESTS=1 pytest -m integration`. Conftest.py auto-load would fix this — deferred.
 - **Supplier codes persist in DB (v4.0-L1, LOW):** `_clean_product_name` strips codes like `(CBC998000002407)` at query/scoring time but leaves the raw Gemini/UPCitemdb name in the DB. The iOS app displays the raw (uncleaned) name. If you want the display to also be clean, strip on insert in `m1_product/service.py` — one-line change.
 - **Sub-variants without digits (v4.0-L2, MEDIUM):** the variant-token check only fires on the known set `{pro, plus, max, mini, ultra, lite, slim, air, digital, disc, se, xl, cellular, wifi, gps, oled}`. Products like "Samsung Galaxy Buds Pro" (1st gen) vs "Galaxy Buds 2 Pro" still pass token overlap because neither "1st gen" nor a distinguishing digit is present in the 1st-gen product name. Requires richer Gemini output.
@@ -391,11 +394,19 @@ This project uses a **two-tier AI workflow:**
    - `.github/workflows/backend-tests.yml` runs unit tests on every PR touching `backend/**` or `containers/**`. TimescaleDB + Redis services, fake API keys, `BARKAIN_DEMO_MODE=1`. Integration tests remain gated on `BARKAIN_RUN_INTEGRATION_TESTS=1`.
    - `scripts/ec2_deploy.sh` appends MD5 comparison of each container's `/app/extract.js` against the repo copy — makes hot-patch drift visible on next deploy.
    - `backend/tests/integration/conftest.py` auto-loads `.env` when `BARKAIN_RUN_INTEGRATION_TESTS=1`. `test_upcitemdb_lookup` opt-out via `UPCITEMDB_SKIP=1`.
-8. **Remaining pre-fixes (not blockers):**
-   - **Backfill fd-3 stdout pattern (SP-L2):** 8 retailer extract.sh files still have latent bug — must be fixed before those retailers go live.
+8. **Step 2c — Streaming Per-Retailer Results (SSE) COMPLETE** (2026-04-13) — replaces the 90-120s blocking `GET /api/v1/prices/{id}` with an SSE stream so each retailer lands on the iPhone the moment it finishes (walmart ~12s, amazon ~30s, best_buy ~91s — all independently). Highlights:
+   - Backend: new `GET /api/v1/prices/{product_id}/stream` endpoint (`modules/m2_prices/router.py`) returning `text/event-stream`. New `PriceAggregationService.stream_prices()` async generator uses `asyncio.as_completed` to yield `retailer_result` / `done` / `error` events as each retailer resolves. Cache hit (Redis or DB) replays all events instantly with `done.cached=true`. Batch endpoint `GET /api/v1/prices/{id}` unchanged and still wired as fallback.
+   - New `backend/modules/m2_prices/sse.py` — `sse_event()` wire-format helper + `SSE_HEADERS` constant (`Cache-Control: no-cache`, `X-Accel-Buffering: no`, `Connection: keep-alive`).
+   - iOS: new `Barkain/Services/Networking/Streaming/SSEParser.swift` (stateful `feed(line:)` parser + `events(from:URLSession.AsyncBytes)` async wrapper) and `RetailerStreamEvent.swift` typed events (`retailerResult`, `done`, `error`).
+   - iOS: `APIClient.streamPrices(productId:forceRefresh:)` returns `AsyncThrowingStream<RetailerStreamEvent, Error>` backed by `URLSession.bytes(for:)`. Non-2xx responses drain error body and throw a matching `APIError` variant.
+   - iOS: `ScannerViewModel.fetchPrices()` consumes the stream, lazy-seeds + mutates a local `PriceComparison` on every event, and falls back to `getPrices` (batch) on stream errors or if the stream closes without a `done` event. `PriceComparison` struct fields changed from `let` to `var` to support in-place mutation.
+   - iOS: `PriceComparisonView` unchanged structurally — it already handles the growing retailer list. Added `.animation(.default, value:)` on the retailer list for smooth row transitions. `ProgressiveLoadingView` is no longer invoked in the scanner flow (the progressive UI IS the comparison view). `ScannerView.priceLoadingView` replaced with a minimal spinner for the brief window before the first event seeds `priceComparison`.
+   - Pre-fix PF-1: fd-3 stdout backfill for the 9 remaining `extract.sh` files (see above).
+   - Pre-fix PF-2: removed `pytestmark = pytest.mark.asyncio` from `backend/tests/modules/test_m2_prices.py` — silences 33 pytest warnings (`asyncio_mode = "auto"` is already set in `pyproject.toml`).
+   - Tests: +11 backend stream tests (`backend/tests/modules/test_m2_prices_stream.py` — event order, success/no_match/unavailable payloads, Redis/DB cache short-circuit, force_refresh bypass, SSE content-type, 404 before stream, end-to-end wire parsing, unknown product raises), +5 SSE parser tests (`BarkainTests/Services/Networking/SSEParserTests.swift`), +6 scanner stream tests (`ScannerViewModelTests.swift` — incremental state, sortedPrices live updates, error event, thrown error fallback, closed-without-done fallback, bestPrice tracking).
+9. **Remaining pre-fixes (not blockers):**
    - **Redeploy EC2 containers (2b-val-L1):** run `scripts/ec2_deploy.sh` to sync `i-09ce25ed6df7a09b2` with the repo — currently hot-patched via `docker cp` for `amazon/extract.js`, `bestbuy/extract.js`, and `bestbuy/base-extract.sh`. Next stop+start without redeploy will revert. Post-deploy MD5 verification block now flags drift automatically.
-   - **Streaming per-retailer results (SP-L7 / 2b-val-L2):** iOS progressive loading is cosmetic — real streaming to iPhone instead of blocking needed for production UX, and is also the real fix for Best Buy's 91s leg.
-9. **Phase 2 continues:** Step 2c (M5 Identity Profile) or Step 2d (streaming per-retailer results to iPhone).
+10. **Phase 2 continues:** Step 2d (M5 Identity Profile) or further container reliability work.
 
 ---
 

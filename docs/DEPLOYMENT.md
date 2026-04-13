@@ -210,6 +210,20 @@ railway variables set REDIS_URL="redis://..."
 
 **Migration path:** Dockerize backend → push to ECR → deploy to ECS Fargate. Database: pg_dump from Railway PostgreSQL → restore to RDS. Redis: no migration needed (cache is ephemeral).
 
+### SSE Streaming Endpoint (Step 2c)
+
+`GET /api/v1/prices/{product_id}/stream` returns `text/event-stream` and can stay open for up to ~120s while Best Buy's container finishes. Uvicorn handles this natively — no config needed. But any reverse proxy in the path **must not buffer** the response body, or the iPhone receives every event at once at the end instead of as they arrive:
+
+| Layer | Default buffering | Action required |
+|---|---|---|
+| **Uvicorn** | None — streams chunks as-generated. | ✅ None. |
+| **nginx** | On by default (`proxy_buffering on`). | Set `proxy_buffering off;` for the `/api/v1/prices/*/stream` location, OR rely on the `X-Accel-Buffering: no` response header which nginx already honors (it's set by `modules/m2_prices/sse.py`). Also set `proxy_read_timeout 300s;` since SSE connections stay open. |
+| **Cloudflare** | Buffers non-streaming responses; streaming is Enterprise-plan-only on the classic network. | Confirm plan before putting Cloudflare in front of the stream endpoint. Workers-based routing supports streaming on all plans. |
+| **AWS ALB** | Buffers by default for HTTP/1.1. | Enable HTTP/2 or confirm response streaming behavior. ALB idle timeout must be ≥ max SSE duration (default 60s — bump to 300s). |
+| **Railway** | Pass-through to upstream. | ✅ None. |
+
+The `SSE_HEADERS` constant in `backend/modules/m2_prices/sse.py` already sets `Cache-Control: no-cache, no-transform`, `X-Accel-Buffering: no`, and `Connection: keep-alive`. That covers nginx out of the box. If a future layer sits between the user and Uvicorn, re-verify streaming end-to-end with `curl -N https://api.barkain.ai/api/v1/prices/<id>/stream` — events should arrive at their natural completion time, not all at once.
+
 ---
 
 ## iOS Build & Distribution
