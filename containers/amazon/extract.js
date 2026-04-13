@@ -29,12 +29,13 @@
     return true;
   });
 
-  // Sponsored noise patterns to strip from titles
+  // Sponsored noise patterns to strip from titles.
+  // Amazon uses curly apostrophes (U+2019), so each apostrophe slot matches ['\u2019].
   const SPONSORED_NOISE = [
     /Sponsored\s*/gi,
-    /You're seeing this ad based on the product's relevance to your search query\.?\s*/gi,
+    /You['\u2019]re seeing this ad based on the product['\u2019]s relevance to your search query\.?\s*/gi,
     /Leave ad feedback\s*/gi,
-    /You're seeing this ad\s*/gi
+    /You['\u2019]re seeing this ad\s*/gi
   ];
 
   function cleanTitle(text) {
@@ -45,49 +46,137 @@
     return cleaned.trim();
   }
 
-  // Title selector chain — try each in order, prefer substantive titles
-  const TITLE_SELECTORS = [
-    el => el.querySelector('[data-cy="title-recipe"] span')?.innerText?.trim(),
-    el => el.querySelector('h2 a .a-text-normal')?.innerText?.trim(),
-    el => el.querySelector('h2 a span')?.innerText?.trim(),
-    el => el.querySelector('img[data-image-latency="s-product-image"]')?.alt?.trim(),
-    el => el.querySelector('img.s-image')?.alt?.trim(),
-  ];
+  // Title extraction — Amazon often splits the brand and product name into sibling
+  // <span> elements inside h2/title-recipe (e.g. <span>Sony</span><span>WH-1000XM5 ...</span>).
+  // Grabbing a single span returns only the brand. Join all span innerText values,
+  // then fall back to full-container innerText, then image alt.
+  function isSubstantive(s) {
+    if (!s || s.length < 3) return false;
+    const wc = s.split(/\s+/).length;
+    return wc >= 3 || s.length > 20;
+  }
+
+  function joinSpans(container) {
+    if (!container) return '';
+    const spans = container.querySelectorAll('span');
+    if (!spans.length) return '';
+    const seen = new Set();
+    const parts = [];
+    for (const s of spans) {
+      const t = (s.innerText || '').trim();
+      if (!t) continue;
+      // Skip spans that are strict prefixes of existing parts (nested duplicates)
+      if (seen.has(t)) continue;
+      seen.add(t);
+      parts.push(t);
+    }
+    return parts.join(' ').trim();
+  }
 
   function extractTitle(el) {
-    let fallback = '';
-    for (const selector of TITLE_SELECTORS) {
-      const candidate = selector(el);
-      if (!candidate || candidate.length < 3) continue;
+    const candidates = [];
 
-      // Accept immediately if it looks like a full product name
-      const wordCount = candidate.split(/\s+/).length;
-      if (wordCount >= 3 || candidate.length > 20) {
-        return cleanTitle(candidate);
-      }
-      // Keep as fallback (likely just a brand name)
-      if (!fallback) fallback = candidate;
+    // Strategy 1: join spans inside [data-cy="title-recipe"] (handles split brand/product)
+    const titleRecipe = el.querySelector('[data-cy="title-recipe"]');
+    if (titleRecipe) {
+      candidates.push(joinSpans(titleRecipe));
+      candidates.push((titleRecipe.innerText || '').trim());
     }
-    return cleanTitle(fallback);
+
+    // Strategy 2: join spans inside h2 (same pattern, different anchor)
+    const h2 = el.querySelector('h2');
+    if (h2) {
+      candidates.push(joinSpans(h2));
+      candidates.push((h2.innerText || '').trim());
+    }
+
+    // Strategy 3: h2 a innerText directly
+    const h2a = el.querySelector('h2 a');
+    if (h2a) candidates.push((h2a.innerText || '').trim());
+
+    // Strategy 4: image alt fallback
+    const img = el.querySelector('img.s-image')
+      || el.querySelector('img[data-image-latency="s-product-image"]');
+    if (img && img.alt) candidates.push(img.alt.trim());
+
+    // Return the first substantive candidate
+    let fallback = '';
+    for (const raw of candidates) {
+      if (!raw) continue;
+      const cleaned = cleanTitle(raw);
+      if (isSubstantive(cleaned)) return cleaned;
+      if (!fallback && cleaned.length >= 3) fallback = cleaned;
+    }
+    return fallback;
+  }
+
+  // Detect condition from a listing title. Amazon marks refurb products with
+  // phrases like "Renewed", "Refurbished", "Certified Pre-Owned" in the title.
+  function detectCondition(title) {
+    if (!title) return 'new';
+    const lower = title.toLowerCase();
+    if (/\brenewed\b|\brefurbished\b|\brecertified\b|\bre-certified\b|\bcertified\s+pre-?owned\b|\bpre-?owned\b/.test(lower)) {
+      return 'refurbished';
+    }
+    if (/\bused\b|\bopen\s*box\b/.test(lower)) {
+      return 'used';
+    }
+    return 'new';
+  }
+
+  // Extract the full product price, skipping installment / monthly offers.
+  // Amazon sometimes shows "$45.00/mo" for phones on payment plans — those are
+  // rendered as a regular .a-price element but with "/mo" text in the parent row.
+  // Detect that and reject, falling back to the outright (full) price.
+  function extractPrice(el) {
+    const INSTALLMENT_RE = /\$[\d,]+(?:\.\d{1,2})?\s*\/\s*mo\b|\/\s*month\b|\bper\s*month\b|\bmonthly\s+payment\b|\bfrom\s*\$[\d,]+\s*\/\s*mo\b/i;
+    const priceEls = Array.from(el.querySelectorAll('.a-price:not([data-a-strike])'));
+    const candidates = [];
+
+    for (const priceEl of priceEls) {
+      // Walk up a few levels to find the containing row — installment offers
+      // often show "/mo" as a sibling of the price, not a child.
+      const context = (priceEl.closest('.a-row, .a-section')?.innerText
+        || priceEl.parentElement?.innerText
+        || priceEl.innerText
+        || '');
+      if (INSTALLMENT_RE.test(context)) continue;
+
+      const offscreen = priceEl.querySelector('.a-offscreen');
+      const text = (offscreen?.innerText || priceEl.innerText || '');
+      const match = text.match(/\$[\d,]+\.?\d*/);
+      if (match) {
+        const val = parseFloat(match[0].replace(/[$,]/g, ''));
+        if (val > 0) candidates.push(val);
+      }
+    }
+
+    if (candidates.length > 0) {
+      // Full prices are almost always larger than any per-item fragment (e.g. shipping)
+      // but smaller than strikethroughs (which we already excluded via :not).
+      return Math.max(...candidates);
+    }
+
+    // Fallback: scan the whole card innerText for any dollar amount, reject /mo context
+    const rawText = el.innerText || '';
+    if (INSTALLMENT_RE.test(rawText)) {
+      // Card shows installment offer — try to find a non-installment price by
+      // stripping the "/mo" fragment first
+      const stripped = rawText.replace(INSTALLMENT_RE, ' ');
+      const textMatch = stripped.match(/\$[\d,]+\.\d{2}/);
+      if (textMatch) return parseFloat(textMatch[0].replace(/[$,]/g, ''));
+      return 0;
+    }
+    const textMatch = rawText.match(/\$[\d,]+\.\d{2}/);
+    if (textMatch) return parseFloat(textMatch[0].replace(/[$,]/g, ''));
+    return 0;
   }
 
   // 3. Extract fields from each card
   const listings = unique.slice(0, MAX).map((el, i) => {
     const title = extractTitle(el);
-
-    // Price — use innerText and regex (handles .a-price-whole + .a-price-fraction)
-    const priceContainer = el.querySelector('.a-price:not([data-a-strike]) .a-offscreen')
-      || el.querySelector('.a-price:not([data-a-strike])');
-    let price = 0;
-    if (priceContainer) {
-      const priceMatch = priceContainer.innerText.match(/\$[\d,]+\.?\d*/);
-      if (priceMatch) price = parseFloat(priceMatch[0].replace(/[$,]/g, ''));
-    }
-    // Fallback: try card innerText for price
-    if (price === 0) {
-      const textMatch = el.innerText.match(/\$[\d,]+\.\d{2}/);
-      if (textMatch) price = parseFloat(textMatch[0].replace(/[$,]/g, ''));
-    }
+    const condition = detectCondition(title);
+    const price = extractPrice(el);
 
     // Original price (strikethrough)
     let original_price = null;
@@ -128,7 +217,7 @@
       original_price,
       currency: 'USD',
       url,
-      condition: 'new',
+      condition,
       is_available: true,
       image_url,
       seller: null,
