@@ -1,4 +1,9 @@
 import Foundation
+import os
+
+// MARK: - Logger
+
+private let sseLog = Logger(subsystem: "com.barkain.app", category: "SSE")
 
 // MARK: - ScannerViewModel
 
@@ -58,6 +63,7 @@ final class ScannerViewModel {
         // Step 2c: consume the SSE stream. Each retailer_result event mutates
         // `priceComparison` in place (lazy-seeded on first event). On stream
         // failure, fall back to the batch endpoint.
+        sseLog.info("fetchPrices: starting stream for product \(product.name, privacy: .public) forceRefresh=\(forceRefresh, privacy: .public)")
         var sawDone = false
         var sawAnyEvent = false
         do {
@@ -66,13 +72,16 @@ final class ScannerViewModel {
                 forceRefresh: forceRefresh
             ) {
                 sawAnyEvent = true
+                sseLog.info("fetchPrices: received event \(String(describing: event), privacy: .public)")
                 switch event {
                 case .retailerResult(let update):
                     apply(update, for: product)
                 case .done(let summary):
                     apply(summary, for: product)
                     sawDone = true
+                    sseLog.info("fetchPrices: sawDone=true succeeded=\(summary.retailersSucceeded, privacy: .public) failed=\(summary.retailersFailed, privacy: .public) cached=\(summary.cached, privacy: .public)")
                 case .error(let err):
+                    sseLog.error("fetchPrices: received error event code=\(err.code, privacy: .public) message=\(err.message, privacy: .public)")
                     priceComparison = nil
                     priceError = .server(err.message)
                     isPriceLoading = false
@@ -82,6 +91,7 @@ final class ScannerViewModel {
             if !sawDone {
                 // Stream closed without a `done` event — treat as soft failure
                 // and fall back to the batch endpoint.
+                sseLog.warning("fetchPrices: stream closed without done — falling back to batch. sawAnyEvent=\(sawAnyEvent, privacy: .public)")
                 let seenEvents = sawAnyEvent ? priceComparison : nil
                 await fallbackToBatch(
                     product: product,
@@ -91,6 +101,7 @@ final class ScannerViewModel {
                 return
             }
         } catch let apiError as APIError {
+            sseLog.warning("fetchPrices: stream threw APIError — falling back to batch. error=\(apiError.localizedDescription, privacy: .public) sawDone=\(sawDone, privacy: .public)")
             await fallbackToBatch(
                 product: product,
                 forceRefresh: forceRefresh,
@@ -98,6 +109,7 @@ final class ScannerViewModel {
             )
             return
         } catch {
+            sseLog.warning("fetchPrices: stream threw unknown error — falling back to batch. error=\(error.localizedDescription, privacy: .public) sawDone=\(sawDone, privacy: .public)")
             await fallbackToBatch(
                 product: product,
                 forceRefresh: forceRefresh,
@@ -106,6 +118,7 @@ final class ScannerViewModel {
             return
         }
 
+        sseLog.info("fetchPrices: stream completed successfully")
         isPriceLoading = false
     }
 
@@ -172,6 +185,7 @@ final class ScannerViewModel {
                 productId: product.id,
                 forceRefresh: forceRefresh
             )
+            sseLog.info("fallbackToBatch: batch returned \(batch.prices.count, privacy: .public) prices, \(batch.retailerResults.count, privacy: .public) retailer results")
             priceComparison = batch
             priceError = nil
         } catch let apiError as APIError {

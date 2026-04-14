@@ -394,7 +394,8 @@ Update this table after every step:
 | Post-2b-val Hardening (2026-04-12) | 152 | 21 | 0 | 0 | **0 new**, 1 existing test updated (`test_walmart_http_adapter::test_fetch_walmart_success_returns_listings` now asserts `Restored → refurbished` instead of `used`). Session added: per-retailer status system, sub-variant hard gate, Amazon refurb + installment fixes, supplier-code cleanup, accessory filter, manual UPC entry — all live-validated against real Amazon/Walmart/Best Buy but not unit-tested. Test-debt paid down in Step 2b-final. See CLAUDE.md § "Post-2b-val hardening COMPLETE" |
 | Step 2b-final (2026-04-13) | 181 | 21 | 0 | 0 | 35 new: M1 model-field×2 (resolve_exposes_gemini_model + resolve_handles_null_gemini_model), M2 gemini_model relevance×5 (generation_marker×2, gpu_model×2, backward_compat×1), hardening×24 (clean_product_name×4, is_accessory×4, ident_to_regex×3, variant_equality×2, classify_error×2 + 8-code parametrize, retailer_results_e2e×1), carrier-listing×4. Paid down the "most load-bearing test-debt item" from post-2b-val. `_MODEL_PATTERNS[5]` + `_ORDINAL_TOKENS` added for GPU + generation-marker scoring. |
 | Step 2c (2026-04-13) | 192 | 32 | 0 | 0 | 22 new: backend stream×11 (`test_m2_prices_stream.py` — as_completed completion order, success/no_match/unavailable event payloads, Redis cache short-circuit, DB cache short-circuit, force_refresh bypass, SSE content-type, 404-before-stream-opens, end-to-end wire parsing, unknown product raises) + iOS SSE parser×5 (`SSEParserTests.swift` — single event, multiple events, multi-line data, trailing flush, comment/unknown lines ignored) + iOS scanner stream×6 (`ScannerViewModelTests.swift` — incremental retailerResults mutation, sortedPrices re-sorts as events arrive, `.error` event clears comparison, thrown-error falls back to batch, closed-without-done falls back, bestPrice tracks cheaper retailer). PF-2 eliminated 33 pytest warnings by removing redundant `pytestmark = pytest.mark.asyncio` (asyncio_mode=auto is set in pyproject.toml). Streaming tests drive the generator directly via an injected `_FakeContainerClient` for the service-level assertions, and use `httpx.AsyncClient.stream()` + an `_collect_sse()` line parser for the endpoint-level assertions. |
-| **Total** | **192** | **32** | **0** | **0** | |
+| Step 2c-fix (2026-04-13) | 192 | 36 | 0 | 0 | 4 new byte-level SSE parser tests (`SSEParserTests.swift` — `test_byte_level_splits_on_LF`, `test_byte_level_handles_CRLF_line_endings`, `test_byte_level_flushes_partial_trailing_event_without_final_blank_line`, `test_byte_level_no_spurious_events_from_partial_lines`). Driven through a new test-visible `SSEParser.parse(bytes:)` entry point that accepts any `AsyncSequence<UInt8>`, over a hand-rolled `ByteStream` fixture that yields bytes one at a time with `Task.yield()` between each — simulating wire-level delivery. **These tests would not have caught 2c-val-L6** (the root cause was `URLSession.AsyncBytes.lines` buffering, which is specific to the real URLSession pipeline and impossible to reproduce in a unit test without a real TCP connection). They guard against regressions in the manual byte splitter — the buffering bug itself is guarded by the os_log instrumentation which makes any future regression observable in a single sim run. Live-backend XCUITest deferred to Step 2g. |
+| **Total** | **192** | **36** | **0** | **0** | |
 
 ---
 
@@ -496,3 +497,60 @@ Every adapter and every retailer container must have a companion real-API smoke 
 - **SP-8** — iOS URLSession 60 s default timed out before 90 s backend round trip. Invisible because `MockAPIClient` returns synchronously.
 
 All seven of these were one-line or small fixes once discovered. The lesson isn't "write more unit tests" — it's "the mocking boundary is a blind spot, and the blind spot must have its own test discipline."
+
+**Step 2c-val added one more to this list:**
+
+- **2c-val-L6** — `URLSession.AsyncBytes.lines` buffers aggressively for small SSE payloads. The iOS SSE parser's 5 unit tests + ScannerViewModel's 6 stream tests all passed because they inject an `AsyncThrowingStream<RetailerStreamEvent, Error>` above the `URLSession.bytes(for:)` layer, never exercising the real `AsyncBytes.lines` iterator. The bug only surfaced when a real TCP connection delivered events seconds apart — at which point `lines` held them back until stream close, `sawDone` never flipped, and `fallbackToBatch()` fired on every call. Fix: replace `bytes.lines` with a manual byte-level splitter (Step 2c-fix). Same lesson: the mocking boundary was above the actual buffering layer. See also the SSE debugging section below.
+
+---
+
+## SSE debugging (Step 2c-fix)
+
+The iOS SSE consumer emits structured os_log events on the `com.barkain.app` subsystem, category `SSE`. These cover the full pipeline: stream connection opened / HTTP status, each raw line received from the byte splitter, each parsed `SSEEvent`, each decoded `RetailerStreamEvent`, `sawDone` transitions, fallback triggers, stream end / error. os_log is lazy-evaluated and costs nothing in Release builds.
+
+**Watch a live session from the host:**
+
+```bash
+xcrun simctl spawn booted log stream \
+  --level debug \
+  --predicate 'subsystem == "com.barkain.app" AND category == "SSE"' \
+  --style compact
+```
+
+**Expected happy-path signature:**
+
+```
+SSE stream opening for product <uuid> forceRefresh=false
+SSE stream opened HTTP 200
+SSE raw line: event: retailer_result
+SSE raw line: data: {"retailer_id": "amazon", ...}
+SSE raw line:
+SSE parsed event: retailer_result dataLen=882
+SSE decoded: retailerResult(...)
+fetchPrices: received event retailerResult(...)
+… (repeat for each retailer)
+SSE parsed event: done dataLen=292
+fetchPrices: sawDone=true succeeded=N failed=M cached=X
+SSE stream ended normally
+fetchPrices: stream completed successfully
+```
+
+**Failure-mode fingerprinting matrix** — read the log, not the stack trace:
+
+| Observation | Root cause |
+|---|---|
+| `raw line` entries arrive all at once at stream close | Byte splitter regression (buffering returned) |
+| `raw line` arrives incrementally but no `parsed event` | Parser state-machine regression |
+| `parsed event` fires but no `decoded` | Swift JSON decode mismatch — check the error log line for the field name, inspect the `payload=...` attachment |
+| `decoded` fires but no `received event` in ScannerViewModel | VM-level routing regression |
+| `sawDone=true` never logs even though `done` arrives | `apply(_:for:)` or `sawDone` state-machine bug |
+| `falling back to batch` fires on a healthy backend | Upstream error in one of the above; read the `warning` log line for `sawDone=...` state |
+
+**Live-backend XCUITest:** deferred to Step 2g. The repo has zero UI tests today, and standing up a BarkainUITests target + uvicorn lifecycle + launch-argument plumbing exceeded the Step 2c-fix time budget. The os_log category above is the interim substitute — any regression is observable in one session by running the predicate above during a manual scan flow. When Step 2g adds the UITest, it should:
+
+1. Launch the app with a `BARKAIN_E2E_BASE_URL=http://127.0.0.1:8000` launch argument that overrides `AppConfig.apiBaseURL`.
+2. Require `BARKAIN_DEMO_MODE=1 uvicorn app.main:app` to be running on `127.0.0.1:8000` (document as a pre-test precondition; fail fast if `/api/v1/health` isn't reachable).
+3. Drive the manual UPC entry sheet → type `027242923232` → tap Resolve.
+4. Assert within 30s that ≥1 `PriceRow` is visible (proves the stream rendered something before batch would have returned).
+5. Assert that NO `XCUIElement` matching "Sniffing out deals..." is visible while prices are rendering (proves stream-driven transition, not batch-driven).
+6. Wait for final state, assert ≥1 retailer with a non-nil price when `cached=true`.
