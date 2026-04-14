@@ -172,4 +172,92 @@ enum TestFixtures {
         }
     }
     """.data(using: .utf8)!
+
+    // MARK: - Identity (Step 2d)
+
+    static let sampleIdentityProfile = IdentityProfile(
+        userId: "user_test_123",
+        isMilitary: false,
+        isVeteran: false,
+        isStudent: false,
+        isTeacher: false,
+        isFirstResponder: false,
+        isNurse: false,
+        isHealthcareWorker: false,
+        isSenior: false,
+        isGovernment: false,
+        isAaaMember: false,
+        isAarpMember: false,
+        isCostcoMember: false,
+        isPrimeMember: false,
+        isSamsMember: false,
+        idMeVerified: false,
+        sheerIdVerified: false,
+        createdAt: Date(),
+        updatedAt: Date()
+    )
+
+    static let veteranIdentityProfile = IdentityProfile(
+        userId: "user_test_123",
+        isMilitary: false,
+        isVeteran: true,
+        isStudent: false,
+        isTeacher: false,
+        isFirstResponder: false,
+        isNurse: false,
+        isHealthcareWorker: false,
+        isSenior: false,
+        isGovernment: false,
+        isAaaMember: false,
+        isAarpMember: false,
+        isCostcoMember: false,
+        isPrimeMember: false,
+        isSamsMember: false,
+        idMeVerified: true,
+        sheerIdVerified: false,
+        createdAt: Date(),
+        updatedAt: Date()
+    )
+
+    static let sampleEligibleDiscountSamsung = EligibleDiscount(
+        programId: UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!,
+        retailerId: "samsung_direct",
+        retailerName: "Samsung.com",
+        programName: "Samsung Offer Program",
+        eligibilityType: "veteran",
+        discountType: "percentage",
+        discountValue: 30,
+        discountMaxValue: nil,
+        discountDetails: "Up to 30% off. 2 products per category per year.",
+        verificationMethod: "id_me",
+        verificationUrl: "https://www.samsung.com/us/shop/offer-program/military",
+        url: "https://www.samsung.com/us/shop/offer-program/military",
+        estimatedSavings: 450
+    )
+
+    static let sampleEligibleDiscountHP = EligibleDiscount(
+        programId: UUID(uuidString: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")!,
+        retailerId: "hp_direct",
+        retailerName: "HP.com",
+        programName: "Frontline Heroes Program",
+        eligibilityType: "veteran",
+        discountType: "percentage",
+        discountValue: 40,
+        discountMaxValue: 55,
+        discountDetails: "Up to 40% for military; up to 55% for healthcare workers.",
+        verificationMethod: "id_me",
+        verificationUrl: "https://www.hp.com/us-en/shop/cv/hp-frontline-heroes",
+        url: "https://www.hp.com/us-en/shop/cv/hp-frontline-heroes",
+        estimatedSavings: 600
+    )
+
+    static let sampleIdentityDiscountsResponse = IdentityDiscountsResponse(
+        eligibleDiscounts: [sampleEligibleDiscountSamsung, sampleEligibleDiscountHP],
+        identityGroupsActive: ["veteran"]
+    )
+
+    static let emptyIdentityDiscounts = IdentityDiscountsResponse(
+        eligibleDiscounts: [],
+        identityGroupsActive: []
+    )
 }

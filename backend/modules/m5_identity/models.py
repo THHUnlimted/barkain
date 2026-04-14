@@ -38,6 +38,7 @@ class UserDiscountProfile(Base):
     is_nurse: Mapped[bool] = mapped_column(Boolean, server_default="false")
     is_healthcare_worker: Mapped[bool] = mapped_column(Boolean, server_default="false")
     is_senior: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    is_government: Mapped[bool] = mapped_column(Boolean, server_default="false")
     is_aaa_member: Mapped[bool] = mapped_column(Boolean, server_default="false")
     is_aarp_member: Mapped[bool] = mapped_column(Boolean, server_default="false")
     email_domain: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

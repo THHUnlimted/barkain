@@ -18,7 +18,7 @@ RETAILERS = [
         "base_url": "https://www.amazon.com",
         "extraction_method": "agent_browser",
         "supports_coupons": True,
-        "supports_identity": False,
+        "supports_identity": True,
         "supports_portals": True,
     },
     {

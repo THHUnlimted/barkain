@@ -278,10 +278,12 @@ All AI calls request JSON output. Use Instructor library for Pydantic model vali
 |---|---|---|---|---|
 | GET | /api/v1/secondary/{product_id} | M3 | Secondary market listings | 30/min |
 | GET | /api/v1/coupons/{retailer_id} | M4 | Available coupons for retailer | 60/min |
-| GET | /api/v1/profile | M5 | Get user identity profile + cards | 60/min |
-| PUT | /api/v1/profile | M5 | Update identity profile | 30/min |
-| GET | /api/v1/profile/cards | M5 | Get user's card portfolio | 60/min |
-| POST | /api/v1/profile/cards | M5 | Add card to portfolio | 30/min |
+| GET | /api/v1/identity/profile | M5 | **Step 2d** — Get current user's identity profile (16 boolean flags). Auto-creates an empty profile on first call — iOS never needs to handle 404. Also upserts the `users` FK row so Clerk JWT / demo-mode paths don't hit an IntegrityError on first touch. | 60/min |
+| POST | /api/v1/identity/profile | M5 | **Step 2d** — Full-replace upsert of the identity profile. Any field missing from the request body defaults to False — iOS sends the complete 16-field draft on every save. | 30/min (write) |
+| GET | /api/v1/identity/discounts?product_id= | M5 | **Step 2d** — Discounts the current user qualifies for, given their identity profile. Zero-LLM pure-SQL matching hitting `idx_discount_programs_eligibility`, deduplicated by `(retailer_id, program_name)` so Samsung's 8-eligibility-row program surfaces as one card. Optional `product_id` param computes `estimated_savings` against the product's best available price (capped at `discount_max_value` when set). Target: < 150ms median. | 60/min |
+| GET | /api/v1/identity/discounts/all | M5 | **Step 2d** — Browse view of every active discount program (no user scoping beyond auth). Same dedup as `/discounts`. Uses `list[EligibleDiscount]` with `estimated_savings=null`. | 60/min |
+| GET | /api/v1/profile/cards | M5 | Get user's card portfolio — **deferred to Step 2e** | 60/min |
+| POST | /api/v1/profile/cards | M5 | Add card to portfolio — **deferred to Step 2e** | 30/min |
 
 ### Phase 3 Endpoints
 

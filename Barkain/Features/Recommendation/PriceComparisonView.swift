@@ -25,6 +25,10 @@ struct PriceComparisonView: View {
     let product: Product
     let comparison: PriceComparison
     let viewModel: ScannerViewModel
+    var onRequestOnboarding: (() -> Void)? = nil
+
+    @AppStorage("hasCompletedIdentityOnboarding")
+    private var hasCompletedOnboarding: Bool = false
 
     // MARK: - Body
 
@@ -34,6 +38,8 @@ struct PriceComparisonView: View {
                 ProductCard(product: product)
                 savingsSection
 
+                identityDiscountsSection
+
                 sectionHeader
                 retailerList
 
@@ -41,6 +47,22 @@ struct PriceComparisonView: View {
                 actionButtons
             }
             .padding(Spacing.lg)
+            .animation(.easeInOut(duration: 0.3), value: viewModel.identityDiscounts)
+        }
+    }
+
+    // MARK: - Identity Discounts (Step 2d)
+
+    @ViewBuilder
+    private var identityDiscountsSection: some View {
+        if !viewModel.identityDiscounts.isEmpty {
+            IdentityDiscountsSection(discounts: viewModel.identityDiscounts)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+        } else if !hasCompletedOnboarding {
+            IdentityOnboardingCTARow {
+                onRequestOnboarding?()
+            }
+            .transition(.opacity)
         }
     }
 
@@ -283,5 +305,14 @@ private struct PreviewAPIClient: APIClientProtocol {
     }
     func streamPrices(productId: UUID, forceRefresh: Bool) -> AsyncThrowingStream<RetailerStreamEvent, Error> {
         AsyncThrowingStream { $0.finish() }
+    }
+    func getIdentityProfile() async throws -> IdentityProfile {
+        fatalError("Preview only")
+    }
+    func updateIdentityProfile(_ request: IdentityProfileRequest) async throws -> IdentityProfile {
+        fatalError("Preview only")
+    }
+    func getEligibleDiscounts(productId: UUID?) async throws -> IdentityDiscountsResponse {
+        IdentityDiscountsResponse(eligibleDiscounts: [], identityGroupsActive: [])
     }
 }

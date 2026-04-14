@@ -4,6 +4,13 @@ import SwiftUI
 
 struct ContentView: View {
 
+    // MARK: - State
+
+    @AppStorage("hasCompletedIdentityOnboarding")
+    private var hasCompletedOnboarding: Bool = false
+
+    @State private var showOnboarding = false
+
     // MARK: - Body
 
     var body: some View {
@@ -30,13 +37,24 @@ struct ContentView: View {
             }
 
             NavigationStack {
-                ProfilePlaceholderView()
+                ProfileView()
             }
             .tabItem {
                 Label("Profile", systemImage: "person.circle")
             }
         }
         .tint(.barkainPrimary)
+        .task {
+            if !hasCompletedOnboarding {
+                showOnboarding = true
+            }
+        }
+        .sheet(isPresented: $showOnboarding) {
+            IdentityOnboardingView(
+                viewModel: IdentityOnboardingViewModel(apiClient: APIClient()),
+                hasCompletedOnboarding: $hasCompletedOnboarding
+            )
+        }
     }
 }
 

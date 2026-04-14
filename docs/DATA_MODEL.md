@@ -32,6 +32,8 @@
 | # | Migration | Tables | Step |
 |---|-----------|--------|------|
 | 0001 | Initial schema — all 21 tables | users, retailers, products, prices, price_history (hypertable), user_discount_profiles, discount_programs, card_reward_programs, rotating_categories, user_cards, user_category_selections, portal_bonuses, listings, coupon_cache, receipts, receipt_items, watched_items, affiliate_clicks, prediction_cache, retailer_health, watchdog_events | 1a |
+| 0002 | Composite PK on price_history (product_id, retailer_id, time) — TimescaleDB hypertables require the partitioning column in any unique constraint | 2a pre-fix |
+| 0003 | Add `is_government` BOOLEAN NOT NULL DEFAULT false to user_discount_profiles — Step 2d brings the total identity booleans to 16, covering the Samsung/Dell/HP/LG/Microsoft government-employee discount tier | 2d |
 
 ---
 
@@ -93,12 +95,21 @@ CREATE TABLE users (
 -- ================================================================
 -- RETAILERS: Master retailer registry
 -- ================================================================
+-- Seeded rows (Phase 1, 11 rows via scripts/seed_retailers.py):
+--   amazon, best_buy, walmart, target, home_depot, lowes, ebay_new, ebay_used,
+--   sams_club, backmarket, fb_marketplace
+-- Seeded rows (Step 2d, 8 brand-direct rows via scripts/seed_discount_catalog.py):
+--   samsung_direct, apple_direct, hp_direct, dell_direct, lenovo_direct,
+--   microsoft_direct, sony_direct, lg_direct
+--   These are redirect-only retailers (extraction_method='none') — Barkain does
+--   not scrape them; users tap an identity discount card and are sent to the
+--   brand's verification page in Safari.
 CREATE TABLE retailers (
-    id                  TEXT PRIMARY KEY,          -- 'best_buy', 'amazon', 'ebay'
+    id                  TEXT PRIMARY KEY,          -- 'best_buy', 'amazon', 'ebay', 'samsung_direct'
     display_name        TEXT NOT NULL,
     base_url            TEXT NOT NULL,
     logo_url            TEXT,
-    extraction_method   TEXT NOT NULL,             -- 'api', 'keepa', 'agent_browser'
+    extraction_method   TEXT NOT NULL,             -- 'api', 'keepa', 'agent_browser', 'none' (brand-direct)
     supports_coupons    BOOLEAN DEFAULT false,
     supports_identity   BOOLEAN DEFAULT false,
     supports_portals    BOOLEAN DEFAULT false,
@@ -197,6 +208,7 @@ CREATE TABLE user_discount_profiles (
     is_nurse            BOOLEAN DEFAULT false,
     is_healthcare_worker BOOLEAN DEFAULT false,
     is_senior           BOOLEAN DEFAULT false,
+    is_government       BOOLEAN DEFAULT false,    -- added via migration 0003 (Step 2d)
     is_aaa_member       BOOLEAN DEFAULT false,
     is_aarp_member      BOOLEAN DEFAULT false,
     email_domain        TEXT,                     -- for .edu detection
@@ -216,6 +228,11 @@ CREATE TABLE user_discount_profiles (
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Step 2d note: the 9 eligibility groups queried by IdentityService map to these booleans:
+-- military, veteran, student, teacher, first_responder, nurse, healthcare_worker, senior, government.
+-- Memberships (aaa, aarp, costco, prime, sams) are captured in onboarding but are not yet
+-- wired to discount matching — reserved for future warehouse-pricing and membership-gated flows.
 
 -- ================================================================
 -- DISCOUNT PROGRAMS: What discounts each retailer offers

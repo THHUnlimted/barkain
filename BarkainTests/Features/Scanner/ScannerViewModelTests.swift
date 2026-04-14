@@ -373,4 +373,64 @@ final class ScannerViewModelTests: XCTestCase {
         // maxSavings == highest - lowest == 399 - 289.99
         XCTAssertEqual(viewModel.maxSavings!, 109.01, accuracy: 0.01)
     }
+
+    // MARK: - Step 2d: Identity Discounts
+
+    func test_fetchIdentityDiscounts_firesAfterStreamDone() async {
+        // Given — price stream succeeds end-to-end with a done event
+        mockClient.streamPricesEvents = [
+            makePriceUpdate(retailerId: "walmart", retailerName: "Walmart", price: 289.99),
+            makeDoneSummary(total: 1, succeeded: 1),
+        ]
+        mockClient.getEligibleDiscountsResult = .success(TestFixtures.sampleIdentityDiscountsResponse)
+
+        // When — full scan triggers both resolveProduct and fetchPrices
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+
+        // Then — identity discounts landed
+        XCTAssertEqual(viewModel.identityDiscounts.count, 2)
+        XCTAssertEqual(viewModel.identityDiscounts.first?.retailerId, "samsung_direct")
+        XCTAssertEqual(mockClient.getEligibleDiscountsCallCount, 1)
+        // Product id must be forwarded so estimated_savings can be computed
+        XCTAssertEqual(mockClient.getEligibleDiscountsLastProductId, TestFixtures.sampleProductId)
+        // Price list still rendered correctly — identity discounts didn't disrupt it
+        XCTAssertEqual(viewModel.priceComparison?.prices.count, 1)
+        XCTAssertNil(viewModel.priceError)
+    }
+
+    func test_fetchIdentityDiscounts_emptyOnFailure_doesNotSetPriceError() async {
+        // Given — stream succeeds but identity endpoint fails
+        mockClient.streamPricesEvents = [
+            makePriceUpdate(retailerId: "walmart", retailerName: "Walmart", price: 289.99),
+            makeDoneSummary(total: 1, succeeded: 1),
+        ]
+        mockClient.getEligibleDiscountsResult = .failure(.server("identity unavailable"))
+
+        // When
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+
+        // Then — discounts empty but priceError still nil (non-fatal)
+        XCTAssertTrue(viewModel.identityDiscounts.isEmpty)
+        XCTAssertNil(viewModel.priceError)
+        XCTAssertEqual(viewModel.priceComparison?.prices.count, 1)
+        XCTAssertEqual(mockClient.getEligibleDiscountsCallCount, 1)
+    }
+
+    func test_fetchIdentityDiscounts_clearedOnNewScan() async {
+        // Given — first scan loads discounts
+        mockClient.streamPricesEvents = [
+            makePriceUpdate(retailerId: "walmart", retailerName: "Walmart", price: 289.99),
+            makeDoneSummary(total: 1, succeeded: 1),
+        ]
+        mockClient.getEligibleDiscountsResult = .success(TestFixtures.sampleIdentityDiscountsResponse)
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+        XCTAssertEqual(viewModel.identityDiscounts.count, 2)
+
+        // When — second scan starts with a new resolveProduct failure path
+        mockClient.resolveProductResult = .failure(.notFound)
+        await viewModel.handleBarcodeScan(upc: "999999999999")
+
+        // Then — discounts cleared at the start of the second scan
+        XCTAssertTrue(viewModel.identityDiscounts.isEmpty)
+    }
 }
