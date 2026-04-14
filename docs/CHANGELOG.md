@@ -497,6 +497,46 @@ Live integration run against real Gemini + real EC2 containers (Amazon / Best Bu
 
 ---
 
+### Step 2e-val — Card Portfolio Smoke Test (2026-04-14)
+
+**Branch:** `phase-2/step-2e-val` off `main` @ `1cb79ad` (after PR #12 merged)
+**PR target:** `main`
+**Runtime:** ~30 min, full 6-phase protocol
+**Result:** 0 bugs, all 6 phases PASS. Docs-only commit (this entry + CLAUDE.md + `Barkain Prompts/` appendices).
+
+**Protocol:** `Barkain Prompts/Step_2e_val_Card_Portfolio_Smoke_Test.md`. Driven entirely through the iPhone 17 / iOS 26.4 simulator against a real local backend (uvicorn + Docker Postgres + Redis + Walmart Firecrawl adapter). No EC2 — 10 of 11 retailers return `.unavailable` as designed.
+
+**Pre-flight:** Branch cut from `main`. Backend started with `BARKAIN_DEMO_MODE=1` + `WALMART_ADAPTER=firecrawl`. Four idempotent seed scripts ran clean (11 retailers, 8 brand-direct, 52 discount rows / 17 distinct programs, 30 cards, 2 rotating rows). `GET /api/v1/cards/catalog` returned 30 cards; `GET /api/v1/identity/discounts/all` returned 17. Fresh app install via `xcrun simctl uninstall` + `build_run_sim`.
+
+**Phase results:**
+- **Phase 1 — Identity onboarding:** Veteran toggled → Continue (Memberships) → Skip (Verification) → Save. `@AppStorage("hasCompletedIdentityOnboarding")` flipped, sheet dismissed.
+- **Phase 2 — Card selection UI:** CardSelectionView loaded 30 cards grouped by issuer alphabetically (Amex → Wells Fargo). Search "Chase" filtered to exactly 7 Chase cards. Chase Freedom Flex tap added the card with a gold checkmark and **no `CategorySelectionSheet` appeared** — the `pendingCategorySelection` guard in `CardSelectionViewModel.addCard` correctly checks `userSelectedAllowed` is non-empty. Chase Sapphire Reserve added. Freedom Flex star tap toggled to `star.fill`. Profile tab showed "My Cards (2) | ⭐Chase Freedom Flex + Chase Sapphire Reserve" chips.
+- **Phase 3 — Scan → stream → identity → cards:** Samsung Galaxy Buds 2 (`887276546810`) via Quick Picks. Gemini resolved to "Samsung Galaxy Buds2 (SM-R177NZKAXAR)". SSE stream fired, Walmart via Firecrawl returned $199.99 "New" with BEST BARKAIN badge, all other 10 retailers `.unavailable`. Identity Savings section rendered 9 cards (Samsung/HP/LG/Lowe's/Apple/Home Depot/Microsoft/Lenovo/Dell) all with Verify badges.
+- **Phase 4 — Card recommendation detail:** Walmart row rendered inline subtitle "Use Chase Sapphire Reserve for 1x ($4.00 back)". Dollar math verified: `$199.99 × 1.0 × 2.0 / 100 = $3.9998 ≈ $4.00` ✅. CSR (2.0 cpp) correctly beat Freedom Flex (1.25 cpp → $2.50) because Walmart is not in Freedom Flex's Q2 rotating category list `[amazon, chase_travel, feeding_america]`, so both cards fall through to base rate and the higher cpp wins.
+- **Phase 5 — Empty-cards CTA:** Both cards removed via swipe-delete → Remove button tap. Re-scanned Samsung → "Add your cards — See which card earns the most at each retailer" CTA rendered below the retailer list. Verified the CTA is keyed off backend `userHasCards=false` (not a local flag).
+- **Phase 6 — Second-scan state reset:** Sony WH-1000XM5 (`027242923232`) via typed UPC. Product card refreshed, identity section refreshed with different percentages ("Up to 55%" vs Samsung run's "40%"), Walmart row flipped from "$199.99" to "Not found", "0 of 11 retailers have this product", **zero stale card recommendations visible**. `ScannerViewModel.handleBarcodeScan` reset paths for `cardRecommendations = []` + `identityDiscounts = []` verified.
+
+**Observations (not bugs — 5 logged in error report appendix):**
+1. Removing a preferred card does not auto-promote the next card (debatable UX)
+2. Identity discount labels render "Save $X" when retailer price is available, "Up to X% off" otherwise — inconsistent surface across scans
+3. `addCardsCTA` correctly keyed off backend response — no local `@AppStorage` staleness
+4. Harness quirk: mid-list-reflow click during swipe-delete can inadvertently tap the next row; future smoke tests should add 600ms settle delay
+5. `osascript` key events don't scroll iOS scroll views — use cliclick drag
+
+**Tooling discovery:** XcodeBuildMCP in this environment exposes only `screenshot` + `snapshot_ui` + build/launch tools; UI automation (tap/type/swipe) is gated behind a config step that wasn't set. Worked around via `cliclick` (Homebrew, <10s install) + `osascript System Events` for clicks and typing. Coordinate mapping: `screen = (765 + logical_x * 0.9652, 123 + logical_y * 0.9657)` for the iPhone 17 simulator in the current window position. `fb-idb` via pip was tried but broke on Python 3.14.
+
+**Files modified:**
+```
+CLAUDE.md                                                     # Current State: new Step 2e-val line above the Step 2e entry
+docs/CHANGELOG.md                                             # This section
+Barkain Prompts/Error_Report_Step_2e_Card_Portfolio.md       # Appendix: 2e-val results table + 5 observations
+Barkain Prompts/Conversation_Summary_Step_2e_Card_Portfolio.md # Appendix: tooling discoveries + end-to-end flow narrative
+```
+
+**Verdict:** Step 2e ships cleanly. The core claim — "a single barcode scan surfaces price + identity discount + card reward in one view" — is verified live on iOS 26.4. No backend/iOS code changes required. Ready for Step 2f (M11 Billing / RevenueCat).
+
+---
+
 ### Step 2e — M5 Card Portfolio + Reward Matching (2026-04-14)
 
 **Branch:** `phase-2/step-2e` off `main` @ `04848a5` (after PR #11 merged)
