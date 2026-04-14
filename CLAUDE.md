@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** April 2026 (v4.1 — chore: file inventories + decision rationale moved to `docs/CHANGELOG.md`)
+> **Last updated:** April 2026 (v4.2 — Step 2c-val SSE live smoke test complete)
 
 ---
 
@@ -283,7 +283,8 @@ This project uses a **two-tier AI workflow:**
 **Post-2b-val — Simulator + Relevance + Retailer-Status Hardening: COMPLETE** ✅ (2026-04-12)
 **Chore — CHANGELOG.md created, CLAUDE.md slimmed from ~74K → ≤35K chars** ✅ (2026-04-13)
 **Step 2b-final — Close Out (Gemini model field + post-2b-val test coverage + CI + EC2 verification): COMPLETE** ✅ (2026-04-13)
-**Step 2c — Streaming Per-Retailer Results (SSE): COMPLETE** ✅ (2026-04-13)
+**Step 2c — Streaming Per-Retailer Results (SSE): COMPLETE** ✅ (2026-04-13, merged to main as PR #8 → `9ceafe1`)
+**Step 2c-val — SSE Live Smoke Test: COMPLETE** ✅ (2026-04-13, 5 PASS / 1 FUNCTIONAL-PASS-UX-FAIL, no fixes applied — **new latent bug 2c-val-L6 found: iOS client always falls back to batch, never renders progressive stream events; see `docs/CHANGELOG.md` §Step 2c-val**)
 
 - AI abstraction: ✅ (Gemini + Claude Opus)
 - Watchdog supervisor: ✅ (nightly health checks, self-healing via Opus)
