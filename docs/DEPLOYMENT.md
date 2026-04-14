@@ -115,9 +115,17 @@ LOG_LEVEL=DEBUG                  # DEBUG | INFO | WARNING | ERROR
 CORS_ORIGINS=http://localhost:3000,http://localhost:8000
 
 # ── Rate Limiting ────────────────────────────────────
-RATE_LIMIT_GENERAL=60            # per minute
-RATE_LIMIT_WRITE=30              # per minute
-RATE_LIMIT_AI=10                 # per minute
+RATE_LIMIT_GENERAL=60            # per minute (free tier base)
+RATE_LIMIT_WRITE=30              # per minute (free tier base)
+RATE_LIMIT_AI=10                 # per minute (free tier base)
+RATE_LIMIT_PRO_MULTIPLIER=2      # pro tier = base × this (Step 2f)
+
+# ── Billing / RevenueCat (Step 2f) ───────────────────
+# Shared bearer token used to validate POST /api/v1/billing/webhook against
+# the value configured in RevenueCat dashboard → Project Settings →
+# Integrations → Webhooks → Authorization. Required for the webhook to
+# accept events; misconfigured = 401 WEBHOOK_AUTH_FAILED.
+REVENUECAT_WEBHOOK_SECRET=
 
 # ── Walmart Adapter Routing (post-Step-2a paradigm shift) ──
 # Selects which path handles walmart scrapes. All other retailers always use
@@ -156,18 +164,52 @@ DECODO_PROXY_HOST=gate.decodo.com:7000
 
 ```
 # Config/Debug.xcconfig
-API_BASE_URL = http://localhost:8000
+API_BASE_URL = http:$()/$()/127.0.0.1:8000
 CLERK_PUBLISHABLE_KEY = pk_test_xxxxx
+REVENUECAT_API_KEY = test_xxxxx       # public RC API key, safe to commit
 
 # Config/Release.xcconfig
-API_BASE_URL = https://api.barkain.ai
+API_BASE_URL = https:$()/$()/api.barkain.ai
 CLERK_PUBLISHABLE_KEY = pk_live_xxxxx
+REVENUECAT_API_KEY =                  # production RC API key, set at release
 
 # Config/Secrets.xcconfig (gitignored)
 # Real keys — not committed
 ```
 
-**Rule:** Never hardcode secrets in Swift source. Reference via `Info.plist` build settings → `Bundle.main.infoDictionary`.
+**Rule:** Never hardcode secrets in Swift source. Reference via `Info.plist` build settings → `Bundle.main.infoDictionary`. The `$()/$()/` escaping prevents xcconfig from treating `//` as a comment.
+
+**RevenueCat note (Step 2f).** `REVENUECAT_API_KEY` is the **public** RC API key — designed to ship in client bundles and safe to commit. The server-side `REVENUECAT_WEBHOOK_SECRET` lives in `backend/.env` and is the only secret half of the pair.
+
+---
+
+## Billing / RevenueCat Setup (Step 2f)
+
+The Step 2f code (m11_billing module + iOS SubscriptionService + PaywallHost) is fully wired but depends on dashboard configuration that lives outside the repo. Mike completes these post-merge tasks before the paywall renders any products:
+
+### RevenueCat dashboard
+
+1. **Create the project** at https://app.revenuecat.com (one project per environment — staging vs production).
+2. **Add the iOS app** under Project Settings → Apps → New App → iOS, with bundle id `com.molatunji3.barkain`.
+3. **Configure App Store Connect integration**:
+   - App Store Connect API key + issuer id under Project Settings → Apps → App Store Connect API Key.
+   - This is what lets RC fetch transaction details from Apple.
+4. **Create products** in App Store Connect first (Subscriptions group + non-consumable for lifetime), then sync them in RC under Products. Three products:
+   - `lifetime` — non-consumable, e.g. $149.99
+   - `yearly` — auto-renewable annual subscription, e.g. $59.99/yr
+   - `monthly` — auto-renewable monthly subscription, e.g. $7.99/mo
+5. **Create the entitlement** — Project Settings → Entitlements → New Entitlement → identifier exactly `Barkain Pro` (case-sensitive, has a space). Attach all 3 products.
+6. **Create the offering** — Offerings → New Offering → identifier `default` → add the 3 products as packages (Annual / Monthly / Lifetime). The PaywallView reads from this offering by default.
+7. **Configure the paywall layout** — Offerings → default → Paywall → choose a template, set copy + colors. The dashboard owns layout, not the iOS code.
+8. **Configure the Customer Center** — Project Settings → Customer Center → set support URL, paths for cancel/refund/contact, theme. The `CustomerCenterView()` wrapper inherits these.
+9. **Get the public API key** — Project Settings → API Keys → iOS → copy into `Config/Debug.xcconfig` (test key) and `Config/Release.xcconfig` (production key).
+10. **Configure the webhook** — Project Settings → Integrations → Webhooks → New Webhook → URL `https://<barkain backend domain>/api/v1/billing/webhook`. Set the Authorization header to `Bearer <random secret you generate>`. Copy the same secret into `backend/.env` as `REVENUECAT_WEBHOOK_SECRET`. Mismatch → 401 / RC retries.
+
+### Verification
+
+- iOS build with the test API key: paywall sheet should render the offering's products. If you see a loading state forever, the offering isn't published or the API key is wrong.
+- Backend webhook reachability test: hit `POST /api/v1/billing/webhook` with `curl` carrying the bearer token and a minimal `INITIAL_PURCHASE` event payload — should return `{"ok": true, "action": "processed", "type": "INITIAL_PURCHASE", "tier": "pro"}`.
+- Status endpoint: `curl https://.../api/v1/billing/status` (with auth) should return the synced tier.
 
 ---
 

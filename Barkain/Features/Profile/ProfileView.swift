@@ -12,6 +12,10 @@ struct ProfileView: View {
     @State private var loadError: APIError?
     @State private var showEditSheet = false
     @State private var showCardSheet = false
+    @State private var showPaywall = false
+
+    @Environment(SubscriptionService.self) private var subscription
+    @Environment(FeatureGateService.self) private var featureGate
 
     @AppStorage("hasCompletedIdentityOnboarding")
     private var hasCompletedOnboarding: Bool = false
@@ -51,6 +55,10 @@ struct ProfileView: View {
             }) {
                 CardSelectionView(apiClient: apiClient)
             }
+            // Step 2f: paywall sheet for the "Upgrade to Pro" button below.
+            .sheet(isPresented: $showPaywall) {
+                PaywallHost()
+            }
     }
 
     // MARK: - Content Switch
@@ -73,11 +81,79 @@ struct ProfileView: View {
             ScrollView {
                 VStack(spacing: Spacing.xl) {
                     emptyProfileCTA
+                    subscriptionSection
                     cardsSection
                 }
                 .padding(Spacing.lg)
             }
         }
+    }
+
+    // MARK: - Subscription (Step 2f)
+    //
+    // Tier badge + scan count + upgrade button (or Customer Center link
+    // for Pro users). Reads `SubscriptionService` for the tier and
+    // `FeatureGateService` for the daily scan tally.
+
+    @ViewBuilder
+    private var subscriptionSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            HStack {
+                Text("Subscription")
+                    .font(.barkainHeadline)
+                    .foregroundStyle(Color.barkainOnSurfaceVariant)
+                Spacer()
+                tierBadge
+            }
+
+            if subscription.isProUser {
+                NavigationLink {
+                    CustomerCenterHost()
+                } label: {
+                    HStack {
+                        Image(systemName: "gearshape")
+                        Text("Manage subscription")
+                            .font(.barkainBody)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .foregroundStyle(Color.barkainOnSurfaceVariant)
+                    }
+                    .padding(Spacing.md)
+                    .background(Color.barkainSurfaceContainerLow)
+                    .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            } else {
+                if let remaining = featureGate.remainingScans {
+                    Text("Scans today: \(featureGate.dailyScanCount) / \(FeatureGateService.freeDailyScanLimit) — \(remaining) left")
+                        .font(.barkainCaption)
+                        .foregroundStyle(Color.barkainOnSurfaceVariant)
+                }
+                Button {
+                    showPaywall = true
+                } label: {
+                    HStack {
+                        Image(systemName: "pawprint.fill")
+                        Text("Upgrade to Barkain Pro")
+                            .font(.barkainHeadline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Spacing.sm)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.barkainPrimary)
+            }
+        }
+    }
+
+    private var tierBadge: some View {
+        Text(subscription.isProUser ? "Barkain Pro" : "Free Plan")
+            .font(.barkainCaption)
+            .foregroundStyle(Color.barkainPrimary)
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xxs)
+            .background(Color.barkainPrimaryFixed.opacity(0.6))
+            .clipShape(Capsule())
     }
 
     // MARK: - Summary
@@ -86,6 +162,8 @@ struct ProfileView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 headerCard(profile)
+
+                subscriptionSection
 
                 if !activeGroupChips(profile).isEmpty {
                     chipsSection(
@@ -370,12 +448,16 @@ private struct FlowLayout: Layout {
     NavigationStack {
         ProfileView(apiClient: PreviewProfileAPIClient(flagSet: false))
     }
+    .environment(SubscriptionService())
+    .environment(FeatureGateService(proTierProvider: { false }))
 }
 
 #Preview("Veteran profile") {
     NavigationStack {
         ProfileView(apiClient: PreviewProfileAPIClient(flagSet: true))
     }
+    .environment(SubscriptionService())
+    .environment(FeatureGateService(proTierProvider: { false }))
 }
 
 private struct PreviewProfileAPIClient: APIClientProtocol {
@@ -422,5 +504,8 @@ private struct PreviewProfileAPIClient: APIClientProtocol {
     func setCardCategories(userCardId: UUID, request: SetCategoriesRequest) async throws {}
     func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse {
         CardRecommendationsResponse(recommendations: [], userHasCards: false)
+    }
+    func getBillingStatus() async throws -> BillingStatus {
+        BillingStatus(tier: "free", expiresAt: nil, isActive: false, entitlementId: nil)
     }
 }

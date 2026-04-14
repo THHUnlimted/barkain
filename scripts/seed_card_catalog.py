@@ -3,12 +3,12 @@
 Step 2e: populates the zero-LLM card reward catalog from docs/CARD_REWARDS.md.
 Run after alembic upgrade and after seed_retailers.py.
 
-Idempotent via ON CONFLICT upserts on (card_issuer, card_product). A partial
-unique index is created at the top of the run because migration 0001 doesn't
-include one — the seed script owns the constraint until a future migration
-formalizes it.
+Idempotent via ON CONFLICT upserts on (card_issuer, card_product). The unique
+index backing that ON CONFLICT is created by Alembic migration 0004 (Step 2f);
+the seed script no longer lazy-creates it.
 
 Usage:
+    alembic upgrade head  # ensures migration 0004 is applied
     python3 scripts/seed_card_catalog.py
 """
 
@@ -594,21 +594,10 @@ CARDS: list[dict] = [
 
 
 # MARK: - Seeding
-
-async def ensure_unique_index(session: AsyncSession) -> None:
-    """Create the (card_issuer, card_product) unique index if it doesn't exist.
-
-    Migration 0001 doesn't include it, but the seed needs it for ON CONFLICT.
-    Idempotent; safe to re-run. A future migration should take ownership.
-    """
-    await session.execute(
-        text(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_card_reward_programs_product
-            ON card_reward_programs (card_issuer, card_product)
-            """
-        )
-    )
+#
+# Note: the ON CONFLICT (card_issuer, card_product) clause below relies on the
+# `idx_card_reward_programs_product` unique index created by Alembic migration
+# 0004 (Step 2f). Run `alembic upgrade head` before seeding on a fresh DB.
 
 
 async def seed_cards(session: AsyncSession) -> int:
@@ -663,7 +652,6 @@ async def main() -> None:
     async_session = async_sessionmaker(engine, expire_on_commit=False)
 
     async with async_session() as session:
-        await ensure_unique_index(session)
         seeded = await seed_cards(session)
         await session.commit()
         print(f"Seeded {seeded} card reward programs.")

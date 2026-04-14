@@ -7,6 +7,7 @@ struct ScannerView: View {
     // MARK: - Properties
 
     @Environment(\.apiClient) private var apiClient
+    @Environment(FeatureGateService.self) private var featureGate
     @State private var viewModel: ScannerViewModel?
     @State private var scanner = BarcodeScanner()
     @State private var scannerError: BarcodeScannerError?
@@ -59,8 +60,23 @@ struct ScannerView: View {
         }) {
             CardSelectionView(apiClient: apiClient)
         }
+        // Step 2f: present the RevenueCat paywall when the scan quota is hit.
+        // Bound to viewModel.showPaywall — flipped true in handleBarcodeScan
+        // when featureGate.scanLimitReached.
+        .sheet(isPresented: paywallBinding) {
+            PaywallHost(
+                onPurchase: {
+                    // Reset the scanner so the user can immediately re-scan
+                    // after upgrading. Their pending UPC is unchanged.
+                    scanner.clearLastScan()
+                },
+                onRestore: {
+                    scanner.clearLastScan()
+                }
+            )
+        }
         .task {
-            let vm = ScannerViewModel(apiClient: apiClient)
+            let vm = ScannerViewModel(apiClient: apiClient, featureGate: featureGate)
             viewModel = vm
             await startScanner(vm)
         }
@@ -72,6 +88,18 @@ struct ScannerView: View {
         .onDisappear {
             scanner.stopScanning()
         }
+    }
+
+    // MARK: - Paywall Binding (Step 2f)
+
+    /// Bridge `viewModel?.showPaywall` to a non-optional `Binding<Bool>` for
+    /// the `.sheet` modifier. SwiftUI sheet bindings can't be optional, so
+    /// we collapse the optional-vm case to false.
+    private var paywallBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel?.showPaywall ?? false },
+            set: { viewModel?.showPaywall = $0 }
+        )
     }
 
     // MARK: - Manual Entry
@@ -156,7 +184,8 @@ struct ScannerView: View {
                 comparison: comparison,
                 viewModel: viewModel,
                 onRequestOnboarding: { showOnboardingFromCTA = true },
-                onRequestAddCards: { showAddCardsFromCTA = true }
+                onRequestAddCards: { showAddCardsFromCTA = true },
+                onRequestUpgrade: { viewModel.showPaywall = true }
             )
         } else if viewModel.isPriceLoading, let product = viewModel.product {
             // Brief window before the first stream event seeds `priceComparison`.

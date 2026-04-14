@@ -22,6 +22,8 @@ protocol APIClientProtocol: Sendable {
     func setPreferredCard(userCardId: UUID) async throws -> UserCardSummary
     func setCardCategories(userCardId: UUID, request: SetCategoriesRequest) async throws
     func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse
+    // Step 2f — Billing
+    func getBillingStatus() async throws -> BillingStatus
 }
 
 // MARK: - APIClient
@@ -148,6 +150,12 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
 
     func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse {
         try await request(endpoint: .getCardRecommendations(productId: productId))
+    }
+
+    // MARK: - Billing (Step 2f)
+
+    func getBillingStatus() async throws -> BillingStatus {
+        try await request(endpoint: .getBillingStatus)
     }
 
     // MARK: - Streaming (Step 2c)

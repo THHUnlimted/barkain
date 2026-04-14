@@ -83,7 +83,7 @@
 | **iOS OCR** | Vision framework (VNRecognizeTextRequest) | KEEP | Native iOS 13+ OCR for receipt text extraction on-device | ⬜ Phase 3 |
 | **iOS Document Camera** | VisionKit (VNDocumentCameraViewController) | KEEP | Native iOS 13+ document capture UI | ⬜ Phase 3 |
 | **iOS Live Scanner** | VisionKit (DataScannerViewController) | KEEP | Native iOS 16+ live text/barcode recognition. Requires A12+ | ⬜ Phase 3 |
-| **iOS Subscription** | StoreKit 2 via RevenueCat | KEEP | RevenueCat simplifies StoreKit for solo dev; free tier covers MVP | ⬜ Phase 2 |
+| **iOS Subscription** | StoreKit 2 via RevenueCat (purchases-ios-spm v5.67.2) + RevenueCatUI | KEEP | RevenueCat simplifies StoreKit for solo dev; free tier covers MVP. Built-in `PaywallView` + `CustomerCenterView` so dashboard owns layout | ✅ Phase 2 (Step 2f) |
 | **iOS Networking** | URLSession | KEEP | Native; async/await; no dependency needed | ✅ Confirmed |
 | **iOS Image Loading** | AsyncImage | KEEP | Native; sufficient for product images | ✅ Confirmed |
 

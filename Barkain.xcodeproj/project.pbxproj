@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		D1B0000000000000000000A1 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = D1B0000000000000000000B1 /* RevenueCat */; };
+		D1B0000000000000000000A2 /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = D1B0000000000000000000B2 /* RevenueCatUI */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		B1E604852F83FE9D00951147 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -55,6 +60,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D1B0000000000000000000A1 /* RevenueCat in Frameworks */,
+				D1B0000000000000000000A2 /* RevenueCatUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -126,6 +133,8 @@
 			);
 			name = Barkain;
 			packageProductDependencies = (
+				D1B0000000000000000000B1 /* RevenueCat */,
+				D1B0000000000000000000B2 /* RevenueCatUI */,
 			);
 			productName = Barkain;
 			productReference = B1E604772F83FE9C00951147 /* Barkain.app */;
@@ -209,6 +218,9 @@
 			);
 			mainGroup = B1E6046E2F83FE9C00951147;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				D1B0000000000000000000C1 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B1E604782F83FE9C00951147 /* Products */;
 			projectDirPath = "";
@@ -602,6 +614,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		D1B0000000000000000000C1 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RevenueCat/purchases-ios-spm.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.24.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		D1B0000000000000000000B1 /* RevenueCat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1B0000000000000000000C1 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCat;
+		};
+		D1B0000000000000000000B2 /* RevenueCatUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1B0000000000000000000C1 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCatUI;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = B1E6046F2F83FE9C00951147 /* Project object */;
 }

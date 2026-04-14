@@ -13,6 +13,7 @@ from modules.m2_prices.health_router import router as health_router
 from modules.m2_prices.router import router as m2_prices_router
 from modules.m5_identity.card_router import router as m5_card_router
 from modules.m5_identity.router import router as m5_identity_router
+from modules.m11_billing.router import router as m11_billing_router
 
 app = FastAPI(
     title="Barkain API",
@@ -27,6 +28,7 @@ app.include_router(m2_prices_router)
 app.include_router(health_router)
 app.include_router(m5_identity_router)
 app.include_router(m5_card_router)
+app.include_router(m11_billing_router)
 
 
 @app.get("/api/v1/health")

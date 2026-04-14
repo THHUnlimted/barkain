@@ -32,14 +32,32 @@ final class ScannerViewModel {
     var cardRecommendations: [CardRecommendation] = []
     var userHasCards: Bool = false
 
+    // Step 2f: paywall presentation state. Set true when a free user hits
+    // the daily scan cap; ScannerView observes this and presents PaywallHost.
+    var showPaywall: Bool = false
+
     // MARK: - Dependencies
 
     private let apiClient: any APIClientProtocol
+    private let featureGate: FeatureGateService
 
     // MARK: - Init
 
-    init(apiClient: any APIClientProtocol) {
+    /// `featureGate` is optional so existing test call sites
+    /// (`ScannerViewModel(apiClient: mock)`) stay green without a migration.
+    /// When omitted, the init constructs a free-only gate. Production call
+    /// sites (ScannerView) inject the real gate from the SwiftUI environment.
+    ///
+    /// Default values can't reference `FeatureGateService.init` directly
+    /// because the gate is `@MainActor`-isolated and Swift evaluates default
+    /// parameter expressions in the caller's actor context — building the
+    /// gate inside the `init` body sidesteps that.
+    init(
+        apiClient: any APIClientProtocol,
+        featureGate: FeatureGateService? = nil
+    ) {
         self.apiClient = apiClient
+        self.featureGate = featureGate ?? FeatureGateService(proTierProvider: { false })
     }
 
     // MARK: - Actions
@@ -58,6 +76,17 @@ final class ScannerViewModel {
             let resolvedProduct = try await apiClient.resolveProduct(upc: upc)
             product = resolvedProduct
             isLoading = false
+
+            // Step 2f: gate scan quota AFTER a successful resolve, not
+            // before. We don't burn quota on barcode-read failures or
+            // unknown UPCs — the user only "spent" a scan when they got
+            // a real product. Pro users skip the gate entirely.
+            if featureGate.scanLimitReached {
+                showPaywall = true
+                return
+            }
+            featureGate.recordScan()
+
             await fetchPrices()
         } catch let apiError as APIError {
             error = apiError

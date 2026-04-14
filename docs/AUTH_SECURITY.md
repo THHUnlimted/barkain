@@ -101,13 +101,33 @@ Redis-backed, per-user, sliding window.
 
 ### Tiers
 
-| Endpoint Category | Limit | Window | Key |
-|---|---|---|---|
-| General read endpoints | 60 requests | 1 minute | `rate:{user_id}:general` |
-| Write endpoints (POST/PUT) | 30 requests | 1 minute | `rate:{user_id}:write` |
-| AI-heavy endpoints (recommend, identify, receipt scan) | 10 requests | 1 minute | `rate:{user_id}:ai` |
-| Health check | Exempt | — | — |
-| Unauthenticated | 10 requests | 1 minute | `rate:{ip}:unauth` |
+Free-tier baseline, per category:
+
+| Endpoint Category | Free Limit | Pro Limit | Window | Key |
+|---|---|---|---|---|
+| General read endpoints | 60 requests | 120 requests | 1 minute | `rate:{user_id}:general` |
+| Write endpoints (POST/PUT) | 30 requests | 60 requests | 1 minute | `rate:{user_id}:write` |
+| AI-heavy endpoints (recommend, identify, receipt scan) | 10 requests | 20 requests | 1 minute | `rate:{user_id}:ai` |
+| Health check | Exempt | Exempt | — | — |
+| Unauthenticated | 10 requests | — | 1 minute | `rate:{ip}:unauth` |
+
+Pro multiplier (default 2x) is configured via `settings.RATE_LIMIT_PRO_MULTIPLIER` and applied to all three authenticated categories. Subscription tier is resolved per-request by `_resolve_user_tier` in `backend/app/dependencies.py`:
+
+1. Read `tier:{user_id}` from Redis (60s TTL)
+2. On miss: SELECT `subscription_tier`, `subscription_expires_at` FROM `users` WHERE id = $1. Pro requires `tier == "pro" AND (expires_at IS NULL OR expires_at > now())` — expired-pro rows resolve to free. Missing user row → free (not an error).
+3. Cache the resolved string (`"pro"` or `"free"`) into Redis with the 60s TTL so the SSE hot path doesn't pay a Postgres roundtrip per event.
+
+`m11_billing.service.process_webhook` busts `tier:{user_id}` on every state-changing event so upgrades/downgrades take effect within the cache window. Falls open to free on Redis or DB errors — the rate limiter never hard-fails an authenticated request because of an infrastructure blip.
+
+### Webhook Authentication (Step 2f)
+
+`POST /api/v1/billing/webhook` does NOT use Clerk auth. It validates a fixed bearer token from RevenueCat's webhook configuration:
+
+```
+Authorization: Bearer ${REVENUECAT_WEBHOOK_SECRET}
+```
+
+The shared secret is configured in two places: the RevenueCat dashboard (Project Settings → Integrations → Webhooks → Authorization) and the backend `.env` file (`REVENUECAT_WEBHOOK_SECRET=...`). Mismatch → 401 with `code=WEBHOOK_AUTH_FAILED`. Empty secret in env → 401 (treated as misconfiguration). All other errors (parse failure, unknown event type) return 200 to prevent RevenueCat retry storms.
 
 ### Response on Rate Limit
 
