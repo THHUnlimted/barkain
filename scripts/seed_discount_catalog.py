@@ -251,8 +251,8 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "discount_value": 5,
         "discount_max_value": None,
         "verification_method": "id_me",
-        "verification_url": "https://www.lenovo.com/discount-programs",
-        "url": "https://www.lenovo.com/discount-programs",
+        "verification_url": "https://www.lenovo.com/us/en/d/deals/military/",
+        "url": "https://www.lenovo.com/us/en/d/deals/discount-programs/",
         "discount_details": "Extra 5% off sitewide. First responders additionally eligible.",
     },
     {
@@ -264,8 +264,8 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "discount_value": 5,
         "discount_max_value": None,
         "verification_method": "id_me",
-        "verification_url": "https://www.lenovo.com/education-store",
-        "url": "https://www.lenovo.com/education-store",
+        "verification_url": "https://www.lenovo.com/us/en/d/deals/student/",
+        "url": "https://www.lenovo.com/us/en/d/deals/student/",
         "discount_details": "Education pricing. Varies by product.",
     },
     # Microsoft

@@ -267,4 +267,13 @@ private struct PreviewOnboardingAPIClient: APIClientProtocol {
     func getEligibleDiscounts(productId: UUID?) async throws -> IdentityDiscountsResponse {
         IdentityDiscountsResponse(eligibleDiscounts: [], identityGroupsActive: [])
     }
+    func getCardCatalog() async throws -> [CardRewardProgram] { [] }
+    func getUserCards() async throws -> [UserCardSummary] { [] }
+    func addCard(_ request: AddCardRequest) async throws -> UserCardSummary { fatalError("Preview only") }
+    func removeCard(userCardId: UUID) async throws {}
+    func setPreferredCard(userCardId: UUID) async throws -> UserCardSummary { fatalError("Preview only") }
+    func setCardCategories(userCardId: UUID, request: SetCategoriesRequest) async throws {}
+    func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse {
+        CardRecommendationsResponse(recommendations: [], userHasCards: false)
+    }
 }

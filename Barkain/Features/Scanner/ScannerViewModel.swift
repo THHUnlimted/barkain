@@ -26,6 +26,12 @@ final class ScannerViewModel {
     // set `priceError`, so the retailer list stays visible.
     var identityDiscounts: [EligibleDiscount] = []
 
+    // Step 2e: best-card recommendation per retailer, chained after identity
+    // discounts. Same non-fatal contract — failures log and clear the list,
+    // never set `priceError`.
+    var cardRecommendations: [CardRecommendation] = []
+    var userHasCards: Bool = false
+
     // MARK: - Dependencies
 
     private let apiClient: any APIClientProtocol
@@ -45,6 +51,7 @@ final class ScannerViewModel {
         priceComparison = nil
         priceError = nil
         identityDiscounts = []
+        cardRecommendations = []
         isLoading = true
 
         do {
@@ -148,6 +155,25 @@ final class ScannerViewModel {
             sseLog.warning("fetchIdentityDiscounts failed: \(error.localizedDescription, privacy: .public)")
             identityDiscounts = []
         }
+        await fetchCardRecommendations(productId: productId)
+    }
+
+    // MARK: - Step 2e: Card Recommendations
+
+    /// Fetch the best card per retailer for the scanned product. Non-fatal on
+    /// failure — the price list and identity discounts stay visible. The
+    /// `userHasCards` flag drives the "Add your cards" CTA in
+    /// `PriceComparisonView` when no cards are on file.
+    private func fetchCardRecommendations(productId: UUID) async {
+        do {
+            let response = try await apiClient.getCardRecommendations(productId: productId)
+            cardRecommendations = response.recommendations
+            userHasCards = response.userHasCards
+            sseLog.info("fetchCardRecommendations: received \(response.recommendations.count, privacy: .public) recs userHasCards=\(response.userHasCards, privacy: .public)")
+        } catch {
+            sseLog.warning("fetchCardRecommendations failed: \(error.localizedDescription, privacy: .public)")
+            cardRecommendations = []
+        }
     }
 
     private func apply(_ update: RetailerResultUpdate, for product: Product) {
@@ -241,6 +267,8 @@ final class ScannerViewModel {
         isPriceLoading = false
         priceError = nil
         identityDiscounts = []
+        cardRecommendations = []
+        userHasCards = false
     }
 
     // MARK: - Computed
