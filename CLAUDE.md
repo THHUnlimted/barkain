@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** April 2026 (v4.2 — Step 2c-val SSE live smoke test complete)
+> **Last updated:** April 2026 (v4.3 — Step 2c-fix iOS SSE consumer fix complete)
 
 ---
 
@@ -284,7 +284,8 @@ This project uses a **two-tier AI workflow:**
 **Chore — CHANGELOG.md created, CLAUDE.md slimmed from ~74K → ≤35K chars** ✅ (2026-04-13)
 **Step 2b-final — Close Out (Gemini model field + post-2b-val test coverage + CI + EC2 verification): COMPLETE** ✅ (2026-04-13)
 **Step 2c — Streaming Per-Retailer Results (SSE): COMPLETE** ✅ (2026-04-13, merged to main as PR #8 → `9ceafe1`)
-**Step 2c-val — SSE Live Smoke Test: COMPLETE** ✅ (2026-04-13, 5 PASS / 1 FUNCTIONAL-PASS-UX-FAIL, no fixes applied — **new latent bug 2c-val-L6 found: iOS client always falls back to batch, never renders progressive stream events; see `docs/CHANGELOG.md` §Step 2c-val**)
+**Step 2c-val — SSE Live Smoke Test: COMPLETE** ✅ (2026-04-13, 5 PASS / 1 FUNCTIONAL-PASS-UX-FAIL — latent bug 2c-val-L6 found, **RESOLVED in Step 2c-fix below**; see `docs/CHANGELOG.md` §Step 2c-val)
+**Step 2c-fix — iOS SSE Consumer Fix: COMPLETE** ✅ (2026-04-13, branch `fix/ios-sse-consumer`) — root-caused 2c-val-L6 via new `com.barkain.app`/`SSE` os_log category; replaced `URLSession.AsyncBytes.lines` with a manual byte-level line splitter over raw `AsyncSequence<UInt8>`; fixed 2c-val-L7 with `API_BASE_URL=http://127.0.0.1:8000`; deleted dead `ProgressiveLoadingView.swift`. Live-verified against real backend: stream delivers events incrementally (897ms gap between fast retailers and Walmart on a non-cached run), `sawDone=true` fires, **zero** fallback-to-batch events on the happy path. 36/32→36 iOS tests green, 192 backend tests unchanged. See `docs/CHANGELOG.md` §Step 2c-fix.
 
 - AI abstraction: ✅ (Gemini + Claude Opus)
 - Watchdog supervisor: ✅ (nightly health checks, self-healing via Opus)
@@ -344,7 +345,7 @@ This project uses a **two-tier AI workflow:**
 - iOS price comparison UI: ✅ (PriceComparisonView — per-retailer status rows for all 11 retailers)
 - iOS scan→compare flow: ✅ (full demo loop)
 
-**Test counts:** 192 backend (192 passed / 6 skipped), 32 iOS unit, 0 UI, 0 snapshot.
+**Test counts:** 192 backend (192 passed / 6 skipped), 36 iOS unit (added 4 byte-level SSE parser tests in Step 2c-fix), 0 UI, 0 snapshot.
 **Build status:** Backend + iOS build clean. Backend serves health + product resolve + batch price comparison + streaming price comparison + retailer health endpoints; Amazon + Best Buy containers on EC2 `t3.xlarge`; Walmart via Firecrawl v2 adapter. With Step 2c SSE, iOS now scans barcode → resolves via Gemini → streams 3 retailers → displays walmart result at ~12s, amazon ~30s, best_buy ~91s (each arriving independently instead of blocking for ~90-120s). Batch endpoint still available as fallback. `ruff check` clean. Manual entry sheet functional on simulator. GitHub Actions backend-tests workflow runs unit tests on every PR touching `backend/**` or `containers/**`.
 
 **Live demo runtime profile (2026-04-10, physical iPhone):**
@@ -425,3 +426,6 @@ This project uses a **two-tier AI workflow:**
 > - Product-match relevance: required before any user-facing demo
 > - Gemini output: `device_name` + `model` (shortest unambiguous identifier — generation markers, capacity, GPU SKUs); `model` is stored in `source_raw.gemini_model` and feeds relevance scoring
 > - CI: `.github/workflows/backend-tests.yml` runs unit tests on every PR touching `backend/**` or `containers/**`; integration tests stay behind `BARKAIN_RUN_INTEGRATION_TESTS=1`
+> - iOS SSE consumer: use a manual byte-level `\n`/`\r\n` splitter over `URLSession.AsyncBytes`, NOT `bytes.lines`. The `.lines` accessor buffers aggressively for small SSE payloads and won't yield lines until the connection closes — events that should arrive seconds apart land all at once at stream-close, causing the SSE consumer to miss its `done` event and fall back to the batch endpoint. Rewrite path: `SSEParser.parse(bytes:)` takes any `AsyncSequence<UInt8>` so the test suite can drive it without a real URLSession (added Step 2c-fix).
+> - iOS `API_BASE_URL` for simulator runs: use `http://127.0.0.1:8000`, NOT `http://localhost:8000`. `localhost` triggers IPv6 happy-eyeballs, and uvicorn binding to `0.0.0.0` is IPv4-only, so `::1` is refused and iOS has to fall back to IPv4 — ~50ms per-request penalty. Explicit IPv4 literal skips DNS + the dual-stack race entirely.
+> - SSE debugging: the `com.barkain.app` subsystem, category `SSE` logger captures every raw line, every parsed/decoded event, and every fallback trigger. Run `xcrun simctl spawn <booted> log stream --level debug --predicate 'subsystem == "com.barkain.app" AND category == "SSE"' --style compact` to watch the full SSE state machine in real time.

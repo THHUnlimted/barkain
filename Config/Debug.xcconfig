@@ -1,7 +1,10 @@
 // Debug configuration for Barkain
 // API base URL for local development.
-// Use localhost when running on the iOS simulator — simulator shares the Mac's loopback.
+// Use 127.0.0.1 instead of `localhost` on the iOS simulator to skip the
+// IPv6 happy-eyeballs dance: uvicorn binds IPv4-only on 0.0.0.0, so iOS
+// tries ::1 first, gets Connection refused, and retries on 127.0.0.1
+// — costing ~50ms per request. Explicit IPv4 literal = zero lookup.
 // Switch to your Mac's LAN IP when running on a physical device — the iPhone must be
 // able to reach your uvicorn backend over WiFi, and the backend must be started with
 // --host 0.0.0.0 for that to work. Current Mac LAN IP (2026-04-12): 192.168.1.194.
-API_BASE_URL = http:$()/$()/localhost:8000
+API_BASE_URL = http:$()/$()/127.0.0.1:8000

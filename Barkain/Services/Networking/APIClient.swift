@@ -1,4 +1,9 @@
 import Foundation
+import os
+
+// MARK: - Logger
+
+private let sseLog = Logger(subsystem: "com.barkain.app", category: "SSE")
 
 // MARK: - APIClientProtocol
 
@@ -113,11 +118,14 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
                     urlRequest.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
                     // Bearer token placeholder — Clerk SDK integration in Phase 2.
 
+                    sseLog.debug("SSE stream opening for product \(productId.uuidString, privacy: .public) forceRefresh=\(forceRefresh, privacy: .public)")
                     let (bytes, response) = try await session.bytes(for: urlRequest)
 
                     guard let httpResponse = response as? HTTPURLResponse else {
+                        sseLog.error("SSE stream: invalid response type")
                         throw APIError.unknown(0, "Invalid response type")
                     }
+                    sseLog.debug("SSE stream opened HTTP \(httpResponse.statusCode, privacy: .public)")
 
                     guard (200..<300).contains(httpResponse.statusCode) else {
                         // Drain error body for decoding — status-code mapping mirrors request<T>().
@@ -130,31 +138,47 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
                     }
 
                     for try await sseEvent in SSEParser.events(from: bytes) {
-                        guard let data = sseEvent.data.data(using: .utf8) else { continue }
-                        let streamEvent: RetailerStreamEvent
-                        switch sseEvent.event {
-                        case "retailer_result":
-                            let update = try decoder.decode(RetailerResultUpdate.self, from: data)
-                            streamEvent = .retailerResult(update)
-                        case "done":
-                            let summary = try decoder.decode(StreamSummary.self, from: data)
-                            streamEvent = .done(summary)
-                        case "error":
-                            let err = try decoder.decode(StreamError.self, from: data)
-                            streamEvent = .error(err)
-                        default:
+                        sseLog.info("SSE parsed event: \(sseEvent.event ?? "nil", privacy: .public) dataLen=\(sseEvent.data.count, privacy: .public)")
+                        guard let data = sseEvent.data.data(using: .utf8) else {
+                            sseLog.error("SSE event data utf8 conversion failed")
                             continue
                         }
+                        let streamEvent: RetailerStreamEvent
+                        do {
+                            switch sseEvent.event {
+                            case "retailer_result":
+                                let update = try decoder.decode(RetailerResultUpdate.self, from: data)
+                                streamEvent = .retailerResult(update)
+                            case "done":
+                                let summary = try decoder.decode(StreamSummary.self, from: data)
+                                streamEvent = .done(summary)
+                            case "error":
+                                let err = try decoder.decode(StreamError.self, from: data)
+                                streamEvent = .error(err)
+                            default:
+                                sseLog.debug("SSE event unknown type: \(sseEvent.event ?? "nil", privacy: .public)")
+                                continue
+                            }
+                        } catch let decodeError {
+                            sseLog.error("SSE decode failed for event=\(sseEvent.event ?? "nil", privacy: .public) error=\(decodeError.localizedDescription, privacy: .public) payload=\(sseEvent.data, privacy: .public)")
+                            throw decodeError
+                        }
+                        sseLog.info("SSE decoded: \(String(describing: streamEvent), privacy: .public)")
                         continuation.yield(streamEvent)
                     }
+                    sseLog.info("SSE stream ended normally")
                     continuation.finish()
                 } catch let apiError as APIError {
+                    sseLog.error("SSE stream APIError: \(apiError.localizedDescription, privacy: .public)")
                     continuation.finish(throwing: apiError)
                 } catch let urlError as URLError {
+                    sseLog.error("SSE stream URLError code=\(urlError.code.rawValue, privacy: .public): \(urlError.localizedDescription, privacy: .public)")
                     continuation.finish(throwing: APIError.network(urlError))
                 } catch let decodingError as DecodingError {
+                    sseLog.error("SSE stream DecodingError: \(decodingError.localizedDescription, privacy: .public)")
                     continuation.finish(throwing: APIError.decodingFailed(decodingError.localizedDescription))
                 } catch {
+                    sseLog.error("SSE stream unknown error (\(String(describing: type(of: error)), privacy: .public)): \(error.localizedDescription, privacy: .public)")
                     continuation.finish(throwing: APIError.unknown(0, error.localizedDescription))
                 }
             }

@@ -448,6 +448,55 @@ Live integration run against real Gemini + real EC2 containers (Amazon / Best Bu
 
 ---
 
+### Step 2c-fix — iOS SSE Consumer Fix (2026-04-13)
+
+**Branch:** `fix/ios-sse-consumer` off `main` @ `b6bf54b` (after PR #9 merged)
+**Root cause:** `URLSession.AsyncBytes.lines` buffers aggressively for small SSE payloads. The 11 retailer_result events + `done` event never reached the iOS parser incrementally — they landed in a single burst at stream-close time, which was after `for try await event in apiClient.streamPrices(...)` had already exited, so `sawDone` stayed `false` and every fetch fell through to `fallbackToBatch()`. Running curl against the same endpoint during the same session returned all 12 events in <1s with perfect timestamps, confirming the bug was entirely client-side.
+
+**Diagnosis:** added a dedicated `com.barkain.app`/`SSE` os_log category with log points at every stage of the pipeline — stream open, each raw line received, each parsed event, each decoded typed event, `sawDone` transitions, fallback triggers, stream end. The diagnostic infrastructure stays permanently (os_log is lazy-evaluated so it's free in Release builds) and gives any future SSE regression one-session repro.
+
+**Fixes:**
+1. **Manual byte-level line splitter** (`Barkain/Services/Networking/Streaming/SSEParser.swift`) — the `events(from:)` static now delegates to a new test-visible `parse(bytes:)` that takes any `AsyncSequence<UInt8>` and iterates raw bytes, yielding complete `\n`-terminated lines the moment they arrive. Strips trailing `\r` for CRLF line endings. Parser state machine (`feed(line:)` + `flush()`) unchanged.
+2. **IPv6 happy-eyeballs fix** (`Config/Debug.xcconfig`) — changed `API_BASE_URL` from `http://localhost:8000` to `http://127.0.0.1:8000`. Closes latent 2c-val-L7 (~50ms per-request penalty from the IPv4 fallback race; uvicorn `--host 0.0.0.0` is IPv4-only).
+3. **os_log instrumentation** (`APIClient.swift`, `SSEParser.swift`, `ScannerViewModel.swift`) — structured logging on the full SSE path.
+4. **Dead-code cleanup** — deleted `Barkain/Features/Shared/Components/ProgressiveLoadingView.swift` (196 lines). Grepping the entire `Barkain/` source tree confirmed zero references outside the file itself. Project uses `PBXFileSystemSynchronizedRootGroup`, so no pbxproj edit was required.
+
+**Live verification:** ran both cached-path (Redis hit from prior 2c-val session) and fresh-path (Redis + DB rows deleted for product `1b492d0b-...`) runs against localhost uvicorn from the iOS Simulator (`com.molatunji3.barkain` on iPhone 17 iOS 26.4) with the os_log stream captured via `xcrun simctl spawn <booted> log stream --predicate 'subsystem == "com.barkain.app" AND category == "SSE"'`.
+
+- **Cached-path log trace (12:48:26.xxx):** stream opened → 11 `retailer_result` raw lines arriving over 174ms with gaps between timestamps (629ms, +7ms, +86ms, +3ms, …) → `done` raw line → 11 decoded retailer events + 1 done → `sawDone=true succeeded=2 failed=9 cached=true` → stream ended normally. Zero fallback events. UI transitioned from "Sniffing out deals..." to the populated comparison view.
+- **Fresh-path log trace (12:50:12.387 → 12:50:13.344, 957ms total):** 10 fast retailer events (containers returning `unavailable` without EC2) over 53ms → **897ms gap** → Walmart retailer_result (live Firecrawl adapter, real network round-trip) → done event → `sawDone=true succeeded=0 failed=11 cached=false` → stream ended normally. Zero fallbacks. The 897ms gap is the definitive proof — under the old `bytes.lines` bug, all 11 events would have arrived in a single burst at stream-close; under the fix, Walmart arrives exactly when its body hits the wire.
+- **UI proof:** screenshot captured during the fresh-path run shows the PriceComparisonView fully populated from stream events with 7+ visible retailer rows (Walmart "Not found", Amazon/Best Buy/Target/Home Depot/Lowe's/eBay "Unavailable"). Under the old bug the UI would have been stuck on "Sniffing out deals..." for this entire 957ms window.
+
+**Tests added:** 4 new byte-level parser tests (`test_byte_level_splits_on_LF`, `test_byte_level_handles_CRLF_line_endings`, `test_byte_level_flushes_partial_trailing_event_without_final_blank_line`, `test_byte_level_no_spurious_events_from_partial_lines`) driving `SSEParser.parse(bytes:)` through a hand-rolled `ByteStream: AsyncSequence` that yields bytes one at a time with `Task.yield()` between each — simulating wire-level arrival pattern. iOS tests: 32 → 36, all passing.
+
+**Deferred:** live-backend XCUITest (Definition-of-Done item #5 step 5). The repo currently has zero UI tests (per CLAUDE.md "0 UI, 0 snapshot"); standing up a BarkainUITests target, wiring uvicorn lifecycle management from the test bundle, and adding launch-argument plumbing comfortably exceeds the 30-min fix budget. The os_log instrumentation gives equivalent diagnostic value — any future SSE regression is observable in one session via `log stream`. **Deferred to Step 2g.**
+
+**Files touched (new/modified/deleted):**
+
+| Path | Delta | What |
+|------|-------|------|
+| `Barkain/Services/Networking/Streaming/SSEParser.swift` | +70 / -14 | Manual byte splitter + new `parse(bytes:)` test-visible helper + os_log |
+| `Barkain/Services/Networking/APIClient.swift` | +26 / -3 | os_log instrumentation throughout `streamPrices()` + per-event decode error capture |
+| `Barkain/Features/Scanner/ScannerViewModel.swift` | +15 / -1 | os_log instrumentation in `fetchPrices()` + `fallbackToBatch()` |
+| `Config/Debug.xcconfig` | +4 / -1 | `127.0.0.1` + comment |
+| `Barkain/Features/Shared/Components/ProgressiveLoadingView.swift` | -196 / 0 | Deleted — dead code, zero references outside the file |
+| `BarkainTests/Services/Networking/SSEParserTests.swift` | +90 / 0 | 4 new byte-level tests + `ByteStream` helper |
+| `CLAUDE.md` | +4 / -2 | Version bump to v4.3, Step 2c-fix Current State entry, 3 new Key Decisions quick-refs, test counts 32→36 |
+| `docs/CHANGELOG.md` | +this section | |
+| `docs/TESTING.md` | +SSE debugging note | |
+| `docs/SCRAPING_AGENT_ARCHITECTURE.md` | +Appendix G.5 update | |
+
+**What stays the same (verified):** backend SSE endpoint, `sse_event()` wire format helper, `PriceAggregationService.stream_prices()`, all 11 existing `test_m2_prices_stream.py` tests, all 5 existing SSEParser tests, all 6 existing ScannerViewModel stream tests, 192 backend tests, `ruff check backend/` clean, iOS `xcodebuild build` clean.
+
+**Latent bugs closed by this step:**
+- **2c-val-L6 (HIGH):** iOS SSE consumer never rendered progressive events; always fell back to batch → **RESOLVED.**
+- **2c-val-L7 (LOW):** IPv6 happy-eyeballs penalty → **RESOLVED** via `127.0.0.1` in Debug.xcconfig.
+- **2c-L1 (LOW):** Dead `ProgressiveLoadingView.swift` → **RESOLVED** via file deletion.
+
+**Latent bugs still open** (unchanged from prior sessions, out of scope for this fix): 2b-val-L1 (EC2 stale containers pending redeploy), 2c-val-L1 through L5 (Best Buy timing, Walmart data quality, etc. — see Step 2c-val section above).
+
+---
+
 ## Key Decisions Log
 
 | Decision | Choice | Why | Date |
