@@ -26,6 +26,7 @@ struct PriceComparisonView: View {
     let comparison: PriceComparison
     let viewModel: ScannerViewModel
     var onRequestOnboarding: (() -> Void)? = nil
+    var onRequestAddCards: (() -> Void)? = nil
 
     @AppStorage("hasCompletedIdentityOnboarding")
     private var hasCompletedOnboarding: Bool = false
@@ -43,11 +44,45 @@ struct PriceComparisonView: View {
                 sectionHeader
                 retailerList
 
+                addCardsCTA
                 statusBar
                 actionButtons
             }
             .padding(Spacing.lg)
             .animation(.easeInOut(duration: 0.3), value: viewModel.identityDiscounts)
+            .animation(.easeInOut(duration: 0.3), value: viewModel.cardRecommendations)
+        }
+    }
+
+    // MARK: - Card CTA (Step 2e)
+
+    @ViewBuilder
+    private var addCardsCTA: some View {
+        if !viewModel.userHasCards && viewModel.cardRecommendations.isEmpty {
+            Button {
+                onRequestAddCards?()
+            } label: {
+                HStack(spacing: Spacing.sm) {
+                    Image(systemName: "creditcard.and.123")
+                        .foregroundStyle(Color.barkainPrimary)
+                    VStack(alignment: .leading, spacing: Spacing.xxs) {
+                        Text("Add your cards")
+                            .font(.barkainHeadline)
+                            .foregroundStyle(Color.barkainOnSurface)
+                        Text("See which card earns the most at each retailer.")
+                            .font(.barkainCaption)
+                            .foregroundStyle(Color.barkainOnSurfaceVariant)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(Color.barkainOnSurfaceVariant)
+                }
+                .padding(Spacing.md)
+                .background(Color.barkainPrimaryFixed.opacity(0.3))
+                .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .transition(.opacity.combined(with: .scale(scale: 0.95)))
         }
     }
 
@@ -142,7 +177,12 @@ struct PriceComparisonView: View {
                         Button {
                             openRetailerURL(retailerPrice.url)
                         } label: {
-                            PriceRow(retailerPrice: retailerPrice)
+                            PriceRow(
+                                retailerPrice: retailerPrice,
+                                cardRecommendation: viewModel.cardRecommendations.first {
+                                    $0.retailerId == retailerPrice.retailerId
+                                }
+                            )
                         }
                         .buttonStyle(.plain)
                     case .noMatch(let result):
@@ -314,5 +354,14 @@ private struct PreviewAPIClient: APIClientProtocol {
     }
     func getEligibleDiscounts(productId: UUID?) async throws -> IdentityDiscountsResponse {
         IdentityDiscountsResponse(eligibleDiscounts: [], identityGroupsActive: [])
+    }
+    func getCardCatalog() async throws -> [CardRewardProgram] { [] }
+    func getUserCards() async throws -> [UserCardSummary] { [] }
+    func addCard(_ request: AddCardRequest) async throws -> UserCardSummary { fatalError("Preview only") }
+    func removeCard(userCardId: UUID) async throws {}
+    func setPreferredCard(userCardId: UUID) async throws -> UserCardSummary { fatalError("Preview only") }
+    func setCardCategories(userCardId: UUID, request: SetCategoriesRequest) async throws {}
+    func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse {
+        CardRecommendationsResponse(recommendations: [], userHasCards: false)
     }
 }

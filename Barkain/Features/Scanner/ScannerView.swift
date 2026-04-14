@@ -13,6 +13,7 @@ struct ScannerView: View {
     @State private var showManualEntry = false
     @State private var manualUPC = ""
     @State private var showOnboardingFromCTA = false
+    @State private var showAddCardsFromCTA = false
 
     @AppStorage("hasCompletedIdentityOnboarding")
     private var hasCompletedOnboarding: Bool = false
@@ -48,6 +49,15 @@ struct ScannerView: View {
                 viewModel: IdentityOnboardingViewModel(apiClient: apiClient),
                 hasCompletedOnboarding: $hasCompletedOnboarding
             )
+        }
+        .sheet(isPresented: $showAddCardsFromCTA, onDismiss: {
+            // Refresh recommendations so `userHasCards` reflects newly-added cards.
+            // The stream path is short-circuited by the Redis cache.
+            if let vm = viewModel, vm.product != nil {
+                Task { await vm.fetchPrices() }
+            }
+        }) {
+            CardSelectionView(apiClient: apiClient)
         }
         .task {
             let vm = ScannerViewModel(apiClient: apiClient)
@@ -145,7 +155,8 @@ struct ScannerView: View {
                 product: product,
                 comparison: comparison,
                 viewModel: viewModel,
-                onRequestOnboarding: { showOnboardingFromCTA = true }
+                onRequestOnboarding: { showOnboardingFromCTA = true },
+                onRequestAddCards: { showAddCardsFromCTA = true }
             )
         } else if viewModel.isPriceLoading, let product = viewModel.product {
             // Brief window before the first stream event seeds `priceComparison`.

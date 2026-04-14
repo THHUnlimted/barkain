@@ -7,9 +7,11 @@ struct ProfileView: View {
     // MARK: - State
 
     @State private var profile: IdentityProfile?
+    @State private var userCards: [UserCardSummary] = []
     @State private var isLoading = false
     @State private var loadError: APIError?
     @State private var showEditSheet = false
+    @State private var showCardSheet = false
 
     @AppStorage("hasCompletedIdentityOnboarding")
     private var hasCompletedOnboarding: Bool = false
@@ -31,6 +33,7 @@ struct ProfileView: View {
             .navigationTitle("Profile")
             .task {
                 await loadProfile()
+                await loadCards()
             }
             .sheet(isPresented: $showEditSheet, onDismiss: {
                 Task { await loadProfile() }
@@ -42,6 +45,11 @@ struct ProfileView: View {
                     ),
                     hasCompletedOnboarding: $hasCompletedOnboarding
                 )
+            }
+            .sheet(isPresented: $showCardSheet, onDismiss: {
+                Task { await loadCards() }
+            }) {
+                CardSelectionView(apiClient: apiClient)
             }
     }
 
@@ -62,7 +70,13 @@ struct ProfileView: View {
         } else if let profile, hasAnyFlag(profile) {
             profileSummary(profile)
         } else {
-            emptyProfileCTA
+            ScrollView {
+                VStack(spacing: Spacing.xl) {
+                    emptyProfileCTA
+                    cardsSection
+                }
+                .padding(Spacing.lg)
+            }
         }
     }
 
@@ -94,6 +108,8 @@ struct ProfileView: View {
                     )
                 }
 
+                cardsSection
+
                 Button {
                     showEditSheet = true
                 } label: {
@@ -109,6 +125,84 @@ struct ProfileView: View {
                 .tint(.barkainPrimary)
             }
             .padding(Spacing.lg)
+        }
+    }
+
+    // MARK: - My Cards
+
+    private var cardsSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            HStack {
+                Text("My Cards")
+                    .font(.barkainHeadline)
+                    .foregroundStyle(Color.barkainOnSurfaceVariant)
+                Spacer()
+                Text("\(userCards.count)")
+                    .font(.barkainCaption)
+                    .foregroundStyle(Color.barkainOnSurfaceVariant)
+                    .padding(.horizontal, Spacing.sm)
+                    .padding(.vertical, Spacing.xxs)
+                    .background(Color.barkainPrimaryFixed.opacity(0.4))
+                    .clipShape(Capsule())
+            }
+
+            if userCards.isEmpty {
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text("Add your credit cards to see which one earns the most at each retailer.")
+                        .font(.barkainBody)
+                        .foregroundStyle(Color.barkainOnSurfaceVariant)
+                    Button {
+                        showCardSheet = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "creditcard.and.123")
+                            Text("Add cards")
+                                .font(.barkainHeadline)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Spacing.sm)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.barkainPrimary)
+                }
+                .padding(Spacing.lg)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.barkainPrimaryFixed.opacity(0.25))
+                .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous))
+            } else {
+                FlowLayout(spacing: Spacing.xs) {
+                    ForEach(userCards) { card in
+                        HStack(spacing: Spacing.xxs) {
+                            if card.isPreferred {
+                                Image(systemName: "star.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(.yellow)
+                            }
+                            Text(card.cardDisplayName)
+                                .font(.barkainCaption)
+                        }
+                        .foregroundStyle(Color.barkainPrimary)
+                        .padding(.horizontal, Spacing.sm)
+                        .padding(.vertical, Spacing.xxs)
+                        .background(Color.barkainPrimaryFixed.opacity(0.6))
+                        .clipShape(Capsule())
+                    }
+                }
+
+                Button {
+                    showCardSheet = true
+                } label: {
+                    HStack {
+                        Image(systemName: "plus.circle")
+                        Text("Manage cards")
+                            .font(.barkainHeadline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Spacing.sm)
+                }
+                .buttonStyle(.bordered)
+                .tint(.barkainPrimary)
+            }
         }
     }
 
@@ -169,6 +263,15 @@ struct ProfileView: View {
             loadError = err
         } catch {
             loadError = .unknown(0, error.localizedDescription)
+        }
+    }
+
+    private func loadCards() async {
+        do {
+            userCards = try await apiClient.getUserCards()
+        } catch {
+            // Non-fatal — profile still renders without the cards section.
+            userCards = []
         }
     }
 
@@ -310,5 +413,14 @@ private struct PreviewProfileAPIClient: APIClientProtocol {
     }
     func getEligibleDiscounts(productId: UUID?) async throws -> IdentityDiscountsResponse {
         IdentityDiscountsResponse(eligibleDiscounts: [], identityGroupsActive: [])
+    }
+    func getCardCatalog() async throws -> [CardRewardProgram] { [] }
+    func getUserCards() async throws -> [UserCardSummary] { [] }
+    func addCard(_ request: AddCardRequest) async throws -> UserCardSummary { fatalError("Preview only") }
+    func removeCard(userCardId: UUID) async throws {}
+    func setPreferredCard(userCardId: UUID) async throws -> UserCardSummary { fatalError("Preview only") }
+    func setCardCategories(userCardId: UUID, request: SetCategoriesRequest) async throws {}
+    func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse {
+        CardRecommendationsResponse(recommendations: [], userHasCards: false)
     }
 }

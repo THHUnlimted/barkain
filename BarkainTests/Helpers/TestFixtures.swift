@@ -260,4 +260,63 @@ enum TestFixtures {
         eligibleDiscounts: [],
         identityGroupsActive: []
     )
+
+    // MARK: - Cards (Step 2e)
+
+    static let sampleCardProgramId = UUID(uuidString: "aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa")!
+
+    static let sampleCardProgram = CardRewardProgram(
+        id: sampleCardProgramId,
+        cardNetwork: "visa",
+        cardIssuer: "chase",
+        cardProduct: "freedom_flex",
+        cardDisplayName: "Chase Freedom Flex",
+        baseRewardRate: 1.0,
+        rewardCurrency: "ultimate_rewards",
+        pointValueCents: 1.25,
+        hasShoppingPortal: true,
+        portalUrl: "https://ultimaterewardsmall.chase.com",
+        annualFee: 0,
+        userSelectedAllowed: nil
+    )
+
+    static let sampleUserCardSummaryId = UUID(uuidString: "bbbbbbbb-2222-2222-2222-bbbbbbbbbbbb")!
+
+    static let sampleUserCardSummary = UserCardSummary(
+        id: sampleUserCardSummaryId,
+        cardProgramId: sampleCardProgramId,
+        cardIssuer: "chase",
+        cardProduct: "freedom_flex",
+        cardDisplayName: "Chase Freedom Flex",
+        nickname: "daily driver",
+        isPreferred: true,
+        baseRewardRate: 1.0,
+        rewardCurrency: "ultimate_rewards"
+    )
+
+    static let sampleCardRecommendationAmazon = CardRecommendation(
+        retailerId: "amazon",
+        retailerName: "Amazon",
+        userCardId: sampleUserCardSummaryId,
+        cardProgramId: sampleCardProgramId,
+        cardDisplayName: "Chase Freedom Flex",
+        cardIssuer: "chase",
+        rewardRate: 5.0,
+        rewardAmount: 12.5,
+        rewardCurrency: "ultimate_rewards",
+        isRotatingBonus: true,
+        isUserSelectedBonus: false,
+        activationRequired: true,
+        activationUrl: "https://example.com/activate"
+    )
+
+    static let sampleCardRecommendationsResponse = CardRecommendationsResponse(
+        recommendations: [sampleCardRecommendationAmazon],
+        userHasCards: true
+    )
+
+    static let emptyCardRecommendations = CardRecommendationsResponse(
+        recommendations: [],
+        userHasCards: false
+    )
 }

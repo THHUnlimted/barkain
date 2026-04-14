@@ -5,6 +5,8 @@ import Foundation
 nonisolated enum HTTPMethod: String {
     case get = "GET"
     case post = "POST"
+    case put = "PUT"
+    case delete = "DELETE"
 }
 
 // MARK: - Endpoint
@@ -17,6 +19,14 @@ nonisolated enum Endpoint {
     case getIdentityProfile
     case updateIdentityProfile(IdentityProfileRequest)
     case getEligibleDiscounts(productId: UUID?)
+    // Step 2e — Card portfolio
+    case getCardCatalog
+    case getUserCards
+    case addCard(AddCardRequest)
+    case removeCard(userCardId: UUID)
+    case setPreferredCard(userCardId: UUID)
+    case setCardCategories(userCardId: UUID, SetCategoriesRequest)
+    case getCardRecommendations(productId: UUID)
 
     // MARK: - Properties
 
@@ -34,14 +44,32 @@ nonisolated enum Endpoint {
             return "/api/v1/identity/profile"
         case .getEligibleDiscounts:
             return "/api/v1/identity/discounts"
+        case .getCardCatalog:
+            return "/api/v1/cards/catalog"
+        case .getUserCards, .addCard:
+            return "/api/v1/cards/my-cards"
+        case .removeCard(let id):
+            return "/api/v1/cards/my-cards/\(id.uuidString)"
+        case .setPreferredCard(let id):
+            return "/api/v1/cards/my-cards/\(id.uuidString)/preferred"
+        case .setCardCategories(let id, _):
+            return "/api/v1/cards/my-cards/\(id.uuidString)/categories"
+        case .getCardRecommendations:
+            return "/api/v1/cards/recommendations"
         }
     }
 
     var method: HTTPMethod {
         switch self {
-        case .resolveProduct, .updateIdentityProfile:
+        case .resolveProduct, .updateIdentityProfile, .addCard, .setCardCategories:
             return .post
-        case .getPrices, .streamPrices, .health, .getIdentityProfile, .getEligibleDiscounts:
+        case .setPreferredCard:
+            return .put
+        case .removeCard:
+            return .delete
+        case .getPrices, .streamPrices, .health, .getIdentityProfile,
+             .getEligibleDiscounts, .getCardCatalog, .getUserCards,
+             .getCardRecommendations:
             return .get
         }
     }
@@ -55,6 +83,8 @@ nonisolated enum Endpoint {
                 return [URLQueryItem(name: "product_id", value: productId.uuidString)]
             }
             return nil
+        case .getCardRecommendations(let productId):
+            return [URLQueryItem(name: "product_id", value: productId.uuidString)]
         default:
             return nil
         }
@@ -65,6 +95,14 @@ nonisolated enum Endpoint {
         case .resolveProduct(let upc):
             return try? JSONEncoder().encode(["upc": upc])
         case .updateIdentityProfile(let request):
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            return try? encoder.encode(request)
+        case .addCard(let request):
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            return try? encoder.encode(request)
+        case .setCardCategories(_, let request):
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase
             return try? encoder.encode(request)

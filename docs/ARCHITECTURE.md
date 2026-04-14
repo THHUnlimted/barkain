@@ -282,8 +282,13 @@ All AI calls request JSON output. Use Instructor library for Pydantic model vali
 | POST | /api/v1/identity/profile | M5 | **Step 2d** — Full-replace upsert of the identity profile. Any field missing from the request body defaults to False — iOS sends the complete 16-field draft on every save. | 30/min (write) |
 | GET | /api/v1/identity/discounts?product_id= | M5 | **Step 2d** — Discounts the current user qualifies for, given their identity profile. Zero-LLM pure-SQL matching hitting `idx_discount_programs_eligibility`, deduplicated by `(retailer_id, program_name)` so Samsung's 8-eligibility-row program surfaces as one card. Optional `product_id` param computes `estimated_savings` against the product's best available price (capped at `discount_max_value` when set). Target: < 150ms median. | 60/min |
 | GET | /api/v1/identity/discounts/all | M5 | **Step 2d** — Browse view of every active discount program (no user scoping beyond auth). Same dedup as `/discounts`. Uses `list[EligibleDiscount]` with `estimated_savings=null`. | 60/min |
-| GET | /api/v1/profile/cards | M5 | Get user's card portfolio — **deferred to Step 2e** | 60/min |
-| POST | /api/v1/profile/cards | M5 | Add card to portfolio — **deferred to Step 2e** | 30/min |
+| GET | /api/v1/cards/catalog | M5 | **Step 2e** — All active cards (30 seeded) ordered `(card_issuer, card_display_name)`. Flattens `category_bonuses[user_selected].allowed` into a top-level `user_selected_allowed` field so iOS never touches the JSONB. | 60/min |
+| GET | /api/v1/cards/my-cards | M5 | **Step 2e** — Current user's active card portfolio. | 60/min |
+| POST | /api/v1/cards/my-cards | M5 | **Step 2e** — Add a card to the portfolio. Upserts users(id), then upserts user_cards ON CONFLICT (user_id, card_program_id) reactivating soft-deleted rows and replacing the nickname. 404 if the `card_program_id` is unknown. | 30/min (write) |
+| DELETE | /api/v1/cards/my-cards/{user_card_id} | M5 | **Step 2e** — Soft-delete (`is_active=false`). Idempotent. Returns 204. | 30/min (write) |
+| PUT | /api/v1/cards/my-cards/{user_card_id}/preferred | M5 | **Step 2e** — Mark one card preferred; unset all others for this user. Preferred is purely UX-level — matching is still dollar-value optimal. | 30/min (write) |
+| POST | /api/v1/cards/my-cards/{user_card_id}/categories | M5 | **Step 2e** — Set user-selected categories for Cash+/Customized Cash/Shopper Cash Rewards. Body: `{"categories": ["electronics_stores"], "quarter": "2026-Q2"}`. Backend enforces the allowed-list from `category_bonuses[user_selected].allowed` and upserts `user_category_selections` ON CONFLICT `(user_id, card_program_id, effective_from)`. | 30/min (write) |
+| GET | /api/v1/cards/recommendations?product_id= | M5 | **Step 2e** — Best card per retailer for a product. Zero-LLM: pure SQL preload of user cards + rotating_categories + user_category_selections + retailer prices, then in-memory max over (base, rotating, user-selected, static) with winning `is_rotating_bonus` / `is_user_selected_bonus` / `activation_required` / `activation_url` surfaced. Returns `user_has_cards: false` + `recommendations: []` for users with no active cards — iOS uses this for the "Add your cards" CTA. Target: < 50ms. | 60/min |
 
 ### Phase 3 Endpoints
 
@@ -291,7 +296,7 @@ All AI calls request JSON output. Use Instructor library for Pydantic model vali
 |---|---|---|---|---|
 | POST | /api/v1/products/identify | M1 | Image → product (vision AI) | 10/min |
 | POST | /api/v1/recommend | M6 | Full-stack recommendation | 10/min |
-| GET | /api/v1/card-match/{product_id} | M5 | Card recommendation for product at retailer | 60/min |
+| GET | /api/v1/card-match/{product_id} | M5 | ~~Card recommendation for product at retailer~~ — **landed early in Step 2e as `/api/v1/cards/recommendations`**; Phase 3 wraps it with the pre-redirect purchase interstitial. | 60/min |
 | POST | /api/v1/receipts/scan | M8+M10 | Receipt text → savings calc | 10/min |
 | GET | /api/v1/savings | M10 | Savings dashboard data | 60/min |
 

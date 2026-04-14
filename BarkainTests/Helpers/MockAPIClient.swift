@@ -28,6 +28,32 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     var getEligibleDiscountsCallCount = 0
     var getEligibleDiscountsLastProductId: UUID??
 
+    // MARK: - Cards (Step 2e)
+
+    var getCardCatalogResult: Result<[CardRewardProgram], APIError> = .success([])
+    var getUserCardsResult: Result<[UserCardSummary], APIError> = .success([])
+    var addCardResult: Result<UserCardSummary, APIError> = .success(TestFixtures.sampleUserCardSummary)
+    var removeCardResult: Result<Void, APIError> = .success(())
+    var setPreferredCardResult: Result<UserCardSummary, APIError> = .success(TestFixtures.sampleUserCardSummary)
+    var setCardCategoriesResult: Result<Void, APIError> = .success(())
+    var getCardRecommendationsResult: Result<CardRecommendationsResponse, APIError> = .success(
+        TestFixtures.emptyCardRecommendations
+    )
+
+    var getCardCatalogCallCount = 0
+    var getUserCardsCallCount = 0
+    var addCardCallCount = 0
+    var addCardLastRequest: AddCardRequest?
+    var removeCardCallCount = 0
+    var removeCardLastId: UUID?
+    var setPreferredCardCallCount = 0
+    var setPreferredCardLastId: UUID?
+    var setCardCategoriesCallCount = 0
+    var setCardCategoriesLastId: UUID?
+    var setCardCategoriesLastRequest: SetCategoriesRequest?
+    var getCardRecommendationsCallCount = 0
+    var getCardRecommendationsLastProductId: UUID?
+
     // MARK: - Delay simulation
 
     var resolveProductDelay: TimeInterval = 0
@@ -82,6 +108,49 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
         getEligibleDiscountsCallCount += 1
         getEligibleDiscountsLastProductId = productId
         return try getEligibleDiscountsResult.get()
+    }
+
+    // MARK: - Cards (Step 2e)
+
+    func getCardCatalog() async throws -> [CardRewardProgram] {
+        getCardCatalogCallCount += 1
+        return try getCardCatalogResult.get()
+    }
+
+    func getUserCards() async throws -> [UserCardSummary] {
+        getUserCardsCallCount += 1
+        return try getUserCardsResult.get()
+    }
+
+    func addCard(_ request: AddCardRequest) async throws -> UserCardSummary {
+        addCardCallCount += 1
+        addCardLastRequest = request
+        return try addCardResult.get()
+    }
+
+    func removeCard(userCardId: UUID) async throws {
+        removeCardCallCount += 1
+        removeCardLastId = userCardId
+        _ = try removeCardResult.get()
+    }
+
+    func setPreferredCard(userCardId: UUID) async throws -> UserCardSummary {
+        setPreferredCardCallCount += 1
+        setPreferredCardLastId = userCardId
+        return try setPreferredCardResult.get()
+    }
+
+    func setCardCategories(userCardId: UUID, request: SetCategoriesRequest) async throws {
+        setCardCategoriesCallCount += 1
+        setCardCategoriesLastId = userCardId
+        setCardCategoriesLastRequest = request
+        _ = try setCardCategoriesResult.get()
+    }
+
+    func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse {
+        getCardRecommendationsCallCount += 1
+        getCardRecommendationsLastProductId = productId
+        return try getCardRecommendationsResult.get()
     }
 
     func streamPrices(

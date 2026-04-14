@@ -433,4 +433,57 @@ final class ScannerViewModelTests: XCTestCase {
         // Then — discounts cleared at the start of the second scan
         XCTAssertTrue(viewModel.identityDiscounts.isEmpty)
     }
+
+    // MARK: - Step 2e: Card Recommendations
+
+    func test_fetchCardRecommendations_firesAfterIdentityDiscounts() async {
+        mockClient.streamPricesEvents = [
+            makePriceUpdate(retailerId: "walmart", retailerName: "Walmart", price: 289.99),
+            makeDoneSummary(total: 1, succeeded: 1),
+        ]
+        mockClient.getEligibleDiscountsResult = .success(TestFixtures.emptyIdentityDiscounts)
+        mockClient.getCardRecommendationsResult = .success(TestFixtures.sampleCardRecommendationsResponse)
+
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+
+        XCTAssertEqual(viewModel.cardRecommendations.count, 1)
+        XCTAssertEqual(viewModel.cardRecommendations.first?.cardDisplayName, "Chase Freedom Flex")
+        XCTAssertTrue(viewModel.userHasCards)
+        XCTAssertEqual(mockClient.getCardRecommendationsCallCount, 1)
+        XCTAssertEqual(mockClient.getCardRecommendationsLastProductId, TestFixtures.sampleProductId)
+        XCTAssertEqual(mockClient.getEligibleDiscountsCallCount, 1, "identity fires before cards")
+        XCTAssertNil(viewModel.priceError)
+    }
+
+    func test_fetchCardRecommendations_emptyOnFailure_doesNotSetPriceError() async {
+        mockClient.streamPricesEvents = [
+            makePriceUpdate(retailerId: "walmart", retailerName: "Walmart", price: 289.99),
+            makeDoneSummary(total: 1, succeeded: 1),
+        ]
+        mockClient.getEligibleDiscountsResult = .success(TestFixtures.emptyIdentityDiscounts)
+        mockClient.getCardRecommendationsResult = .failure(.server("cards unavailable"))
+
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+
+        XCTAssertTrue(viewModel.cardRecommendations.isEmpty)
+        XCTAssertNil(viewModel.priceError)
+        XCTAssertEqual(viewModel.priceComparison?.prices.count, 1)
+        XCTAssertEqual(mockClient.getCardRecommendationsCallCount, 1)
+    }
+
+    func test_cardRecommendations_clearedOnNewScan() async {
+        mockClient.streamPricesEvents = [
+            makePriceUpdate(retailerId: "walmart", retailerName: "Walmart", price: 289.99),
+            makeDoneSummary(total: 1, succeeded: 1),
+        ]
+        mockClient.getCardRecommendationsResult = .success(TestFixtures.sampleCardRecommendationsResponse)
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+        XCTAssertEqual(viewModel.cardRecommendations.count, 1)
+        XCTAssertTrue(viewModel.userHasCards)
+
+        mockClient.resolveProductResult = .failure(.notFound)
+        await viewModel.handleBarcodeScan(upc: "999999999999")
+
+        XCTAssertTrue(viewModel.cardRecommendations.isEmpty)
+    }
 }

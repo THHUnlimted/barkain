@@ -14,6 +14,14 @@ protocol APIClientProtocol: Sendable {
     func getIdentityProfile() async throws -> IdentityProfile
     func updateIdentityProfile(_ request: IdentityProfileRequest) async throws -> IdentityProfile
     func getEligibleDiscounts(productId: UUID?) async throws -> IdentityDiscountsResponse
+    // Step 2e — Card portfolio
+    func getCardCatalog() async throws -> [CardRewardProgram]
+    func getUserCards() async throws -> [UserCardSummary]
+    func addCard(_ request: AddCardRequest) async throws -> UserCardSummary
+    func removeCard(userCardId: UUID) async throws
+    func setPreferredCard(userCardId: UUID) async throws -> UserCardSummary
+    func setCardCategories(userCardId: UUID, request: SetCategoriesRequest) async throws
+    func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse
 }
 
 // MARK: - APIClient
@@ -108,6 +116,38 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
 
     func getEligibleDiscounts(productId: UUID?) async throws -> IdentityDiscountsResponse {
         try await request(endpoint: .getEligibleDiscounts(productId: productId))
+    }
+
+    // MARK: - Cards (Step 2e)
+
+    func getCardCatalog() async throws -> [CardRewardProgram] {
+        try await request(endpoint: .getCardCatalog)
+    }
+
+    func getUserCards() async throws -> [UserCardSummary] {
+        try await request(endpoint: .getUserCards)
+    }
+
+    func addCard(_ request: AddCardRequest) async throws -> UserCardSummary {
+        try await self.request(endpoint: .addCard(request))
+    }
+
+    func removeCard(userCardId: UUID) async throws {
+        try await requestVoid(endpoint: .removeCard(userCardId: userCardId))
+    }
+
+    func setPreferredCard(userCardId: UUID) async throws -> UserCardSummary {
+        try await request(endpoint: .setPreferredCard(userCardId: userCardId))
+    }
+
+    func setCardCategories(userCardId: UUID, request: SetCategoriesRequest) async throws {
+        try await requestVoid(
+            endpoint: .setCardCategories(userCardId: userCardId, request)
+        )
+    }
+
+    func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse {
+        try await request(endpoint: .getCardRecommendations(productId: productId))
     }
 
     // MARK: - Streaming (Step 2c)
@@ -289,6 +329,56 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
             }
             throw APIError.server("Internal server error")
 
+        default:
+            if let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data) {
+                throw APIError.unknown(httpResponse.statusCode, errorResponse.error.message)
+            }
+            throw APIError.unknown(httpResponse.statusCode, "Unexpected error")
+        }
+    }
+
+    /// Fire-and-forget variant for endpoints that return 204 or `{"ok": true}`.
+    /// Shares the same error-mapping path as `request<T>` but discards the body.
+    private func requestVoid(endpoint: Endpoint) async throws {
+        let url = endpoint.url(base: baseURL)
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = endpoint.method.rawValue
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let body = endpoint.body {
+            urlRequest.httpBody = body
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch let urlError as URLError {
+            throw APIError.network(urlError)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.unknown(0, "Invalid response type")
+        }
+
+        switch httpResponse.statusCode {
+        case 200..<300:
+            return
+        case 401:
+            throw APIError.unauthorized
+        case 404:
+            throw APIError.notFound
+        case 422:
+            if let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data) {
+                throw APIError.validation(errorResponse.error.message)
+            }
+            throw APIError.validation("Validation failed")
+        case 429:
+            throw APIError.rateLimited
+        case 500...599:
+            if let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data) {
+                throw APIError.server(errorResponse.error.message)
+            }
+            throw APIError.server("Internal server error")
         default:
             if let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data) {
                 throw APIError.unknown(httpResponse.statusCode, errorResponse.error.message)
