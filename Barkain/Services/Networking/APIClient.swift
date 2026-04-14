@@ -11,6 +11,9 @@ protocol APIClientProtocol: Sendable {
     func resolveProduct(upc: String) async throws -> Product
     func getPrices(productId: UUID, forceRefresh: Bool) async throws -> PriceComparison
     func streamPrices(productId: UUID, forceRefresh: Bool) -> AsyncThrowingStream<RetailerStreamEvent, Error>
+    func getIdentityProfile() async throws -> IdentityProfile
+    func updateIdentityProfile(_ request: IdentityProfileRequest) async throws -> IdentityProfile
+    func getEligibleDiscounts(productId: UUID?) async throws -> IdentityDiscountsResponse
 }
 
 // MARK: - APIClient
@@ -91,6 +94,20 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
 
     func getPrices(productId: UUID, forceRefresh: Bool = false) async throws -> PriceComparison {
         try await request(endpoint: .getPrices(productId: productId, forceRefresh: forceRefresh))
+    }
+
+    // MARK: - Identity (Step 2d)
+
+    func getIdentityProfile() async throws -> IdentityProfile {
+        try await request(endpoint: .getIdentityProfile)
+    }
+
+    func updateIdentityProfile(_ request: IdentityProfileRequest) async throws -> IdentityProfile {
+        try await self.request(endpoint: .updateIdentityProfile(request))
+    }
+
+    func getEligibleDiscounts(productId: UUID?) async throws -> IdentityDiscountsResponse {
+        try await request(endpoint: .getEligibleDiscounts(productId: productId))
     }
 
     // MARK: - Streaming (Step 2c)

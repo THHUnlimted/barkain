@@ -12,6 +12,10 @@ struct ScannerView: View {
     @State private var scannerError: BarcodeScannerError?
     @State private var showManualEntry = false
     @State private var manualUPC = ""
+    @State private var showOnboardingFromCTA = false
+
+    @AppStorage("hasCompletedIdentityOnboarding")
+    private var hasCompletedOnboarding: Bool = false
 
     // MARK: - Body
 
@@ -38,6 +42,12 @@ struct ScannerView: View {
         }
         .sheet(isPresented: $showManualEntry) {
             manualEntrySheet
+        }
+        .sheet(isPresented: $showOnboardingFromCTA) {
+            IdentityOnboardingView(
+                viewModel: IdentityOnboardingViewModel(apiClient: apiClient),
+                hasCompletedOnboarding: $hasCompletedOnboarding
+            )
         }
         .task {
             let vm = ScannerViewModel(apiClient: apiClient)
@@ -134,7 +144,8 @@ struct ScannerView: View {
             PriceComparisonView(
                 product: product,
                 comparison: comparison,
-                viewModel: viewModel
+                viewModel: viewModel,
+                onRequestOnboarding: { showOnboardingFromCTA = true }
             )
         } else if viewModel.isPriceLoading, let product = viewModel.product {
             // Brief window before the first stream event seeds `priceComparison`.

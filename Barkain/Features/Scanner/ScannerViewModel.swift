@@ -20,6 +20,12 @@ final class ScannerViewModel {
     var isPriceLoading = false
     var priceError: APIError?
 
+    // Step 2d: identity discounts reveal after the price stream finishes.
+    // Populated from GET /api/v1/identity/discounts?product_id= on success;
+    // cleared on each new scan. Failures here are non-fatal — they do NOT
+    // set `priceError`, so the retailer list stays visible.
+    var identityDiscounts: [EligibleDiscount] = []
+
     // MARK: - Dependencies
 
     private let apiClient: any APIClientProtocol
@@ -38,6 +44,7 @@ final class ScannerViewModel {
         error = nil
         priceComparison = nil
         priceError = nil
+        identityDiscounts = []
         isLoading = true
 
         do {
@@ -119,7 +126,28 @@ final class ScannerViewModel {
         }
 
         sseLog.info("fetchPrices: stream completed successfully")
+        await fetchIdentityDiscounts(productId: product.id)
         isPriceLoading = false
+    }
+
+    // MARK: - Step 2d: Identity Discounts
+
+    /// Fetch the list of identity discounts the user qualifies for, scoped to
+    /// the currently scanned product so the backend can compute estimated
+    /// savings against the best price.
+    ///
+    /// Non-fatal: any failure logs a warning and leaves `identityDiscounts`
+    /// empty. We never set `priceError` here — the retailer list is the
+    /// primary UX and must not be hidden by a secondary-feature failure.
+    private func fetchIdentityDiscounts(productId: UUID) async {
+        do {
+            let response = try await apiClient.getEligibleDiscounts(productId: productId)
+            identityDiscounts = response.eligibleDiscounts
+            sseLog.info("fetchIdentityDiscounts: received \(response.eligibleDiscounts.count, privacy: .public) discounts for \(response.identityGroupsActive.count, privacy: .public) active groups")
+        } catch {
+            sseLog.warning("fetchIdentityDiscounts failed: \(error.localizedDescription, privacy: .public)")
+            identityDiscounts = []
+        }
     }
 
     private func apply(_ update: RetailerResultUpdate, for product: Product) {
@@ -188,6 +216,7 @@ final class ScannerViewModel {
             sseLog.info("fallbackToBatch: batch returned \(batch.prices.count, privacy: .public) prices, \(batch.retailerResults.count, privacy: .public) retailer results")
             priceComparison = batch
             priceError = nil
+            await fetchIdentityDiscounts(productId: product.id)
         } catch let apiError as APIError {
             // Clear any partial seed so callers see a clean failure state.
             if !preserveSeeded {
@@ -211,6 +240,7 @@ final class ScannerViewModel {
         priceComparison = nil
         isPriceLoading = false
         priceError = nil
+        identityDiscounts = []
     }
 
     // MARK: - Computed

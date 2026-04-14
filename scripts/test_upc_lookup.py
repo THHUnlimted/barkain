@@ -26,7 +26,7 @@ if ENV_PATH.exists():
 # Add backend to path
 sys.path.insert(0, str(ROOT / "backend"))
 
-import httpx
+import httpx  # noqa: E402
 
 # ── Curated catalog of known electronics UPCs ──────────────────────
 
@@ -208,18 +208,18 @@ def show_catalog():
 def show_result(upc: str, gemini_data, upcitemdb_data, result):
     print()
     print(f"  ┌─ UPC: {upc} ────────────────────────────────")
-    print(f"  │")
+    print("  │")
     print(f"  │  Gemini says:    {gemini_data.get('name') if gemini_data else '(failed/empty)'}")
     print(f"  │  UPCitemdb says: {upcitemdb_data.get('name') if upcitemdb_data else '(failed/empty)'}")
     if upcitemdb_data:
         print(f"  │  UPCitemdb brand: {upcitemdb_data.get('brand', '?')}")
         print(f"  │  UPCitemdb category: {upcitemdb_data.get('category', '?')}")
-    print(f"  │")
+    print("  │")
     print(f"  │  ► Winner:     {result['winner'] or 'NONE'}")
     print(f"  │  ► Confidence: {result['confidence']}")
     print(f"  │  ► Final name: {result['name'] or '(no product resolved)'}")
     print(f"  │  ► Reason:     {result['match']}")
-    print(f"  └──────────────────────────────────────────────────")
+    print("  └──────────────────────────────────────────────────")
     print()
 
 
@@ -228,9 +228,9 @@ def show_result(upc: str, gemini_data, upcitemdb_data, result):
 async def resolve_upc(upc: str):
     """Full cross-validation test for a single UPC."""
     print(f"\n  Resolving UPC {upc}...")
-    print(f"  [1/2] Calling Gemini...")
+    print("  [1/2] Calling Gemini...")
     gemini_data = await gemini_lookup(upc)
-    print(f"  [2/2] Calling UPCitemdb...")
+    print("  [2/2] Calling UPCitemdb...")
     upcitemdb_data = await upcitemdb_lookup(upc)
     result = cross_validate(gemini_data, upcitemdb_data)
     show_result(upc, gemini_data, upcitemdb_data, result)

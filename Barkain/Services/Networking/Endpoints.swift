@@ -14,6 +14,9 @@ nonisolated enum Endpoint {
     case getPrices(productId: UUID, forceRefresh: Bool = false)
     case streamPrices(productId: UUID, forceRefresh: Bool = false)
     case health
+    case getIdentityProfile
+    case updateIdentityProfile(IdentityProfileRequest)
+    case getEligibleDiscounts(productId: UUID?)
 
     // MARK: - Properties
 
@@ -27,14 +30,18 @@ nonisolated enum Endpoint {
             return "/api/v1/prices/\(productId.uuidString)/stream"
         case .health:
             return "/api/v1/health"
+        case .getIdentityProfile, .updateIdentityProfile:
+            return "/api/v1/identity/profile"
+        case .getEligibleDiscounts:
+            return "/api/v1/identity/discounts"
         }
     }
 
     var method: HTTPMethod {
         switch self {
-        case .resolveProduct:
+        case .resolveProduct, .updateIdentityProfile:
             return .post
-        case .getPrices, .streamPrices, .health:
+        case .getPrices, .streamPrices, .health, .getIdentityProfile, .getEligibleDiscounts:
             return .get
         }
     }
@@ -43,6 +50,11 @@ nonisolated enum Endpoint {
         switch self {
         case .getPrices(_, true), .streamPrices(_, true):
             return [URLQueryItem(name: "force_refresh", value: "true")]
+        case .getEligibleDiscounts(let productId):
+            if let productId {
+                return [URLQueryItem(name: "product_id", value: productId.uuidString)]
+            }
+            return nil
         default:
             return nil
         }
@@ -52,6 +64,10 @@ nonisolated enum Endpoint {
         switch self {
         case .resolveProduct(let upc):
             return try? JSONEncoder().encode(["upc": upc])
+        case .updateIdentityProfile(let request):
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            return try? encoder.encode(request)
         default:
             return nil
         }

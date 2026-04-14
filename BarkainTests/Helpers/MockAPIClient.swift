@@ -9,6 +9,11 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
 
     var resolveProductResult: Result<Product, APIError> = .success(TestFixtures.sampleProduct)
     var getPricesResult: Result<PriceComparison, APIError> = .success(TestFixtures.samplePriceComparison)
+    var getIdentityProfileResult: Result<IdentityProfile, APIError> = .success(TestFixtures.sampleIdentityProfile)
+    var updateIdentityProfileResult: Result<IdentityProfile, APIError> = .success(TestFixtures.sampleIdentityProfile)
+    var getEligibleDiscountsResult: Result<IdentityDiscountsResponse, APIError> = .success(
+        TestFixtures.emptyIdentityDiscounts
+    )
 
     // MARK: - Call Tracking
 
@@ -17,6 +22,11 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     var getPricesCallCount = 0
     var getPricesLastProductId: UUID?
     var getPricesLastForceRefresh: Bool?
+    var getIdentityProfileCallCount = 0
+    var updateIdentityProfileCallCount = 0
+    var updateIdentityProfileLastRequest: IdentityProfileRequest?
+    var getEligibleDiscountsCallCount = 0
+    var getEligibleDiscountsLastProductId: UUID??
 
     // MARK: - Delay simulation
 
@@ -55,6 +65,23 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
             try await Task.sleep(for: .seconds(getPricesDelay))
         }
         return try getPricesResult.get()
+    }
+
+    func getIdentityProfile() async throws -> IdentityProfile {
+        getIdentityProfileCallCount += 1
+        return try getIdentityProfileResult.get()
+    }
+
+    func updateIdentityProfile(_ request: IdentityProfileRequest) async throws -> IdentityProfile {
+        updateIdentityProfileCallCount += 1
+        updateIdentityProfileLastRequest = request
+        return try updateIdentityProfileResult.get()
+    }
+
+    func getEligibleDiscounts(productId: UUID?) async throws -> IdentityDiscountsResponse {
+        getEligibleDiscountsCallCount += 1
+        getEligibleDiscountsLastProductId = productId
+        return try getEligibleDiscountsResult.get()
     }
 
     func streamPrices(
