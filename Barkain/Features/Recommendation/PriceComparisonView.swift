@@ -27,6 +27,9 @@ struct PriceComparisonView: View {
     let viewModel: ScannerViewModel
     var onRequestOnboarding: (() -> Void)? = nil
     var onRequestAddCards: (() -> Void)? = nil
+    var onRequestUpgrade: (() -> Void)? = nil
+
+    @Environment(FeatureGateService.self) private var featureGate
 
     @AppStorage("hasCompletedIdentityOnboarding")
     private var hasCompletedOnboarding: Bool = false
@@ -42,6 +45,7 @@ struct PriceComparisonView: View {
                 identityDiscountsSection
 
                 sectionHeader
+                cardUpgradeBanner
                 retailerList
 
                 addCardsCTA
@@ -51,6 +55,21 @@ struct PriceComparisonView: View {
             .padding(Spacing.lg)
             .animation(.easeInOut(duration: 0.3), value: viewModel.identityDiscounts)
             .animation(.easeInOut(duration: 0.3), value: viewModel.cardRecommendations)
+        }
+    }
+
+    // MARK: - Card upgrade banner (Step 2f)
+    //
+    // Single banner shown to free users who have matching card recs they
+    // can't see. Free users also get nil card subtitles on each PriceRow
+    // (handled below in the retailer list builder).
+
+    @ViewBuilder
+    private var cardUpgradeBanner: some View {
+        if !featureGate.canAccess(.cardRecommendations)
+            && !viewModel.cardRecommendations.isEmpty {
+            UpgradeCardsBanner { onRequestUpgrade?() }
+                .transition(.opacity)
         }
     }
 
@@ -86,19 +105,45 @@ struct PriceComparisonView: View {
         }
     }
 
-    // MARK: - Identity Discounts (Step 2d)
+    // MARK: - Identity Discounts (Step 2d + 2f gate)
 
     @ViewBuilder
     private var identityDiscountsSection: some View {
         if !viewModel.identityDiscounts.isEmpty {
-            IdentityDiscountsSection(discounts: viewModel.identityDiscounts)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+            // Step 2f: free users see at most `freeIdentityDiscountLimit`
+            // discounts. The slice happens here so IdentityDiscountsSection
+            // stays presentation-only — it doesn't need to know about
+            // billing tiers.
+            VStack(spacing: Spacing.sm) {
+                IdentityDiscountsSection(discounts: visibleIdentityDiscounts)
+                if hiddenIdentityDiscountCount > 0 {
+                    UpgradeLockedDiscountsRow(
+                        hiddenCount: hiddenIdentityDiscountCount
+                    ) {
+                        onRequestUpgrade?()
+                    }
+                }
+            }
+            .transition(.opacity.combined(with: .move(edge: .top)))
         } else if !hasCompletedOnboarding {
             IdentityOnboardingCTARow {
                 onRequestOnboarding?()
             }
             .transition(.opacity)
         }
+    }
+
+    private var visibleIdentityDiscounts: [EligibleDiscount] {
+        if featureGate.canAccess(.fullIdentityDiscounts) {
+            return viewModel.identityDiscounts
+        }
+        return Array(
+            viewModel.identityDiscounts.prefix(FeatureGateService.freeIdentityDiscountLimit)
+        )
+    }
+
+    private var hiddenIdentityDiscountCount: Int {
+        viewModel.identityDiscounts.count - visibleIdentityDiscounts.count
     }
 
     // MARK: - Row data
@@ -179,9 +224,13 @@ struct PriceComparisonView: View {
                         } label: {
                             PriceRow(
                                 retailerPrice: retailerPrice,
-                                cardRecommendation: viewModel.cardRecommendations.first {
-                                    $0.retailerId == retailerPrice.retailerId
-                                }
+                                // Step 2f: hide card subtitle for free users.
+                                // The cardUpgradeBanner above the list points
+                                // them at the paywall instead of repeating an
+                                // upgrade nudge on every row.
+                                cardRecommendation: featureGate.canAccess(.cardRecommendations)
+                                    ? viewModel.cardRecommendations.first { $0.retailerId == retailerPrice.retailerId }
+                                    : nil
                             )
                         }
                         .buttonStyle(.plain)
@@ -332,6 +381,7 @@ struct PriceComparisonView: View {
             return vm
         }()
     )
+    .environment(FeatureGateService(proTierProvider: { false }))
 }
 
 // MARK: - Preview Helper
@@ -363,5 +413,8 @@ private struct PreviewAPIClient: APIClientProtocol {
     func setCardCategories(userCardId: UUID, request: SetCategoriesRequest) async throws {}
     func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse {
         CardRecommendationsResponse(recommendations: [], userHasCards: false)
+    }
+    func getBillingStatus() async throws -> BillingStatus {
+        BillingStatus(tier: "free", expiresAt: nil, isActive: false, entitlementId: nil)
     }
 }

@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     RATE_LIMIT_GENERAL: int = 60
     RATE_LIMIT_WRITE: int = 30
     RATE_LIMIT_AI: int = 10
+    # Pro subscribers get their tier-resolved limit multiplied by this factor.
+    # Tier resolution is cached in Redis for 60s; webhook handlers bust the key
+    # on state changes so upgrades take effect within the cache TTL.
+    RATE_LIMIT_PRO_MULTIPLIER: int = 2
+
+    # Billing (Step 2f — M11 Billing / RevenueCat)
+    REVENUECAT_WEBHOOK_SECRET: str = ""
 
     # AI — Product Resolution
     GEMINI_API_KEY: str = ""

@@ -8,18 +8,33 @@ final class ScannerViewModelTests: XCTestCase {
 
     private var mockClient: MockAPIClient!
     private var viewModel: ScannerViewModel!
+    private var testDefaults: UserDefaults!
 
     // MARK: - Setup
 
     override func setUp() {
         super.setUp()
         mockClient = MockAPIClient()
-        viewModel = ScannerViewModel(apiClient: mockClient)
+        // Step 2f: each test gets a private UserDefaults suite for the
+        // feature gate so daily scan counts don't leak across tests.
+        // Without this, tests run sequentially and accumulate scans on
+        // `UserDefaults.standard`, eventually hitting the 10/day cap
+        // mid-suite and silently breaking unrelated tests.
+        let suite = "test.scanner_vm.\(UUID().uuidString)"
+        testDefaults = UserDefaults(suiteName: suite)!
+        testDefaults.removePersistentDomain(forName: suite)
+        let gate = FeatureGateService(
+            proTierProvider: { false },
+            defaults: testDefaults,
+            clock: Date.init
+        )
+        viewModel = ScannerViewModel(apiClient: mockClient, featureGate: gate)
     }
 
     override func tearDown() {
         viewModel = nil
         mockClient = nil
+        testDefaults = nil
         super.tearDown()
     }
 
@@ -485,5 +500,62 @@ final class ScannerViewModelTests: XCTestCase {
         await viewModel.handleBarcodeScan(upc: "999999999999")
 
         XCTAssertTrue(viewModel.cardRecommendations.isEmpty)
+    }
+
+    // MARK: - Step 2f: Paywall gate tests
+
+    func test_scanLimit_triggersPaywall_blocksFetchPrices() async {
+        // Given a free gate already at the daily limit.
+        let defaults = UserDefaults(suiteName: "test.gate.\(UUID().uuidString)")!
+        defaults.removePersistentDomain(forName: "test.gate.\(UUID().uuidString)")
+        let gate = FeatureGateService(
+            proTierProvider: { false },
+            defaults: defaults,
+            clock: Date.init
+        )
+        for _ in 0..<FeatureGateService.freeDailyScanLimit {
+            gate.recordScan()
+        }
+        XCTAssertTrue(gate.scanLimitReached)
+
+        let limitedViewModel = ScannerViewModel(apiClient: mockClient, featureGate: gate)
+
+        // When the user attempts another scan.
+        await limitedViewModel.handleBarcodeScan(upc: "012345678901")
+
+        // Then the product resolved BUT prices were not fetched and the
+        // paywall flag is set so the view can present.
+        XCTAssertNotNil(limitedViewModel.product)
+        XCTAssertTrue(limitedViewModel.showPaywall)
+        XCTAssertNil(limitedViewModel.priceComparison)
+        XCTAssertEqual(mockClient.getPricesCallCount, 0)
+        XCTAssertEqual(mockClient.streamPricesCallCount, 0)
+    }
+
+    func test_scanQuota_consumedOnlyOnSuccessfulResolve() async {
+        // Given a free gate at zero quota.
+        let defaults = UserDefaults(suiteName: "test.gate.\(UUID().uuidString)")!
+        defaults.removePersistentDomain(forName: "test.gate.\(UUID().uuidString)")
+        let gate = FeatureGateService(
+            proTierProvider: { false },
+            defaults: defaults,
+            clock: Date.init
+        )
+        XCTAssertEqual(gate.dailyScanCount, 0)
+
+        let testViewModel = ScannerViewModel(apiClient: mockClient, featureGate: gate)
+
+        // When resolveProduct fails (e.g. Gemini timeout, unknown UPC).
+        mockClient.resolveProductResult = .failure(.notFound)
+        await testViewModel.handleBarcodeScan(upc: "999999999999")
+
+        // Then no quota was burned — the user can retry without losing a scan.
+        XCTAssertEqual(gate.dailyScanCount, 0)
+        XCTAssertFalse(testViewModel.showPaywall)
+
+        // And on a successful resolve, the quota IS consumed.
+        mockClient.resolveProductResult = .success(TestFixtures.sampleProduct)
+        await testViewModel.handleBarcodeScan(upc: "012345678901")
+        XCTAssertEqual(gate.dailyScanCount, 1)
     }
 }

@@ -1,3 +1,9 @@
 // Release configuration for Barkain
 // API base URL for production
 API_BASE_URL = https:$()/$()/api.barkain.ai
+
+// RevenueCat public API key (Step 2f — M11 Billing). Replace with the
+// production public key from RevenueCat dashboard → Project Settings →
+// API keys before shipping a release build. Empty = free tier only (no
+// paywall / no purchases).
+REVENUECAT_API_KEY =

@@ -54,6 +54,13 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     var getCardRecommendationsCallCount = 0
     var getCardRecommendationsLastProductId: UUID?
 
+    // MARK: - Billing (Step 2f)
+
+    var getBillingStatusResult: Result<BillingStatus, APIError> = .success(
+        BillingStatus(tier: "free", expiresAt: nil, isActive: false, entitlementId: nil)
+    )
+    var getBillingStatusCallCount = 0
+
     // MARK: - Delay simulation
 
     var resolveProductDelay: TimeInterval = 0
@@ -151,6 +158,13 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
         getCardRecommendationsCallCount += 1
         getCardRecommendationsLastProductId = productId
         return try getCardRecommendationsResult.get()
+    }
+
+    // MARK: - Billing (Step 2f)
+
+    func getBillingStatus() async throws -> BillingStatus {
+        getBillingStatusCallCount += 1
+        return try getBillingStatusResult.get()
     }
 
     func streamPrices(

@@ -276,4 +276,7 @@ private struct PreviewOnboardingAPIClient: APIClientProtocol {
     func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse {
         CardRecommendationsResponse(recommendations: [], userHasCards: false)
     }
+    func getBillingStatus() async throws -> BillingStatus {
+        BillingStatus(tier: "free", expiresAt: nil, isActive: false, entitlementId: nil)
+    }
 }

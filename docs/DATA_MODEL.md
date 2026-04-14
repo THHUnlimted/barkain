@@ -91,6 +91,25 @@ CREATE TABLE users (
     created_at              TIMESTAMPTZ DEFAULT NOW(),
     updated_at              TIMESTAMPTZ DEFAULT NOW()
 );
+--
+-- Step 2f tier semantics:
+-- - subscription_tier ∈ {'free', 'pro'}. No CHECK constraint (TEXT). Writers
+--   are limited to BillingService.process_webhook (RC events) and the seed
+--   scripts; the implicit vocabulary is enforced by code, not the schema.
+-- - "Active pro" is a *computed* concept, not a column. The rate limiter
+--   (backend/app/dependencies.py::_resolve_user_tier) and the status
+--   endpoint both check `subscription_tier == 'pro' AND
+--   (subscription_expires_at IS NULL OR subscription_expires_at > now())`.
+--   Expired-pro rows are reported as free without mutating the DB row —
+--   the next webhook (EXPIRATION) cleans up.
+-- - subscription_expires_at IS NULL means either (a) free tier or
+--   (b) pro from a NON_RENEWING_PURCHASE (lifetime). The tier column
+--   disambiguates.
+-- - Webhook idempotency: BillingService SETs expires_at from the event
+--   payload (never `+= delta`), so replays produce the same final row.
+-- - Tier is cached in Redis (`tier:{user_id}`, 60s TTL) so the rate limiter
+--   doesn't hit Postgres on every authenticated request. Cache busts on
+--   every state-changing webhook event.
 
 -- ================================================================
 -- RETAILERS: Master retailer registry

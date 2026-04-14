@@ -8,3 +8,8 @@
 // able to reach your uvicorn backend over WiFi, and the backend must be started with
 // --host 0.0.0.0 for that to work. Current Mac LAN IP (2026-04-12): 192.168.1.194.
 API_BASE_URL = http:$()/$()/127.0.0.1:8000
+
+// RevenueCat public API key (Step 2f — M11 Billing). Safe to commit — the
+// public key is designed to ship in client bundles. The server-side webhook
+// secret lives in backend/.env (REVENUECAT_WEBHOOK_SECRET), never here.
+REVENUECAT_API_KEY = test_RtgnxKGXxhBYfljExWurnyPDYYh

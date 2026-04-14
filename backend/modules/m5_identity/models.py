@@ -164,6 +164,19 @@ class CardRewardProgram(Base):
         DateTime(timezone=True), server_default=text("NOW()")
     )
 
+    __table_args__ = (
+        # Required by scripts/seed_card_catalog.py ON CONFLICT upsert. Also owned
+        # by Alembic migration 0004 so production DBs migrate cleanly. Declared
+        # here so Base.metadata.create_all (used by the test DB fixture) picks
+        # it up without needing to run alembic.
+        Index(
+            "idx_card_reward_programs_product",
+            "card_issuer",
+            "card_product",
+            unique=True,
+        ),
+    )
+
 
 # MARK: - Rotating Categories
 
