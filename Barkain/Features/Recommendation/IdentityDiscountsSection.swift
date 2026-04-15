@@ -5,12 +5,16 @@ import SwiftUI
 struct IdentityDiscountsSection: View {
 
     let discounts: [EligibleDiscount]
+    // Step 2g: verification URL taps are routed through an in-app browser
+    // sheet owned by the presenting view. Identity URLs are NOT affiliate
+    // links — no `/affiliate/click` round-trip.
+    let onOpen: (URL) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             header
             ForEach(discounts) { discount in
-                IdentityDiscountCard(discount: discount)
+                IdentityDiscountCard(discount: discount, onOpen: onOpen)
             }
         }
     }
@@ -32,6 +36,7 @@ struct IdentityDiscountsSection: View {
 struct IdentityDiscountCard: View {
 
     let discount: EligibleDiscount
+    let onOpen: (URL) -> Void
 
     var body: some View {
         Button {
@@ -78,7 +83,15 @@ struct IdentityDiscountCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-        .accessibilityHint("Opens the verification page in Safari")
+        .accessibilityHint("Opens the verification page in an in-app browser")
+    }
+
+    // Exposed for testing. Prefers `verificationUrl` over `url`, returns
+    // nil if both are missing or unparseable.
+    var resolvedURL: URL? {
+        let candidate = discount.verificationUrl ?? discount.url
+        guard let candidate else { return nil }
+        return URL(string: candidate)
     }
 
     private var iconBadge: some View {
@@ -139,9 +152,8 @@ struct IdentityDiscountCard: View {
     }
 
     private func openVerificationURL() {
-        let candidate = discount.verificationUrl ?? discount.url
-        guard let candidate, let url = URL(string: candidate) else { return }
-        UIApplication.shared.open(url)
+        guard let url = resolvedURL else { return }
+        onOpen(url)
     }
 }
 
@@ -213,7 +225,8 @@ struct IdentityOnboardingCTARow: View {
                 url: nil,
                 estimatedSavings: 400
             ),
-        ]
+        ],
+        onOpen: { _ in }
     )
     .padding()
     .background(Color.barkainSurface)

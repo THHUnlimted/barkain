@@ -127,6 +127,19 @@ RATE_LIMIT_PRO_MULTIPLIER=2      # pro tier = base × this (Step 2f)
 # accept events; misconfigured = 401 WEBHOOK_AUTH_FAILED.
 REVENUECAT_WEBHOOK_SECRET=
 
+# ── Affiliate Programs (Step 2g) ─────────────────────
+# Amazon Associates store ID — live, appended as ?tag=<id> to Amazon URLs.
+AMAZON_ASSOCIATE_TAG=barkain-20
+# eBay Partner Network campaign ID — live, drives rover.ebay.com redirects.
+EBAY_CAMPAIGN_ID=5339148665
+# Walmart Impact Radius affiliate ID — placeholder, pending approval.
+# Leave empty to pass Walmart URLs through untagged.
+# WALMART_AFFILIATE_ID=
+# Shared bearer token for POST /api/v1/affiliate/conversion placeholder.
+# Leave empty to accept any request (permissive placeholder mode). Once set,
+# enforces Authorization: Bearer <secret> and 401s on mismatch.
+AFFILIATE_WEBHOOK_SECRET=
+
 # ── Walmart Adapter Routing (post-Step-2a paradigm shift) ──
 # Selects which path handles walmart scrapes. All other retailers always use
 # the container dispatch. See docs/ARCHITECTURE.md#walmart-adapter-routing and
@@ -210,6 +223,41 @@ The Step 2f code (m11_billing module + iOS SubscriptionService + PaywallHost) is
 - iOS build with the test API key: paywall sheet should render the offering's products. If you see a loading state forever, the offering isn't published or the API key is wrong.
 - Backend webhook reachability test: hit `POST /api/v1/billing/webhook` with `curl` carrying the bearer token and a minimal `INITIAL_PURCHASE` event payload — should return `{"ok": true, "action": "processed", "type": "INITIAL_PURCHASE", "tier": "pro"}`.
 - Status endpoint: `curl https://.../api/v1/billing/status` (with auth) should return the synced tier.
+
+---
+
+## Affiliate Setup (Step 2g)
+
+Step 2g ships a fully wired affiliate URL router and click logger (backend `m12_affiliate` + iOS `InAppBrowserView`) but revenue depends on live affiliate program configuration. **Current status:**
+
+| Network | Status | ID | Env var |
+|---------|--------|----|---------| 
+| Amazon Associates | ✅ **Live** | `barkain-20` | `AMAZON_ASSOCIATE_TAG` |
+| eBay Partner Network | ✅ **Live** | Campaign `5339148665` | `EBAY_CAMPAIGN_ID` |
+| Walmart (Impact Radius) | ⏳ **Pending approval** | — | `WALMART_AFFILIATE_ID` |
+| Best Buy (CJ Affiliate) | ❌ **Denied** | — | passthrough |
+| Home Depot / Lowe's / Target / others | ❌ **Not applied** | — | passthrough |
+
+**Post-merge tasks (Mike):**
+
+1. **Verify live clicks are being attributed.** Scan a product → tap an Amazon row → land in the in-app browser → open the debug tools on a real device via `https://associates.amazon.com` → confirm the `tag=barkain-20` parameter is honored by Amazon's attribution. Repeat for eBay via https://partnernetwork.ebay.com dashboard.
+2. **Walmart Impact Radius approval.** Complete application at https://goto.walmart.com/. When approved, set `WALMART_AFFILIATE_ID=<id>` in `backend/.env` and restart uvicorn — no code change needed. The service flips from passthrough to tagged automatically.
+3. **Conversion webhook (future).** Once affiliate networks are ready to send sale-attribution callbacks, set `AFFILIATE_WEBHOOK_SECRET=<random token>` in `backend/.env` and configure the same token as a bearer header in each network's dashboard (Amazon reports, eBay Partner Network reports, Impact Radius reports). The endpoint flips from permissive placeholder to enforced bearer auth automatically. Actual conversion payload processing is Phase 5.
+4. **Best Buy retry.** Best Buy denied the initial CJ Affiliate application; revisit in Phase 3 with a higher-traffic case. Until then, Best Buy URLs pass through untagged.
+
+**Testing locally.** With `.env` configured (`AMAZON_ASSOCIATE_TAG=barkain-20`, `EBAY_CAMPAIGN_ID=5339148665`):
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/affiliate/click \
+  -H "Content-Type: application/json" \
+  -d '{"retailer_id": "amazon", "product_url": "https://www.amazon.com/dp/B0B2FCT81R"}'
+# → {"affiliate_url": "https://www.amazon.com/dp/B0B2FCT81R?tag=barkain-20", "is_affiliated": true, "network": "amazon_associates", "retailer_id": "amazon"}
+
+curl http://127.0.0.1:8000/api/v1/affiliate/stats
+# → {"clicks_by_retailer": {"amazon": 1}, "total_clicks": 1}
+```
+
+Demo mode (`BARKAIN_DEMO_MODE=1`) bypasses Clerk auth for these curl calls.
 
 ---
 

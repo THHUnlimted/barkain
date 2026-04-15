@@ -24,6 +24,13 @@ protocol APIClientProtocol: Sendable {
     func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse
     // Step 2f — Billing
     func getBillingStatus() async throws -> BillingStatus
+    // Step 2g — Affiliate
+    func getAffiliateURL(
+        productId: UUID?,
+        retailerId: String,
+        productURL: String
+    ) async throws -> AffiliateURLResponse
+    func getAffiliateStats() async throws -> AffiliateStatsResponse
 }
 
 // MARK: - APIClient
@@ -156,6 +163,25 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
 
     func getBillingStatus() async throws -> BillingStatus {
         try await request(endpoint: .getBillingStatus)
+    }
+
+    // MARK: - Affiliate (Step 2g)
+
+    func getAffiliateURL(
+        productId: UUID?,
+        retailerId: String,
+        productURL: String
+    ) async throws -> AffiliateURLResponse {
+        let clickRequest = AffiliateClickRequest(
+            productId: productId,
+            retailerId: retailerId,
+            productUrl: productURL
+        )
+        return try await request(endpoint: .getAffiliateURL(clickRequest))
+    }
+
+    func getAffiliateStats() async throws -> AffiliateStatsResponse {
+        try await request(endpoint: .getAffiliateStats)
     }
 
     // MARK: - Streaming (Step 2c)

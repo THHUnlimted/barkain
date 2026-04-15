@@ -84,5 +84,11 @@ class Settings(BaseSettings):
     DECODO_PROXY_PASS: str = ""
     DECODO_PROXY_HOST: str = "gate.decodo.com:7000"
 
+    # Affiliate Programs (Step 2g — M12 Affiliate URL Routing)
+    AMAZON_ASSOCIATE_TAG: str = ""          # "barkain-20" in production
+    EBAY_CAMPAIGN_ID: str = ""              # "5339148665" in production
+    WALMART_AFFILIATE_ID: str = ""          # Empty until Impact Radius approval
+    AFFILIATE_WEBHOOK_SECRET: str = ""      # Bearer token for /conversion (placeholder)
+
 
 settings = Settings()

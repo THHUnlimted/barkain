@@ -300,6 +300,34 @@ final class ScannerViewModel {
         userHasCards = false
     }
 
+    // MARK: - Step 2g: Affiliate URL resolution
+    //
+    // Called by `PriceComparisonView` when a retailer row is tapped. Fetches
+    // the tagged URL from the backend (POST /api/v1/affiliate/click) and
+    // returns it. Falls back to the original URL on any thrown error — the
+    // user is never blocked from clicking through, even offline or during a
+    // backend outage. Returns nil only if the retailer row has no URL.
+    func resolveAffiliateURL(for retailerPrice: RetailerPrice) async -> URL? {
+        guard let rawUrlString = retailerPrice.url, !rawUrlString.isEmpty else {
+            return nil
+        }
+        let fallback = URL(string: rawUrlString)
+
+        do {
+            let response = try await apiClient.getAffiliateURL(
+                productId: priceComparison?.productId,
+                retailerId: retailerPrice.retailerId,
+                productURL: rawUrlString
+            )
+            return URL(string: response.affiliateUrl) ?? fallback
+        } catch {
+            sseLog.warning(
+                "resolveAffiliateURL failed, falling back to original URL: \(error.localizedDescription, privacy: .public)"
+            )
+            return fallback
+        }
+    }
+
     // MARK: - Computed
 
     var sortedPrices: [RetailerPrice] {

@@ -34,6 +34,11 @@ struct PriceComparisonView: View {
     @AppStorage("hasCompletedIdentityOnboarding")
     private var hasCompletedOnboarding: Bool = false
 
+    // Step 2g: in-app browser sheet for retailer + identity discount taps.
+    // Both flows funnel through this single state so only one sheet is
+    // presented at a time.
+    @State private var browserURL: IdentifiableURL?
+
     // MARK: - Body
 
     var body: some View {
@@ -55,6 +60,10 @@ struct PriceComparisonView: View {
             .padding(Spacing.lg)
             .animation(.easeInOut(duration: 0.3), value: viewModel.identityDiscounts)
             .animation(.easeInOut(duration: 0.3), value: viewModel.cardRecommendations)
+        }
+        .sheet(item: $browserURL) { item in
+            InAppBrowserView(url: item.url)
+                .ignoresSafeArea()
         }
     }
 
@@ -115,7 +124,10 @@ struct PriceComparisonView: View {
             // stays presentation-only — it doesn't need to know about
             // billing tiers.
             VStack(spacing: Spacing.sm) {
-                IdentityDiscountsSection(discounts: visibleIdentityDiscounts)
+                IdentityDiscountsSection(
+                    discounts: visibleIdentityDiscounts,
+                    onOpen: { browserURL = IdentifiableURL(url: $0) }
+                )
                 if hiddenIdentityDiscountCount > 0 {
                     UpgradeLockedDiscountsRow(
                         hiddenCount: hiddenIdentityDiscountCount
@@ -220,7 +232,11 @@ struct PriceComparisonView: View {
                     switch row {
                     case .success(let retailerPrice):
                         Button {
-                            openRetailerURL(retailerPrice.url)
+                            Task {
+                                if let url = await viewModel.resolveAffiliateURL(for: retailerPrice) {
+                                    browserURL = IdentifiableURL(url: url)
+                                }
+                            }
                         } label: {
                             PriceRow(
                                 retailerPrice: retailerPrice,
@@ -333,11 +349,10 @@ struct PriceComparisonView: View {
     }
 
     // MARK: - Helpers
-
-    private func openRetailerURL(_ urlString: String?) {
-        guard let urlString, let url = URL(string: urlString) else { return }
-        UIApplication.shared.open(url)
-    }
+    //
+    // Step 2g: `openRetailerURL(_:)` was removed. All retailer taps now
+    // route through `viewModel.resolveAffiliateURL(for:)` and present the
+    // tagged URL via the in-app browser sheet.
 }
 
 // MARK: - Preview
@@ -416,5 +431,20 @@ private struct PreviewAPIClient: APIClientProtocol {
     }
     func getBillingStatus() async throws -> BillingStatus {
         BillingStatus(tier: "free", expiresAt: nil, isActive: false, entitlementId: nil)
+    }
+    func getAffiliateURL(
+        productId: UUID?,
+        retailerId: String,
+        productURL: String
+    ) async throws -> AffiliateURLResponse {
+        AffiliateURLResponse(
+            affiliateUrl: productURL,
+            isAffiliated: false,
+            network: nil,
+            retailerId: retailerId
+        )
+    }
+    func getAffiliateStats() async throws -> AffiliateStatsResponse {
+        AffiliateStatsResponse(clicksByRetailer: [:], totalClicks: 0)
     }
 }

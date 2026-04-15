@@ -558,4 +558,76 @@ final class ScannerViewModelTests: XCTestCase {
         await testViewModel.handleBarcodeScan(upc: "012345678901")
         XCTAssertEqual(gate.dailyScanCount, 1)
     }
+
+    // MARK: - Step 2g: resolveAffiliateURL
+
+    func test_resolveAffiliateURL_returnsTaggedURLOnSuccess() async {
+        // Given — scan a product so priceComparison is populated with a productId.
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+        let retailerPrice = TestFixtures.samplePriceComparison.prices[0] // Amazon
+
+        // Backend returns a tagged URL.
+        let tagged = "https://amazon.com/dp/B0BSHF7WHN?tag=barkain-20"
+        mockClient.getAffiliateURLResult = .success(
+            AffiliateURLResponse(
+                affiliateUrl: tagged,
+                isAffiliated: true,
+                network: "amazon_associates",
+                retailerId: "amazon"
+            )
+        )
+
+        // When
+        let resolved = await viewModel.resolveAffiliateURL(for: retailerPrice)
+
+        // Then — tagged URL is surfaced.
+        XCTAssertNotNil(resolved)
+        XCTAssertEqual(resolved?.absoluteString, tagged)
+        XCTAssertEqual(mockClient.getAffiliateURLCallCount, 1)
+    }
+
+    func test_resolveAffiliateURL_fallsBackOnAPIError() async {
+        // Given — scan a product so priceComparison is populated.
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+        let retailerPrice = TestFixtures.samplePriceComparison.prices[0] // Amazon
+
+        // Backend throws.
+        mockClient.getAffiliateURLResult = .failure(
+            .network(URLError(.notConnectedToInternet))
+        )
+
+        // When
+        let resolved = await viewModel.resolveAffiliateURL(for: retailerPrice)
+
+        // Then — fallback URL is the original product URL, not nil.
+        XCTAssertNotNil(resolved)
+        XCTAssertEqual(
+            resolved?.absoluteString,
+            "https://amazon.com/dp/B0BSHF7WHN"
+        )
+        // The helper was called before the throw — verify wire-up.
+        XCTAssertEqual(mockClient.getAffiliateURLCallCount, 1)
+    }
+
+    func test_resolveAffiliateURL_passesCorrectArguments() async {
+        // Given — scan a product so priceComparison is populated.
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+        let retailerPrice = TestFixtures.samplePriceComparison.prices[1] // Best Buy
+
+        // When
+        _ = await viewModel.resolveAffiliateURL(for: retailerPrice)
+
+        // Then — the helper forwarded the retailer, URL, and product id
+        // from the current comparison to the API.
+        XCTAssertEqual(mockClient.getAffiliateURLCallCount, 1)
+        XCTAssertEqual(mockClient.getAffiliateURLLastRetailerId, "best_buy")
+        XCTAssertEqual(
+            mockClient.getAffiliateURLLastProductURL,
+            "https://bestbuy.com/site/123"
+        )
+        XCTAssertEqual(
+            mockClient.getAffiliateURLLastProductId,
+            TestFixtures.samplePriceComparison.productId
+        )
+    }
 }
