@@ -542,7 +542,7 @@ Barkain Prompts/Conversation_Summary_Step_2e_Card_Portfolio.md # Appendix: tooli
 **Branch:** `phase-2/step-2i-c` off `main` @ `8a50079` (after PR #18 — Step 2i-b — merged)
 **PR target:** `main`
 
-**Context:** Final hardening step before tagging Phase 2 as `v0.2.0`. Three objectives, no new features: (1) validate operationally — first end-to-end run of the Step 2h workers against real LocalStack instead of `moto[sqs]` mocks; (2) Phase 2 consolidation — produce two summary documents drawing from the 14-step CHANGELOG; (3) tag prep — open the PR and document the `git tag v0.2.0` instructions for Mike. Mike runs the actual tag after merge.
+**Context:** Final hardening step before tagging Phase 2 as `v0.2.0`. Two objectives, no new features: (1) validate operationally — first end-to-end run of the Step 2h workers against real LocalStack instead of `moto[sqs]` mocks; (2) tag prep — open the PR and document the `git tag v0.2.0` instructions for Mike. Mike runs the actual tag after merge. Group D (Phase 2 consolidation documents) was executed initially but pulled back — per-session error report + conversation summary belong in `Barkain Prompts/` (outside the repo), not in `docs/`, to stay consistent with every other step of Phase 2.
 
 **Files changed:**
 ```
@@ -550,8 +550,6 @@ backend/tests/conftest.py                                # _ensure_schema: drift
 .github/workflows/backend-tests.yml                      # +Lint step: pip install ruff + ruff check backend/ scripts/
 scripts/run_worker.py                                    # +`from app import models as _models` so cross-module FKs resolve at flush time (LATENT FIX from Group A smoke test)
 scripts/run_watchdog.py                                  # same model-registry import (preventive — same latent shape)
-docs/Consolidated_Error_Report_Phase_2.md                # NEW — step summary, recurring patterns, learnings index, open items
-docs/Consolidated_Conversation_Summaries_Phase_2.md      # NEW — timeline, architecture evolution, methodology observations, Phase 3 hand-off
 docs/PHASES.md                                           # 2i-c row flipped ⬜ → ✅
 docs/TESTING.md                                          # +Schema Drift Auto-Recreate section, +SAVEPOINT pattern section, version bump v2.2 → v2.3, 2i-c row added
 docs/CHANGELOG.md                                        # this section
@@ -572,9 +570,9 @@ CLAUDE.md                                                # 2i-c row flipped ✅,
 
 6. **Branch protection on `main` exists but has NO required status checks.** `gh api repos/THHUnlimted/barkain/branches/main/protection` returns `enforce_admins: enabled`, `allow_force_pushes: false`, `allow_deletions: false` — but no `required_status_checks` block. Force pushes are blocked, but a PR can be merged without the `Backend Tests / test` workflow having passed. Fix is repo-admin only (Mike): GitHub UI → Settings → Branches → main → require `Backend Tests / test` to pass. Tracked as 2i-c-L3.
 
-7. **Phase 2 consolidation documents are summaries, not copy-pastes.** Two new files in `docs/`: `Consolidated_Error_Report_Phase_2.md` (100 lines, ≤200 budget) compiles a step summary table, 7 recurring patterns, a 28-row learnings index pulling from CLAUDE.md and the per-step CHANGELOG sections, plus an open-items table with owners. `Consolidated_Conversation_Summaries_Phase_2.md` (84 lines, ≤150 budget) is a 17-row timeline (every Phase 2 step + the 3 substeps `2b-val` / `2c-val` / `2e-val`), 3-paragraph architecture evolution narrative, methodology observations split into "what worked" and "what to change", and Phase 3 hand-off notes. Source-only: pulled from CHANGELOG, NOT from the per-step error reports in `Barkain Prompts/` (which are outside the repo).
+7. **Tag `v0.2.0` is a Mike action, not an agent action.** The agent opens the PR; after Mike merges, Mike runs `git checkout main && git pull && git tag -a v0.2.0 -m "Phase 2: Intelligence Layer" && git push origin v0.2.0`. The agent never pushes a tag. Documented in the PR body.
 
-8. **Tag `v0.2.0` is a Mike action, not an agent action.** The agent opens the PR; after Mike merges, Mike runs `git checkout main && git pull && git tag -a v0.2.0 -m "Phase 2: Intelligence Layer" && git push origin v0.2.0`. The agent never pushes a tag. Documented in the PR body.
+8. **Group D (Phase 2 consolidation documents) pulled back.** The initial cut of this step followed the prompt's Group D and created `docs/Consolidated_Error_Report_Phase_2.md` and `docs/Consolidated_Conversation_Summaries_Phase_2.md`. On review, the user noted that the per-step reports in `Barkain Prompts/` (outside the repo) have been the canonical location for every Phase 2 step, and the consolidated files broke that convention by landing in `docs/`. Both files were deleted before this PR landed. The per-session `Error_Report_Step_2i_c_Validation_Tag.md` and `Conversation_Summary_Step_2i_c_Validation_Tag.md` in `Barkain Prompts/` are the canonical records for 2i-c.
 
 **Tests:**
 - Backend: **302 passed / 6 skipped** — unchanged. No new tests; this is an operational validation step.
