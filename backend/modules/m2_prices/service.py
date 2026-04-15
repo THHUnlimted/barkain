@@ -30,7 +30,7 @@ from app.core_models import Retailer
 from modules.m1_product.models import Product
 from modules.m2_prices.container_client import ContainerClient
 from modules.m2_prices.models import Price, PriceHistory
-from modules.m2_prices.schemas import ContainerResponse
+from modules.m2_prices.schemas import ContainerListing, ContainerResponse
 
 logger = logging.getLogger("barkain.m2")
 
@@ -367,80 +367,30 @@ class PriceAggregationService:
 
         for retailer_id, response in responses.items():
             retailer_name = all_retailer_names.get(retailer_id, retailer_id)
-
-            if response.error is not None:
-                # Distinguish true outages from "ran but got nothing useful".
-                status = _classify_error_status(response.error.code)
-                failed += 1
-                retailer_results.append(
-                    {"retailer_id": retailer_id, "retailer_name": retailer_name, "status": status}
-                )
-                continue
-
-            if not response.listings:
-                # Retailer reachable, searched, returned 0 listings.
-                failed += 1
-                retailer_results.append(
-                    {"retailer_id": retailer_id, "retailer_name": retailer_name, "status": "no_match"}
-                )
-                continue
-
-            best_listing, relevance = self._pick_best_listing(response, product)
-            if best_listing is None:
-                # Retailer reachable, returned listings, but none cleared relevance scoring.
-                failed += 1
-                retailer_results.append(
-                    {"retailer_id": retailer_id, "retailer_name": retailer_name, "status": "no_match"}
-                )
-                continue
-
-            succeeded += 1
-            retailer_results.append(
-                {"retailer_id": retailer_id, "retailer_name": retailer_name, "status": "success"}
+            result, price_payload, best_listing = self._classify_retailer_result(
+                retailer_id, retailer_name, response, product, now
             )
+            retailer_results.append(result)
 
-            # Upsert to prices table
-            await self._upsert_price(product_id, retailer_id, best_listing, now)
-
-            # Append all listings to price_history (unique timestamp per record)
-            for listing in response.listings:
-                history_time = now + timedelta(microseconds=history_offset)
-                history_offset += 1
-                await self._append_price_history(
-                    product_id, retailer_id, listing, history_time
-                )
-
-            prices_data.append(
-                {
-                    "retailer_id": retailer_id,
-                    "price": best_listing.price,
-                    "original_price": best_listing.original_price,
-                    "currency": best_listing.currency or "USD",
-                    "url": best_listing.url or None,
-                    "condition": best_listing.condition or "new",
-                    "is_available": (
-                        best_listing.is_available
-                        if best_listing.is_available is not None
-                        else True
-                    ),
-                    "is_on_sale": (
-                        best_listing.original_price is not None
-                        and best_listing.price < best_listing.original_price
-                    ),
-                    "last_checked": now.isoformat(),
-                    "relevance_score": relevance,
-                }
-            )
+            if result["status"] == "success":
+                succeeded += 1
+                await self._upsert_price(product_id, retailer_id, best_listing, now)
+                # Append all listings to price_history (unique timestamp per record)
+                for listing in response.listings:
+                    history_time = now + timedelta(microseconds=history_offset)
+                    history_offset += 1
+                    await self._append_price_history(
+                        product_id, retailer_id, listing, history_time
+                    )
+                prices_data.append(price_payload)
+            else:
+                failed += 1
 
         await self.db.flush()
 
-        # Step 9: Load retailer display names
-        retailer_ids = [p["retailer_id"] for p in prices_data]
-        names = await self._load_retailer_names(retailer_ids)
-        for p in prices_data:
-            p["retailer_name"] = names.get(p["retailer_id"], p["retailer_id"])
-
-        # Sort by price ascending
+        # Sort by price ascending. retailer_name is already inlined by
+        # _classify_retailer_result, so the previous "Step 9" name-merge
+        # loop was removed in 2i-b.
         prices_data.sort(key=lambda p: p["price"])
 
         # Sort retailer_results so success rows come first, then no_match, then unavailable.
@@ -479,10 +429,12 @@ class PriceAggregationService:
         Amazon ~30s, and Best Buy ~91s arrive independently instead of the
         caller waiting ~120s for the whole batch.
 
-        NOTE: duplicates the classification loop from `get_prices()` by design.
-        The two paths differ in iteration strategy (as_completed vs gather) and
-        error semantics (errors become events, not raises), which made a shared
-        helper more awkward than the duplication.
+        Classification of each retailer response is delegated to
+        ``_classify_retailer_result`` so this path and ``get_prices`` agree
+        on status mapping and price payload shape (extracted in 2i-b).
+        The two methods still differ in iteration strategy (as_completed vs
+        serial dict iteration) and emission semantics (yields events vs
+        accumulates a dict) — that's why they're not merged.
         """
         product = await self._validate_product(product_id)
 
@@ -552,119 +504,27 @@ class PriceAggregationService:
             for fut in asyncio.as_completed(tasks):
                 retailer_id, response = await fut
                 retailer_name = names.get(retailer_id, retailer_id)
-
-                # Error path — render as unavailable/no_match based on error code.
-                if response.error is not None:
-                    status = _classify_error_status(response.error.code)
-                    failed += 1
-                    retailer_results.append(
-                        {
-                            "retailer_id": retailer_id,
-                            "retailer_name": retailer_name,
-                            "status": status,
-                        }
-                    )
-                    yield (
-                        "retailer_result",
-                        {
-                            "retailer_id": retailer_id,
-                            "retailer_name": retailer_name,
-                            "status": status,
-                            "price": None,
-                        },
-                    )
-                    continue
-
-                if not response.listings:
-                    failed += 1
-                    retailer_results.append(
-                        {
-                            "retailer_id": retailer_id,
-                            "retailer_name": retailer_name,
-                            "status": "no_match",
-                        }
-                    )
-                    yield (
-                        "retailer_result",
-                        {
-                            "retailer_id": retailer_id,
-                            "retailer_name": retailer_name,
-                            "status": "no_match",
-                            "price": None,
-                        },
-                    )
-                    continue
-
-                best_listing, relevance = self._pick_best_listing(response, product)
-                if best_listing is None:
-                    failed += 1
-                    retailer_results.append(
-                        {
-                            "retailer_id": retailer_id,
-                            "retailer_name": retailer_name,
-                            "status": "no_match",
-                        }
-                    )
-                    yield (
-                        "retailer_result",
-                        {
-                            "retailer_id": retailer_id,
-                            "retailer_name": retailer_name,
-                            "status": "no_match",
-                            "price": None,
-                        },
-                    )
-                    continue
-
-                # Success — persist and emit.
-                succeeded += 1
-                await self._upsert_price(
-                    product_id, retailer_id, best_listing, now
+                result, price_payload, best_listing = self._classify_retailer_result(
+                    retailer_id, retailer_name, response, product, now
                 )
-                for listing in response.listings:
-                    history_time = now + timedelta(microseconds=history_offset)
-                    history_offset += 1
-                    await self._append_price_history(
-                        product_id, retailer_id, listing, history_time
-                    )
+                retailer_results.append(result)
 
-                price_payload = {
-                    "retailer_id": retailer_id,
-                    "retailer_name": retailer_name,
-                    "price": best_listing.price,
-                    "original_price": best_listing.original_price,
-                    "currency": best_listing.currency or "USD",
-                    "url": best_listing.url or None,
-                    "condition": best_listing.condition or "new",
-                    "is_available": (
-                        best_listing.is_available
-                        if best_listing.is_available is not None
-                        else True
-                    ),
-                    "is_on_sale": (
-                        best_listing.original_price is not None
-                        and best_listing.price < best_listing.original_price
-                    ),
-                    "last_checked": now.isoformat(),
-                    "relevance_score": relevance,
-                }
-                prices_data.append(price_payload)
-                retailer_results.append(
-                    {
-                        "retailer_id": retailer_id,
-                        "retailer_name": retailer_name,
-                        "status": "success",
-                    }
-                )
-                yield (
-                    "retailer_result",
-                    {
-                        "retailer_id": retailer_id,
-                        "retailer_name": retailer_name,
-                        "status": "success",
-                        "price": price_payload,
-                    },
-                )
+                if result["status"] == "success":
+                    succeeded += 1
+                    await self._upsert_price(
+                        product_id, retailer_id, best_listing, now
+                    )
+                    for listing in response.listings:
+                        history_time = now + timedelta(microseconds=history_offset)
+                        history_offset += 1
+                        await self._append_price_history(
+                            product_id, retailer_id, listing, history_time
+                        )
+                    prices_data.append(price_payload)
+                else:
+                    failed += 1
+
+                yield ("retailer_result", {**result, "price": price_payload})
 
             await self.db.flush()
         except asyncio.CancelledError:
@@ -849,6 +709,83 @@ class PriceAggregationService:
 
         best_item, best_score = min(available, key=lambda pair: pair[0].price)
         return best_item, best_score
+
+    def _classify_retailer_result(
+        self,
+        retailer_id: str,
+        retailer_name: str,
+        response: ContainerResponse,
+        product: Product,
+        now: datetime,
+    ) -> tuple[dict, dict | None, ContainerListing | None]:
+        """Classify a single container response into normalized output.
+
+        Pure function over the response — no DB writes, no SSE emission.
+        Both ``get_prices()`` (batch) and ``stream_prices()`` (SSE) call this
+        to produce the same classification, then handle persistence and
+        emission separately. Extracted in 2i-b to delete ~40 lines of
+        duplicated branch logic; the previous in-line implementations had
+        already drifted apart slightly (stream embedded ``retailer_name``
+        in the price payload directly while batch added it later) and the
+        risk was that a bug fix in one wouldn't propagate.
+
+        Returns a tuple of ``(retailer_result, price_payload, best_listing)``:
+
+        - ``retailer_result``: dict with ``retailer_id``, ``retailer_name``,
+          ``status`` — appended to the per-retailer status list in both paths.
+        - ``price_payload``: dict matching the wire shape (with
+          ``retailer_name`` already inlined) on success, ``None`` otherwise.
+        - ``best_listing``: the chosen ``ContainerListing`` on success
+          (caller uses it for ``_upsert_price``), ``None`` otherwise.
+        """
+        if response.error is not None:
+            status = _classify_error_status(response.error.code)
+            return (
+                {"retailer_id": retailer_id, "retailer_name": retailer_name, "status": status},
+                None,
+                None,
+            )
+
+        if not response.listings:
+            return (
+                {"retailer_id": retailer_id, "retailer_name": retailer_name, "status": "no_match"},
+                None,
+                None,
+            )
+
+        best_listing, relevance = self._pick_best_listing(response, product)
+        if best_listing is None:
+            return (
+                {"retailer_id": retailer_id, "retailer_name": retailer_name, "status": "no_match"},
+                None,
+                None,
+            )
+
+        price_payload = {
+            "retailer_id": retailer_id,
+            "retailer_name": retailer_name,
+            "price": best_listing.price,
+            "original_price": best_listing.original_price,
+            "currency": best_listing.currency or "USD",
+            "url": best_listing.url or None,
+            "condition": best_listing.condition or "new",
+            "is_available": (
+                best_listing.is_available
+                if best_listing.is_available is not None
+                else True
+            ),
+            "is_on_sale": (
+                best_listing.original_price is not None
+                and best_listing.price < best_listing.original_price
+            ),
+            "last_checked": now.isoformat(),
+            "relevance_score": relevance,
+        }
+        return (
+            {"retailer_id": retailer_id, "retailer_name": retailer_name, "status": "success"},
+            price_payload,
+            best_listing,
+        )
 
     async def _upsert_price(
         self, product_id: uuid.UUID, retailer_id: str, listing, now: datetime

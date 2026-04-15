@@ -143,17 +143,18 @@ log "Creating auth bypass for demo..."
 cat > /tmp/barkain_demo_patch.py << 'PYEOF'
 # Temporary: to bypass auth for local demo testing,
 # set this env var before starting uvicorn:
-#   export BARKAIN_DEMO_MODE=1
+#   export DEMO_MODE=1
 #
 # Then all requests will be treated as authenticated with user_id "demo_user"
 # Remove this for any real deployment.
+# (Renamed from BARKAIN_DEMO_MODE in Step 2i-b.)
 import os
 print("")
-if os.getenv("BARKAIN_DEMO_MODE") == "1":
+if os.getenv("DEMO_MODE") == "1":
     print("  ⚠️  DEMO MODE: Auth bypass enabled (all requests as demo_user)")
     print("  ⚠️  Do NOT use in production!")
 else:
-    print("  Auth is ENABLED. Set BARKAIN_DEMO_MODE=1 to bypass for testing.")
+    print("  Auth is ENABLED. Set DEMO_MODE=1 to bypass for testing.")
 print("")
 PYEOF
 python3 /tmp/barkain_demo_patch.py
@@ -161,7 +162,7 @@ python3 /tmp/barkain_demo_patch.py
 # 6. Start backend
 log "Starting backend on http://localhost:8000 ..."
 cd backend
-BARKAIN_DEMO_MODE=1 nohup uvicorn app.main:app --reload --port 8000 > /tmp/barkain_backend.log 2>&1 &
+DEMO_MODE=1 nohup uvicorn app.main:app --reload --port 8000 > /tmp/barkain_backend.log 2>&1 &
 BACKEND_PID=$!
 cd "$PROJECT_ROOT"
 

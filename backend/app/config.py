@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "DEBUG"
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8000"
+    # When True, the API short-circuits Clerk auth and rate-limit user
+    # resolution to a deterministic "demo_user" id. Read via `settings.DEMO_MODE`
+    # so monkeypatch.setenv works in tests (the previous BARKAIN_DEMO_MODE
+    # os.getenv was cached at import time).
+    DEMO_MODE: bool = False
 
     # Rate Limiting
     RATE_LIMIT_GENERAL: int = 60

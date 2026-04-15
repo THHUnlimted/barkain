@@ -372,15 +372,18 @@ class CardService:
                         Price.condition == "new",
                     )
                 )
-                .order_by(Price.retailer_id, Price.price.asc())
+                .order_by(Price.retailer_id)
             )
         ).all()
 
-        # Collapse to lowest price per retailer.
-        retailer_lowest: dict[str, tuple[float, str]] = {}
-        for retailer_id, price, display_name in retailer_price_rows:
-            if retailer_id not in retailer_lowest:
-                retailer_lowest[retailer_id] = (float(price), display_name)
+        # The Price table has UNIQUE(product_id, retailer_id, condition) (see
+        # m2_prices/models.py), so each retailer appears at most once for a
+        # given product+condition. The previous "collapse to lowest" loop had
+        # a dead `if retailer_id not in retailer_lowest` branch — removed in 2i-b.
+        retailer_lowest: dict[str, tuple[float, str]] = {
+            retailer_id: (float(price), display_name)
+            for retailer_id, price, display_name in retailer_price_rows
+        }
 
         recommendations: list[CardRecommendation] = []
         for retailer_id, (purchase_amount, retailer_name) in retailer_lowest.items():

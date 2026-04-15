@@ -260,11 +260,13 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 | 2f | M11 Billing (RevenueCat SDK + feature gating + migration 0004) | +14 | +10 | #14 |
 | 2g | M12 Affiliate Router (Amazon/eBay/Walmart) + in-app browser | +14 | +6 | #15 |
 | 2h | Background Workers (SQS + price ingest + portal rates + discount verify) + migration 0005 | +21 | — | #16 |
+| 2i-a | CLAUDE.md compaction + guiding-doc sweep | — | — | #17 |
+| 2i-b | Code quality sweep: `DEMO_MODE` rename, dead branches removed, `_classify_retailer_result` extraction, migration 0006 | +1 | — | (this step) |
 
-**Test totals:** **301 backend** (301 passed / 6 skipped) + **66 iOS unit** = **367 tests**.
+**Test totals:** **302 backend** (302 passed / 6 skipped) + **66 iOS unit** = **368 tests**.
 `ruff check` clean. `xcodebuild` clean.
 
-**Migrations:** 0001 (initial schema, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert index + `discount_programs.consecutive_failures`).
+**Migrations:** 0001 (initial schema, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert index + `discount_programs.consecutive_failures`) → 0006 (`chk_subscription_tier` CHECK on `users.subscription_tier`).
 
 > Per-step file inventories, detailed test breakdowns, and full decision rationale: see `docs/CHANGELOG.md`.
 
@@ -287,8 +289,8 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 ## What's Next
 
 1. **Step 2i — Hardening sweep** (in progress):
-   - **2i-a** — CLAUDE.md compaction + guiding-doc sweep (this step)
-   - **2i-b** — Code quality + dead-code removal + renames + conformer consolidation
+   - **2i-a** ✅ — CLAUDE.md compaction + guiding-doc sweep (#17)
+   - **2i-b** ✅ — Code quality + dead-code removal + renames + dedup extraction (this PR)
    - **2i-c** — Operational validation + XCUITest + CI enforcement + tag `v0.2.0`
 2. **Phase 3 — Recommendation Intelligence:** AI synthesis via Claude Sonnet, stacking rules, portal bonus display, coupon discovery, receipt scanning
 3. **Phase 4 — Production Optimization:** Best Buy / eBay Browse / Keepa API adapters for speed, App Store submission, Sentry error tracking
@@ -315,7 +317,7 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 > - **SSE streaming:** `text/event-stream` with `asyncio.as_completed`; per-retailer events arrive progressively. iOS consumer uses a manual byte splitter (not `AsyncBytes.lines`) and falls back to the batch endpoint on any stream error (2c, 2c-fix)
 > - **Identity discounts:** zero-LLM pure-SQL matching < 150 ms; deduped by `(retailer_id, program_name)`; fetched AFTER the SSE loop exits OR AFTER batch fallback — never inside `.done` (would race still-streaming events); failure is non-fatal (2d)
 > - **Card matching priority:** rotating > user-selected > static > base rate, per card × retailer, `max()` in memory; inline subtitle on `PriceRow`. Cash+ / Customized Cash / Shopper Cash Rewards resolve per-user via `user_category_selections`, NOT seeded in `rotating_categories` (2e)
-> - **Two sources of truth for billing tier, by design:** iOS `SubscriptionService` reads RC SDK for UI gating (offline, instant); backend `users.subscription_tier` is the rate-limit authority; they converge via the RC webhook with up to 60 s accepted drift. RC demo app user id `"demo_user"` matches `BARKAIN_DEMO_MODE` (2f)
+> - **Two sources of truth for billing tier, by design:** iOS `SubscriptionService` reads RC SDK for UI gating (offline, instant); backend `users.subscription_tier` is the rate-limit authority; they converge via the RC webhook with up to 60 s accepted drift. RC demo app user id `"demo_user"` matches `settings.DEMO_MODE` (renamed from `BARKAIN_DEMO_MODE` in 2i-b) (2f)
 > - **Webhook idempotency:** SETNX dedup (`revenuecat:processed:{event.id}`, 7-day TTL) AND SET-not-delta math — replays produce the same final row (2f)
 > - **Tier-aware rate limit:** `_resolve_user_tier(user_id, redis, db)` caches `tier:{user_id}` for 60 s; pro = base × `RATE_LIMIT_PRO_MULTIPLIER`; missing user → free (not an error); falls open to free on infra blips (2f)
 > - **Migration 0004 owns `idx_card_reward_programs_product`** — previously created by the seed script; model `__table_args__` mirrors the index so fresh test DBs get it without alembic (2f)
@@ -327,3 +329,7 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 > - **`is_elevated` is `GENERATED ALWAYS STORED`** — never written by the worker; reading it after upsert confirms the spike math end-to-end (2h)
 > - **Discount verification:** three-state outcome — `verified` / `flagged_missing_mention` (soft, counter NOT incremented — program renames shouldn't auto-deactivate) / `hard_failed` (4xx/5xx/network → `consecutive_failures += 1`). 3 consecutive hard failures flip `is_active=False`. `last_verified` updates on every run regardless of outcome (2h)
 > - **`SQSClient` uses an `_UNSET` sentinel** so tests can pass explicit `endpoint_url=None` to bypass the `.env` LocalStack override — `or`-chains collapse `None → settings fallback` and break moto (2h)
+> - **`DEMO_MODE` is read at call-time, not import-time:** `settings.DEMO_MODE` lives on the pydantic-settings `Settings` instance and is resolved inside `get_current_user` per-request, so tests can `monkeypatch.setattr(settings, 'DEMO_MODE', True)` without import-ordering games. The previous `_DEMO_MODE = os.getenv("BARKAIN_DEMO_MODE") == "1"` module constant cached the value and broke testability (2i-b)
+> - **`_classify_retailer_result` is the single classification authority** for both `get_prices()` and `stream_prices()` — extracted in 2i-b to delete ~80 duplicated lines that had already drifted (the stream version embedded `retailer_name` in the price payload directly while the batch version added it in a later loop). The two methods still differ in iteration strategy (`as_completed` vs serial dict iteration) and emission semantics (yields events vs accumulates a dict), which is why they're not merged (2i-b)
+> - **`device_name` rename to `product_name` deferred:** 26 backend occurrences across 9 files including the load-bearing Gemini system instruction in `backend/ai/prompts/upc_lookup.py`. A mechanical rename would require a coordinated prompt + service-parse + test-assertion update and risks breaking the LLM contract during a hardening step. iOS already uses `name` so there's no consumer pressure. Tracked in Phase 3 if still desired (2i-b)
+> - **Migration 0006 — `chk_subscription_tier` CHECK constraint** on `users.subscription_tier IN ('free', 'pro')`. Mirrored on `User.__table_args__` in `app/core_models.py` so `Base.metadata.create_all` (test DB) matches alembic. Idempotent via `DO $$ ... END $$` block keyed on `pg_constraint.conname` (2i-b)

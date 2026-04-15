@@ -143,7 +143,7 @@ Affiliate connections take weeks to establish (Amazon Associates requires live w
 
 | Feature | Status | Phase | Class | Notes |
 |---------|--------|-------|-------|-------|
-| Clerk authentication | ✅ | 1 | T | JWT validation via `clerk-backend-api`, session management. MCP server for dev inspection. `BARKAIN_DEMO_MODE=1` bypass for local physical-device testing |
+| Clerk authentication | ✅ | 1 | T | JWT validation via `clerk-backend-api`, session management. MCP server for dev inspection. `DEMO_MODE=1` bypass (renamed from `BARKAIN_DEMO_MODE` in 2i-b; read via `settings.DEMO_MODE`) for local physical-device testing |
 | API rate limiting | ✅ | 1 | T | Redis-backed sliding window, per-user. Tier-aware in 2f: pro users get base × `RATE_LIMIT_PRO_MULTIPLIER` (default 2×). Tier cached in Redis `tier:{user_id}` with 60s TTL |
 | Docker local development | ✅ | 1 | T | PostgreSQL+TimescaleDB, Test DB, Redis via docker-compose.yml. LocalStack added in Step 2h for SQS emulation |
 | agent-browser scraper containers | ✅ | 1 | T | Per-retailer Docker containers: Chrome + agent-browser + extraction script. 11 retailers + shared base image (`containers/base/`) |

@@ -59,12 +59,13 @@ jobs:
       - name: Run unit tests
         working-directory: backend
         env:
-          # NOTE: BARKAIN_DEMO_MODE is deliberately NOT set. The `client` fixture
+          # NOTE: DEMO_MODE is deliberately NOT set. The `client` fixture
           # stubs auth via app.dependency_overrides; `unauthed_client` relies on
           # the real get_current_user to 401 on missing Authorization header.
-          # Setting BARKAIN_DEMO_MODE=1 would short-circuit both paths and break
+          # Setting DEMO_MODE=1 would short-circuit both paths and break
           # auth tests. Real API keys aren't needed — Gemini/Anthropic/Clerk calls
           # are mocked at the service boundary in every unit test.
+          # (Renamed from BARKAIN_DEMO_MODE in Step 2i-b.)
           TEST_DATABASE_URL: postgresql+asyncpg://app:test@localhost:5433/barkain_test
           DATABASE_URL: postgresql+asyncpg://app:test@localhost:5433/barkain_test
           REDIS_URL: redis://localhost:6379/0
