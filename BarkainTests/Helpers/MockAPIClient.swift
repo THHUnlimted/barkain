@@ -61,6 +61,25 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     )
     var getBillingStatusCallCount = 0
 
+    // MARK: - Affiliate (Step 2g)
+
+    var getAffiliateURLResult: Result<AffiliateURLResponse, APIError> = .success(
+        AffiliateURLResponse(
+            affiliateUrl: "https://example.com",
+            isAffiliated: false,
+            network: nil,
+            retailerId: "mock"
+        )
+    )
+    var getAffiliateStatsResult: Result<AffiliateStatsResponse, APIError> = .success(
+        AffiliateStatsResponse(clicksByRetailer: [:], totalClicks: 0)
+    )
+    var getAffiliateURLCallCount = 0
+    var getAffiliateURLLastProductId: UUID?
+    var getAffiliateURLLastRetailerId: String?
+    var getAffiliateURLLastProductURL: String?
+    var getAffiliateStatsCallCount = 0
+
     // MARK: - Delay simulation
 
     var resolveProductDelay: TimeInterval = 0
@@ -165,6 +184,25 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     func getBillingStatus() async throws -> BillingStatus {
         getBillingStatusCallCount += 1
         return try getBillingStatusResult.get()
+    }
+
+    // MARK: - Affiliate (Step 2g)
+
+    func getAffiliateURL(
+        productId: UUID?,
+        retailerId: String,
+        productURL: String
+    ) async throws -> AffiliateURLResponse {
+        getAffiliateURLCallCount += 1
+        getAffiliateURLLastProductId = productId
+        getAffiliateURLLastRetailerId = retailerId
+        getAffiliateURLLastProductURL = productURL
+        return try getAffiliateURLResult.get()
+    }
+
+    func getAffiliateStats() async throws -> AffiliateStatsResponse {
+        getAffiliateStatsCallCount += 1
+        return try getAffiliateStatsResult.get()
     }
 
     func streamPrices(

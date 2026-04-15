@@ -84,6 +84,8 @@
 | **iOS Document Camera** | VisionKit (VNDocumentCameraViewController) | KEEP | Native iOS 13+ document capture UI | ⬜ Phase 3 |
 | **iOS Live Scanner** | VisionKit (DataScannerViewController) | KEEP | Native iOS 16+ live text/barcode recognition. Requires A12+ | ⬜ Phase 3 |
 | **iOS Subscription** | StoreKit 2 via RevenueCat (purchases-ios-spm v5.67.2) + RevenueCatUI | KEEP | RevenueCat simplifies StoreKit for solo dev; free tier covers MVP. Built-in `PaywallView` + `CustomerCenterView` so dashboard owns layout | ✅ Phase 2 (Step 2f) |
+| **iOS In-App Browser** | SFSafariViewController via SwiftUI `UIViewControllerRepresentable` (Apple SDK) | KEEP | Shares cookies with Safari so affiliate tracking cookies persist. Built-in nav bar, reader mode, TLS padlock. Chosen over `WKWebView` (isolated data store → unreliable affiliate attribution) | ✅ Phase 2 (Step 2g) |
+| **Affiliate URL Router** | Custom `backend/modules/m12_affiliate` (pure-Python, zero dependencies) | ADD | Deterministic URL construction for Amazon Associates / eBay Partner Network / Walmart Impact Radius. `AffiliateService.build_affiliate_url` is a pure `@staticmethod` — no DB, no SDK, no LLM | ✅ Phase 2 (Step 2g) |
 | **iOS Networking** | URLSession | KEEP | Native; async/await; no dependency needed | ✅ Confirmed |
 | **iOS Image Loading** | AsyncImage | KEEP | Native; sufficient for product images | ✅ Confirmed |
 

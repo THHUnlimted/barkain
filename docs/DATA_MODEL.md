@@ -568,14 +568,26 @@ CREATE INDEX idx_watched_items_active
 
 -- ================================================================
 -- AFFILIATE CLICKS: Affiliate link tracking
+-- Step 2g wires this table live via backend/modules/m12_affiliate.
+-- `affiliate_network` is NOT NULL and stores one of:
+--   'amazon_associates' — Amazon URL tagged with ?tag=barkain-20
+--   'ebay_partner'      — eBay URL redirected through rover with campid
+--   'walmart_impact'    — Walmart URL redirected through goto.walmart.com
+--                         (placeholder; only set once WALMART_AFFILIATE_ID lands)
+--   'passthrough'       — SENTINEL for untagged clicks (Best Buy, Home Depot,
+--                         Target, etc. — retailers without an affiliate
+--                         program, or with denied applications). Keeps the
+--                         NOT NULL constraint satisfied without a migration.
+-- Stats endpoint groups by retailer_id (not affiliate_network), so the
+-- sentinel never leaks to client surfaces.
 -- ================================================================
 CREATE TABLE affiliate_clicks (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id         TEXT NOT NULL REFERENCES users(id),
     product_id      UUID REFERENCES products(id),
     retailer_id     TEXT NOT NULL REFERENCES retailers(id),
-    affiliate_network TEXT NOT NULL,               -- 'amazon_associates', 'ebay_partner', 'cj_affiliate'
-    click_url       TEXT NOT NULL,
+    affiliate_network TEXT NOT NULL,               -- see comment block above
+    click_url       TEXT NOT NULL,                 -- the TAGGED URL (what the user actually opened)
     clicked_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     converted       BOOLEAN,                       -- NULL = unknown, true = sale, false = no sale
     commission      NUMERIC,                       -- commission earned (if known)

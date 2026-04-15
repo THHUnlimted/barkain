@@ -127,8 +127,8 @@
 |---------|--------|-------|-------|-------|
 | StoreKit 2 subscription (free/pro ~$7.99/mo) | ✅ | 2 | T | Via RevenueCat purchases-ios-spm v5.67.2. `Barkain Pro` entitlement gates UI; backend `users.subscription_tier` syncs via `POST /api/v1/billing/webhook`. Three product slots (lifetime / yearly / monthly) configured in RC dashboard — pricing not hardcoded in client (Step 2f) |
 | Feature gating (tier-based) | ✅ | 2 | T | `FeatureGateService` + `SubscriptionService`. Free: 10 scans/day (local TZ rollover), first 3 identity discounts, no card recommendations. Pro: unlimited. Backend rate limiter doubles thresholds for pro users via Redis-cached tier (60s TTL) (Step 2f) |
-| Affiliate link routing | ⬜ | 2 | T | URL construction with tracking params. Amazon Associates tag, eBay Partner Network campaign ID, CJ Affiliate links (Best Buy, Walmart, Target) |
-| Affiliate commission tracking | ⬜ | 2 | T | Click → sale attribution logging in `affiliate_clicks` table |
+| Affiliate link routing | ✅ | 2 | T | **Step 2g** — `AffiliateService.build_affiliate_url` pure `@staticmethod`. Amazon → `?tag=barkain-20`, eBay → rover redirect with `campid=5339148665`, Walmart → Impact Radius placeholder (passthrough while `WALMART_AFFILIATE_ID` empty), Best Buy + others → untagged. iOS retailer taps round-trip through `POST /api/v1/affiliate/click` — tagged URL opens in `SFSafariViewController` (cookies shared with Safari). |
+| Affiliate commission tracking | ✅ | 2 | T | **Step 2g** — `POST /api/v1/affiliate/click` logs every tap in `affiliate_clicks` with `affiliate_network` set to `amazon_associates` / `ebay_partner` / `walmart_impact` / `passthrough` sentinel. `GET /api/v1/affiliate/stats` groups by retailer. `POST /api/v1/affiliate/conversion` placeholder webhook in place for future sale-attribution callbacks. |
 | Brand cashback partnerships | 🔮 | 6+ | T | Partner with brands for cash back offers — future revenue stream |
 | Anonymized data product (opt-in) | 🔮 | 6+ | T | B2B data pipeline, aggregated only. Deferred post-scale — one data scandal kills trust |
 

@@ -508,4 +508,19 @@ private struct PreviewProfileAPIClient: APIClientProtocol {
     func getBillingStatus() async throws -> BillingStatus {
         BillingStatus(tier: "free", expiresAt: nil, isActive: false, entitlementId: nil)
     }
+    func getAffiliateURL(
+        productId: UUID?,
+        retailerId: String,
+        productURL: String
+    ) async throws -> AffiliateURLResponse {
+        AffiliateURLResponse(
+            affiliateUrl: productURL,
+            isAffiliated: false,
+            network: nil,
+            retailerId: retailerId
+        )
+    }
+    func getAffiliateStats() async throws -> AffiliateStatsResponse {
+        AffiliateStatsResponse(clicksByRetailer: [:], totalClicks: 0)
+    }
 }

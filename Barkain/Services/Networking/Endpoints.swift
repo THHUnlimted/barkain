@@ -29,6 +29,9 @@ nonisolated enum Endpoint {
     case getCardRecommendations(productId: UUID)
     // Step 2f — Billing
     case getBillingStatus
+    // Step 2g — Affiliate
+    case getAffiliateURL(AffiliateClickRequest)
+    case getAffiliateStats
 
     // MARK: - Properties
 
@@ -60,12 +63,17 @@ nonisolated enum Endpoint {
             return "/api/v1/cards/recommendations"
         case .getBillingStatus:
             return "/api/v1/billing/status"
+        case .getAffiliateURL:
+            return "/api/v1/affiliate/click"
+        case .getAffiliateStats:
+            return "/api/v1/affiliate/stats"
         }
     }
 
     var method: HTTPMethod {
         switch self {
-        case .resolveProduct, .updateIdentityProfile, .addCard, .setCardCategories:
+        case .resolveProduct, .updateIdentityProfile, .addCard,
+             .setCardCategories, .getAffiliateURL:
             return .post
         case .setPreferredCard:
             return .put
@@ -73,7 +81,7 @@ nonisolated enum Endpoint {
             return .delete
         case .getPrices, .streamPrices, .health, .getIdentityProfile,
              .getEligibleDiscounts, .getCardCatalog, .getUserCards,
-             .getCardRecommendations, .getBillingStatus:
+             .getCardRecommendations, .getBillingStatus, .getAffiliateStats:
             return .get
         }
     }
@@ -107,6 +115,10 @@ nonisolated enum Endpoint {
             encoder.keyEncodingStrategy = .convertToSnakeCase
             return try? encoder.encode(request)
         case .setCardCategories(_, let request):
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            return try? encoder.encode(request)
+        case .getAffiliateURL(let request):
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase
             return try? encoder.encode(request)
