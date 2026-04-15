@@ -2,7 +2,7 @@
 
 > Source: Project Planning + Architecture Sessions, March–April 2026
 > Scope: Stack decisions, project structure, backend conventions, AI abstraction layer, scraper architecture
-> Last updated: April 2026 (v3 — Opus for Watchdog self-healing, Browser Use removed, Haiku dropped, LocalStack deferred to Phase 2)
+> Last updated: April 2026 (v3.1 — Phase 2 complete through Step 2h; m11_billing + m12_affiliate shipped; background workers live; LocalStack in docker-compose)
 
 ---
 
@@ -88,16 +88,18 @@
 
 ### Module System
 
-12 modules, each self-contained with: `router.py` (FastAPI endpoints), `service.py` (business logic), `models.py` (SQLAlchemy ORM), `schemas.py` (Pydantic request/response).
+9 modules currently shipped (`m1_product`, `m2_prices`, `m3_secondary`, `m4_coupons`, `m5_identity`, `m9_notify`, `m10_savings`, `m11_billing`, `m12_affiliate`). Each is self-contained with `router.py` (FastAPI endpoints), `service.py` (business logic), `schemas.py` (Pydantic request/response). ORM models live in the shared `backend/app/models.py` so every module can reference the same SQLAlchemy declarative base.
 
-Modules communicate via direct Python imports (modular monolith). No message bus between modules at MVP scale.
+Modules communicate via direct Python imports (modular monolith). No message bus between modules at MVP scale. Background workers (`backend/workers/`) reuse module services directly — `price_ingestion.process_queue` calls `PriceAggregationService.get_prices(force_refresh=True)` without duplication.
+
+Phase 3 modules not yet shipped: `m6_recommend` (Claude Sonnet synthesis), `m7_predict` (Prophet), `m8_scanner` (image + receipt vision).
 
 ### Middleware Stack (outermost → innermost)
 
 1. **CORS** — Allow iOS app + web dashboard origins
 2. **Request logging** — Structured JSON logs, request ID propagation
-3. **Rate limiting** — Redis-backed, per-user limits (60/min default, 10/min for AI-heavy endpoints)
-4. **Auth (Clerk)** — JWT validation via Clerk SDK; extracts user_id for downstream modules
+3. **Rate limiting (tier-aware, Step 2f)** — Redis-backed sliding window. Free tier baseline: 60/min general, 30/min write, 10/min AI. Pro tier = base × `RATE_LIMIT_PRO_MULTIPLIER` (default 2×). Tier resolved via `_resolve_user_tier(user_id, redis, db)` in `backend/app/dependencies.py`: read `tier:{user_id}` from Redis (60s TTL) → DB SELECT on miss → `"free"` default on missing user row. Falls open to free on Redis/DB errors. Cache busted by `m11_billing.service.process_webhook` on every state-changing event.
+4. **Auth (Clerk)** — JWT validation via `clerk-backend-api` SDK; extracts `user_id` for downstream modules. `BARKAIN_DEMO_MODE=1` short-circuits to a hardcoded `"demo_user"` for local physical-device testing.
 5. **Error handling** — Catches all exceptions, returns structured error responses
 
 ### API Versioning

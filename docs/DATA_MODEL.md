@@ -2,7 +2,7 @@
 
 > Source: Architecture sessions + SCRAPING_AGENT_ARCHITECTURE.md schema + CARD_REWARDS.md, March–April 2026
 > Scope: Full PostgreSQL schema, migration conventions, cache strategy, data flow
-> Last updated: April 2026 (v2 — complete schema from all source docs, nurse/healthcare flags, is_preferred card, extraction_method column, receipt_items junction table)
+> Last updated: April 2026 (v2.1 — migrations 0001 through 0005 documented; `discount_programs.consecutive_failures`, `idx_portal_bonuses_upsert`, `idx_card_reward_programs_product` all ship in migrations)
 
 ---
 
@@ -304,6 +304,12 @@ CREATE TABLE discount_programs (
     effective_until     DATE,                     -- NULL = ongoing
     notes               TEXT,
 
+    -- Step 2h (migration 0005): counter for weekly discount verification worker.
+    -- Hard HTTP/network failures increment; `flagged_missing_mention` does NOT
+    -- (program rename shouldn't auto-deactivate). 3 consecutive hard failures
+    -- flip is_active=False. Resets to 0 on any successful verification.
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW(),
 
@@ -427,6 +433,13 @@ CREATE TABLE portal_bonuses (
 CREATE INDEX idx_portal_bonuses_active
     ON portal_bonuses (retailer_id, effective_until)
     WHERE effective_until IS NULL OR effective_until > NOW();
+
+-- Step 2h (migration 0005): unique index so workers/portal_rates.py can upsert
+-- deterministically on (portal_source, retailer_id). Mirrored in
+-- PortalBonus.__table_args__ so fresh test DBs built via Base.metadata.create_all
+-- get it without alembic.
+CREATE UNIQUE INDEX idx_portal_bonuses_upsert
+    ON portal_bonuses (portal_source, retailer_id);
 ```
 
 ### Secondary Market & Coupons

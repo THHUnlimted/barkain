@@ -2,7 +2,7 @@
 
 > Source: Project Planning Questionnaire + Architecture Sessions, March–April 2026
 > Scope: Every feature, status, AI/Traditional/Hybrid classification, data source
-> Last updated: April 2026 (v3 — cache TTL corrected, Open Food Facts deferred, Opus for Watchdog, nurse/healthcare flags)
+> Last updated: April 2026 (v3.1 — Phase 2 feature statuses flipped ✅ through Step 2h; Phase 1 barcode/price/resolve flipped from 🚧 to ✅)
 
 ---
 
@@ -30,11 +30,11 @@
 
 | Feature | Status | Phase | Class | Data Source | Notes |
 |---------|--------|-------|-------|-------------|-------|
-| Price comparison (11 retailers — mixed extraction) | 🚧 | 1 | T | **10 retailers via agent-browser containers**: Amazon, Best Buy, Target, Home Depot, Lowe's, eBay (new + used), Sam's Club, BackMarket, Facebook Marketplace. **Walmart via HTTP adapter routing** (Firecrawl for demo, Decodo residential proxy for production) | Paradigm shift 2026-04-10: walmart moved to HTTP adapter. 10 others unchanged. Free APIs (Best Buy, eBay Browse, Keepa) added as production speed optimization in Phase 4 |
+| Price comparison (11 retailers — mixed extraction) | ✅ | 1 | T | **10 retailers via agent-browser containers**: Amazon, Best Buy, Target, Home Depot, Lowe's, eBay (new + used), Sam's Club, BackMarket, Facebook Marketplace. **Walmart via HTTP adapter routing** (Firecrawl for demo, Decodo residential proxy for production) | Paradigm shift 2026-04-10: walmart moved to HTTP adapter. 10 others unchanged. Free APIs (Best Buy, eBay Browse, Keepa) added as production speed optimization in Phase 4 |
 | Walmart HTTP adapter (`WALMART_ADAPTER` flag) | ✅ | 2 | T | `backend/modules/m2_prices/adapters/{walmart_firecrawl,walmart_http}.py` — both paths parse `<script id="__NEXT_DATA__">` JSON. Firecrawl demo (~$0.00125/scrape), Decodo rotating US residential production (~$0.000466/scrape). Shared parser in `_walmart_parser.py` | Bypasses PerimeterX client-side JS fingerprinting by never executing JS. 5/5 PASS on Decodo probe 2026-04-10. One-env-var demo→prod switch |
 | Price comparison (production API optimization) | ⬜ | 4 | T | Best Buy Products API (free), eBay Browse API (free), Keepa API ($15/mo) layered on top of scraper containers | API results return ~500ms vs 3-8s for containers. Fallback: API → container → skip |
-| Price caching (6hr TTL, TimescaleDB) | 🚧 | 1 | T | TimescaleDB hypertable | First query triggers live scrape; subsequent queries read from cache |
-| Background price ingestion workers | ⬜ | 2 | T | SQS + scheduled fetchers per retailer container | Keeps cache warm for popular products |
+| Price caching (6hr TTL, Redis + TimescaleDB hypertable) | ✅ | 1 | T | Redis 6hr TTL + `prices` table + `price_history` TimescaleDB hypertable | First query triggers live scrape; subsequent queries read from Redis → DB → containers |
+| Background price ingestion workers | ✅ 2h | 2 | T | `backend/workers/price_ingestion.py` — SQS enqueue/process split reusing `PriceAggregationService.get_prices(force_refresh=True)`. Enqueue runs via `scripts/run_worker.py price-enqueue` (cron every 6h); process long-polls the queue | Keeps cache warm without duplicating service logic |
 | Coupon discovery (top sources) | ⬜ | 3 | T | agent-browser batch scraping of coupon sites | Deprioritized from Phase 2 — focus on price + identity + cards first |
 | Coupon validation engine | ⬜ | 3 | H | Crawlers fetch codes (T); AI validates stacking compatibility (AI) | Confidence scoring pipeline |
 | Incentive spike detection | ⬜ | 4 | T | Portal bonus table — `is_elevated` computed column flags when rate > 1.5x normal | Feeds into push notifications |
@@ -59,13 +59,14 @@
 |---------|--------|-------|-------|-------------|-------|
 | User identity profile (onboarding) | ✅ 2d | 2 | T | User input → `user_discount_profiles` table (16 boolean flags). Captured via 3-step iOS `IdentityOnboardingView` wizard; persisted via `POST /api/v1/identity/profile` full-replace semantics. | Captures: military/veteran, student, teacher, first responder, nurse, healthcare worker, **government** (added via migration 0003 in Step 2d), senior, memberships (AAA/AARP/Costco/Sam's/Prime), verification (ID.me/SheerID) |
 | Card portfolio management | ✅ 2e | 2 | T | `scripts/seed_card_catalog.py` seeds 30 Tier 1 cards across 8 issuers into `card_reward_programs`. Users select cards via `CardSelectionView` → `user_cards` table. CRUD via 7 endpoints under `/api/v1/cards/*`. Profile tab shows "My Cards" chips with preferred-star badge. | 30 cards covers Chase + Amex + Capital One + Citi + Discover + BofA + Wells Fargo + US Bank. Card network cross-section chosen per CARD_REWARDS.md Tier 1. |
-| Discount catalog (retailer identity programs) | ✅ 2d | 2 | T | `discount_programs` table seeded via `scripts/seed_discount_catalog.py` from IDENTITY_DISCOUNTS.md (8 brand-direct retailers + 52 program rows expanded from 17 templates per eligibility_type). Pure-SQL zero-LLM matching in `IdentityService.get_eligible_discounts` < 150ms, deduplicated by `(retailer_id, program_name)`. **Weekly batch scraping of verification platform directories deferred to background workers phase.** | Zero-LLM query-time matching via `GET /api/v1/identity/discounts?product_id=` returning EligibleDiscount list with estimated_savings computed against best price |
+| Discount catalog (retailer identity programs) | ✅ 2d | 2 | T | `discount_programs` table seeded via `scripts/seed_discount_catalog.py` from IDENTITY_DISCOUNTS.md (8 brand-direct retailers + 52 program rows expanded from 17 templates per eligibility_type). Pure-SQL zero-LLM matching in `IdentityService.get_eligible_discounts` < 150ms, deduplicated by `(retailer_id, program_name)`. Weekly URL verification landed in Step 2h (`backend/workers/discount_verification.py`). | Zero-LLM query-time matching via `GET /api/v1/identity/discounts?product_id=` returning EligibleDiscount list with estimated_savings computed against best price |
+| Discount program URL verification (weekly) | ✅ 2h | 2 | T | `backend/workers/discount_verification.py` — httpx GET with Chrome UA + mentions-name body check. Three-state outcome: verified / `flagged_missing_mention` (soft, counter NOT incremented) / hard-failed (4xx/5xx/network → `consecutive_failures += 1`). 3 consecutive hard failures flip `is_active=False`. `last_verified` updates on every run | `discount_programs.consecutive_failures` added via migration 0005. Weekly cron via `scripts/run_worker.py discount-verify` |
 | Identity discount stacking in recommendations | ⬜ | 3 | H | DB lookup for eligible discounts (T); AI synthesizes stacking rules and picks best total-cost option (AI) | Must respect per-brand stacking rules (e.g., Apple military ≠ Apple education) |
 | Card reward matching (per-retailer best card) | ✅ 2e | 2 | T | `CardService.get_best_cards_for_product` — pure SQL preload of user cards + rotating + user_selections + retailer prices, then in-memory max over (base, rotating, user_selected, static) per card. < 50ms measured. Per-retailer card subtitle renders inline below `PriceRow`. | Zero-LLM. `_RETAILER_CATEGORY_TAGS` constant bridges rotating/static category strings to retailer ids. |
 | Card reward purchase interstitial | ⬜ | 3 | T | Pre-redirect overlay that surfaces winning card + activation reminder + portal instruction | Phase 3 wraps the 2e matching engine with affiliate routing |
 | Rotating category tracking (quarterly) | 🟡 2e→3 | 2→3 | T | Step 2e seeded Q2 2026 manually from CARD_REWARDS.md (Freedom Flex, Discover it). Phase 3 adds scraping 4x/year via agent-browser (Doctor of Credit quarterly roundup → issuer pages fallback). | Chase Freedom Flex, Discover it, Citi Dividend, US Bank Cash+, BofA Customized Cash |
 | User-selected category capture | ✅ 2e | 2 | T | `user_category_selections` table + `POST /api/v1/cards/my-cards/{id}/categories`. iOS `CategorySelectionSheet` renders after adding a Cash+ / Customized Cash card. Allowed-list enforced by backend against `category_bonuses[user_selected].allowed`. | Cash+, Customized Cash, Shopper Cash Rewards — each card carries its own `allowed` picker list in the seed catalog |
-| Shopping portal rate tracking | ⬜ | 3 | T | agent-browser batch job every 6 hours scraping Rakuten, TopCashBack, BeFrugal, Chase Shop Through Chase, Capital One Shopping | `portal_bonuses` table with `is_elevated` spike detection |
+| Shopping portal rate tracking | ✅ 2h | 2 | T | `backend/workers/portal_rates.py` — httpx+BeautifulSoup scrape of Rakuten / TopCashBack / BeFrugal every 6 hours via `scripts/run_worker.py portal-rates`. Chase Shop Through Chase + Capital One Shopping deferred (auth-gated). Pure-function parsers anchored on stable attributes (aria-label / semantic class names); committed HTML fixtures in `backend/tests/fixtures/portal_rates/` | `portal_bonuses` table with `is_elevated` GENERATED ALWAYS STORED column; Rakuten's "was X%" marker refreshes `normal_value` baseline |
 | Card-linked offers (Amex/Chase/Citi Offers) | 🔮 | 5+ | H | DEFERRED — requires issuer auth flows, 2FA, anti-bot. Unsustainable for solo dev | Phase 1-4: passive guidance ("Check your Chase app for offers at Best Buy") |
 
 ### Verification Platforms Tracked
@@ -85,10 +86,10 @@
 
 | Feature | Status | Phase | Class | Data Source | Notes |
 |---------|--------|-------|-------|-------------|-------|
-| Barcode scanning (AVFoundation) | 🚧 | 1 | T | Native iOS since iOS 7. UPC sent to backend for resolution | Triggers full price comparison pipeline. Step 1g: scanner captures barcodes, resolves product via backend. Step 1h: scan → resolve → price comparison UI complete. Post-2b-val: `ScannerView` also exposes a `⌨️` toolbar button that opens a manual UPC entry sheet — same code path via `ScannerViewModel.handleBarcodeScan(upc:)` — used for simulator testing (no camera) and as a fallback for damaged/missing barcodes |
+| Barcode scanning (AVFoundation) | ✅ | 1 | T | Native iOS since iOS 7. UPC sent to backend for resolution | Triggers full price comparison pipeline. Step 1g: scanner captures barcodes, resolves product via backend. Step 1h: scan → resolve → price comparison UI complete. Post-2b-val: `ScannerView` also exposes a `⌨️` toolbar button that opens a manual UPC entry sheet — same code path via `ScannerViewModel.handleBarcodeScan(upc:)` — used for simulator testing (no camera) and as a fallback for damaged/missing barcodes |
 | Image-based product identification | ⬜ | 3 | AI | Claude Sonnet vision via backend; no deterministic path | Camera → backend → Claude Vision → product resolution |
 | Receipt scanning (OCR → savings calc) | ⬜ | 3 | H | **On-device:** VisionKit `VNDocumentCameraViewController` (iOS 13+) for capture, Vision `VNRecognizeTextRequest` (iOS 13+) for text extraction. Backend receives structured text only (not images) — cost optimization | Code matches products + calcs savings (T) |
-| Product resolution (UPC → canonical) | 🚧 | 1 | H | Gemini API UPC lookup (primary, 4-6s, high accuracy, YC credits) → UPCitemdb API (backup, free 100/day) → PostgreSQL persistent + Redis cache (24hr TTL) | AI resolves barcode to product name/brand/category. Cached aggressively — most barcodes only looked up once. **Step 1b: backend service + endpoint operational** |
+| Product resolution (UPC → canonical) | ✅ | 1 | H | Gemini API UPC lookup (primary, 4-6s, high accuracy, YC credits) → UPCitemdb API (backup, free 100/day, cross-validation) → PostgreSQL persistent + Redis cache (24hr TTL). Gemini output includes `device_name` + `model` (shortest unambiguous identifier) which is stored in `source_raw.gemini_model` and feeds M2 relevance scoring | AI resolves barcode to product name/brand/category. Cached aggressively — most barcodes only looked up once. Cross-validation added in Step 2b |
 
 ### iOS Scanning Framework Notes
 
@@ -142,15 +143,15 @@ Affiliate connections take weeks to establish (Amazon Associates requires live w
 
 | Feature | Status | Phase | Class | Notes |
 |---------|--------|-------|-------|-------|
-| Clerk authentication | ⬜ | 1 | T | JWT validation, session management. MCP server for dev inspection |
-| API rate limiting | ⬜ | 1 | T | Redis-backed per-user limits |
-| Docker local development | ⬜ | 1 | T | PostgreSQL+TimescaleDB, Redis via docker-compose.yml. LocalStack added in Phase 2 |
-| agent-browser scraper containers | ⬜ | 1 | T | Per-retailer Docker containers: Chrome + agent-browser + extraction script. 11 retailers from day 1 |
-| Self-healing Watchdog (supervisor agent) | ⬜ | 2 | H | Monitors script health, classifies failures (transient/selector_drift/blocked), auto-heals via Claude Opus (YC credits). Escalates to developer after 3 failed heal attempts |
-| Background job processing | ⬜ | 2 | T | SQS + worker scripts |
+| Clerk authentication | ✅ | 1 | T | JWT validation via `clerk-backend-api`, session management. MCP server for dev inspection. `BARKAIN_DEMO_MODE=1` bypass for local physical-device testing |
+| API rate limiting | ✅ | 1 | T | Redis-backed sliding window, per-user. Tier-aware in 2f: pro users get base × `RATE_LIMIT_PRO_MULTIPLIER` (default 2×). Tier cached in Redis `tier:{user_id}` with 60s TTL |
+| Docker local development | ✅ | 1 | T | PostgreSQL+TimescaleDB, Test DB, Redis via docker-compose.yml. LocalStack added in Step 2h for SQS emulation |
+| agent-browser scraper containers | ✅ | 1 | T | Per-retailer Docker containers: Chrome + agent-browser + extraction script. 11 retailers + shared base image (`containers/base/`) |
+| Self-healing Watchdog (supervisor agent) | ✅ 2a | 2 | H | `backend/workers/watchdog.py` — monitors script health, classifies failures (transient/selector_drift/blocked), auto-heals via Claude Opus (YC credits). Escalates to developer after 3 failed heal attempts. Nightly via `scripts/run_watchdog.py --check-all` |
+| Background job processing | ✅ 2h | 2 | T | SQS (LocalStack in dev, real AWS in prod) + `scripts/run_worker.py` CLI. 4 workers: price ingestion, portal rates, discount verification, watchdog |
 | Web dashboard | 🔮 | 5+ | T | Next.js on Vercel |
 | Android app | 🔮 | 6+ | T | Kotlin / KMP |
-| Dark mode | ⬜ | 1 | T | Part of design system from day one |
+| Dark mode | ⬜ | 1 | T | Design system uses semantic colors but full dark-mode audit deferred |
 
 ---
 

@@ -2,7 +2,7 @@
 
 > Source: Project Planning Questionnaire + Architecture Sessions, March–April 2026
 > Scope: All planned phases, current position, infrastructure dependencies
-> Last updated: April 2026 (v3.1 — first live 3-retailer scan-to-prices demo validated on physical iPhone; 7 live-run bug fixes landed on `phase-2/scan-to-prices-deploy`)
+> Last updated: April 2026 (v3.2 — Phase 2 COMPLETE through Step 2h; Step 2i hardening sweep in progress)
 >
 > For per-step file inventories and decision rationale, see `docs/CHANGELOG.md`.
 
@@ -25,6 +25,15 @@
 **Step 2a (Watchdog Supervisor Agent + Health Monitoring + Shared Base Image) — COMPLETE** (2026-04-10)
 **Walmart HTTP Adapter + Firecrawl/Decodo Routing — COMPLETE** (2026-04-10) — paradigm shift: walmart now uses `WALMART_ADAPTER={container,firecrawl,decodo_http}` routing instead of the browser container. Demo runs through Firecrawl, production flips to Decodo residential proxy with one env var change. 10 other retailers unchanged. See `docs/ARCHITECTURE.md#walmart-adapter-routing-post-step-2a-paradigm-shift` and `docs/SCRAPING_AGENT_ARCHITECTURE.md` Appendices A–C.
 **Scan-to-Prices Live Demo (3 retailers) — COMPLETE** (2026-04-10) — first-ever live end-to-end run on a physical iPhone. Amazon + Best Buy via agent-browser containers on EC2 t3.xlarge (reached from Mac over SSH tunnel), Walmart via Firecrawl v2 adapter. 7 live-run bug fixes landed on `phase-2/scan-to-prices-deploy` (see `Barkain Prompts/Error_Report_Scan_to_Prices_Deployment.md`): fd-3 stdout pollution, 180s EXTRACT_TIMEOUT baseline, Xvfb lock cleanup, Firecrawl v2 `location.country` schema drift, `.env` overrides rot (`CONTAINER_URL_PATTERN`, `CONTAINER_TIMEOUT_SECONDS`), zero-price listing guard, iOS URLSession 240s timeout. See `docs/SCRAPING_AGENT_ARCHITECTURE.md` Appendix D for the extract.sh conventions now required of every retailer container.
+**Step 2b (Demo Container Reliability) — COMPLETE** (2026-04-11), **Step 2b-val Live Validation — PASSED** (2026-04-12), **Post-2b-val Hardening — COMPLETE** (2026-04-12), **Step 2b-final Close-Out — COMPLETE** (2026-04-13)
+**Step 2c (SSE Streaming) — COMPLETE** (2026-04-13), **Step 2c-fix (iOS byte-level SSE splitter) — COMPLETE** (2026-04-13)
+**Step 2d (M5 Identity Profile + Discount Catalog) — COMPLETE** (2026-04-14)
+**Step 2e (M5 Card Portfolio + Reward Matching) — COMPLETE** (2026-04-14), **Step 2e-val Smoke Test — PASSED** (2026-04-14, 0 bugs)
+**Step 2f (M11 Billing — RevenueCat + Feature Gating) — COMPLETE** (2026-04-14)
+**Step 2g (M12 Affiliate Router + In-App Browser) — COMPLETE** (2026-04-14)
+**Step 2h (Background Workers — SQS + Price Ingestion + Portal Rates + Discount Verification) — COMPLETE** (2026-04-15)
+**Phase 2 (Intelligence Layer) — COMPLETE** (awaiting `v0.2.0` tag via Step 2i)
+**Step 2i-a (CLAUDE.md compaction + doc sweep) — IN PROGRESS** (2026-04-15)
 **Tagged releases:** v0.1.0 (Phase 1)
 
 ---
@@ -127,10 +136,10 @@
 
 ---
 
-## Phase 2: Identity Layer + Revenue + Watchdog (Weeks 9-12) — ⬜ PLANNED
+## Phase 2: Identity Layer + Revenue + Watchdog (Weeks 9-12) — ✅ COMPLETE (awaiting v0.2.0 tag)
 
 > **Goal:** Identity profile, card portfolio, subscription billing, affiliate routing, Watchdog self-healing, and background workers.
-> **Tag:** v0.2.0
+> **Tag:** v0.2.0 (pending Step 2i hardening sweep)
 
 ### Steps
 
@@ -146,7 +155,9 @@
 | **2f** | **M11 Billing: COMPLETE ✅** (2026-04-14) — RevenueCat SDK + RevenueCatUI added via SPM (v5.67.2). New `m11_billing` backend module: `POST /api/v1/billing/webhook` (RevenueCat events with bearer-token auth, idempotency dedup, tier cache bust) + `GET /api/v1/billing/status` (server-authoritative tier). Tier-aware rate limiter: free uses `RATE_LIMIT_GENERAL/WRITE/AI`, pro uses `× RATE_LIMIT_PRO_MULTIPLIER` (default 2). Tier resolved via Redis `tier:{user_id}` cache (60s TTL) → DB fallback → defaults to free on missing user row. Migration 0004 (PF-1) takes ownership of `idx_card_reward_programs_product` from the seed script. iOS: `SubscriptionService` (@Observable wrapper around RC SDK with PurchasesDelegate adapter), `FeatureGateService` (test-seam-friendly @Observable, free=10 scans/day in local TZ + 3 identity discounts max + cards hidden), `PaywallHost`/`CustomerCenterHost` thin wrappers. ScannerViewModel gates scan quota AFTER successful product resolve (no quota burn on resolve failures). PriceComparisonView slices identity discounts to first 3 + `UpgradeLockedDiscountsRow`, hides per-row card subtitles + shows ONE `UpgradeCardsBanner`. Profile gains tier badge + scan tally + Upgrade button + Customer Center NavigationLink for pro users. 14 new backend tests (`test_m11_billing.py`: webhooks × 8, status × 3, rate limiter × 2, migration 0004 × 1) + 10 new iOS tests (`FeatureGateServiceTests` × 8 + 2 ScannerViewModelTests). | ✅ (2026-04-14) |
 | **2g** | **M12 Affiliate Router + In-App Browser: COMPLETE ✅** (2026-04-14) — Barkain's commission path. New `m12_affiliate` backend module: `POST /api/v1/affiliate/click` tags + logs, `GET /api/v1/affiliate/stats` groups by retailer, `POST /api/v1/affiliate/conversion` placeholder webhook with optional bearer auth. `AffiliateService.build_affiliate_url` is a pure `@staticmethod`: Amazon → `?tag=barkain-20` (live), eBay (new+used) → rover redirect with `campid=5339148665` (live), Walmart → Impact Radius placeholder (passthrough while `WALMART_AFFILIATE_ID` empty), Best Buy + others → untagged. `affiliate_clicks.affiliate_network='passthrough'` sentinel for untagged entries (NOT NULL column). iOS: new `InAppBrowserView` (`SFSafariViewController` wrapper — cookies shared with Safari so affiliate cookies persist) + `IdentifiableURL` helper. `AffiliateURL.swift` models + `Endpoints.swift` cases + `APIClientProtocol` methods + 6-conformer fanout. `ScannerViewModel.resolveAffiliateURL(for:)` testable seam — calls `getAffiliateURL`, falls back to original URL on any thrown error, never throws. `PriceComparisonView` retailer-row `Button` now fires `Task { browserURL = IdentifiableURL(url: await viewModel.resolveAffiliateURL(for: retailerPrice)) }` — `UIApplication.shared.open` is gone from `Features/Recommendation/*`. `IdentityDiscountsSection` refactored to `onOpen: (URL) -> Void` closure so verification URLs land in the **same** in-app browser sheet but NOT through `/affiliate/click` (verification pages are not affiliate links). `IdentityDiscountCard.resolvedURL` is a new testable computed property. 14 new backend tests (9 pure URL construction + 3 endpoint + 2 conversion webhook) + 6 new iOS tests (3 `ScannerViewModelTests.test_resolveAffiliateURL_*` + 3 `IdentityDiscountCardTests.test_resolvedURL_*`). 266→280 backend / 60→66 iOS. | ✅ (2026-04-14) |
 | **2h** | **Background Workers: COMPLETE ✅** (2026-04-14) — operational backbone so data stays fresh without user traffic. LocalStack SQS in docker-compose (dev) + `backend/workers/queue_client.py` async-wrapped boto3 `SQSClient` (LocalStack via `SQS_ENDPOINT_URL`, real AWS via default credentials in prod). `backend/workers/price_ingestion.py` enqueue/process split reuses `PriceAggregationService.get_prices(force_refresh=True)` — zero duplication. `backend/workers/portal_rates.py` scrapes Rakuten (`aria-label` anchor + "was X%" baseline), TopCashBack (`nav-bar-standard-tenancy__value` span), BeFrugal (`txt-bold txt-under-store` span) via `httpx`+`BeautifulSoup` (deliberate deviation from Job 1's agent-browser pseudocode). Chase + Capital One deferred (auth-gated). `portal_bonuses.is_elevated` GENERATED ALWAYS STORED column auto-fires on spikes; `normal_value` preserved across runs except when Rakuten's "was X%" marker overrides. `backend/workers/discount_verification.py` weekly `httpx` GET with mentions-name check and "flagged vs hard-failed" distinction — soft flag never increments `consecutive_failures`; 3 consecutive hard failures flip `is_active=False`. Migration 0005 adds `idx_portal_bonuses_upsert` + `discount_programs.consecutive_failures`. `scripts/run_worker.py` unified CLI mirrors `run_watchdog.py` (argparse + asyncio.run + AsyncSessionLocal). 21 new backend tests (4 SQS via `moto[sqs]` + 4 price ingestion + 6 portal rates (parsers + normalize + 2 upsert) + 7 discount verification via `respx`). iOS untouched. 280→301 backend tests. | ✅ (2026-04-14) |
-| 2i | Hardening: guiding doc sweep, tag v0.2.0 | ⬜ |
+| 2i-a | Hardening: CLAUDE.md compaction + guiding-doc sweep + `.env.example` audit | 🚧 (in progress, 2026-04-15) |
+| 2i-b | Hardening: code quality, dead-code removal, renames, conformer consolidation | ⬜ |
+| 2i-c | Hardening: operational validation, XCUITest, CI enforcement, tag `v0.2.0` | ⬜ |
 
 ### Infrastructure Phase 2 Extends
 - Scraper containers (Phase 1) — add Watchdog self-healing + automated health monitoring

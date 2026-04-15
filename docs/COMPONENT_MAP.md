@@ -2,7 +2,7 @@
 
 > Source: Project Planning + Architecture Sessions, March–April 2026
 > Scope: What tools/libraries to use, what was considered and dropped, why
-> Last updated: April 2026 (v3 — Opus for Watchdog, Browser Use dropped, Haiku dropped, Open Food Facts deferred)
+> Last updated: April 2026 (v3.1 — Watchdog ✅, LocalStack ✅, SQS workers live via boto3 + moto[sqs]; Firecrawl promoted from "last resort" to live walmart path)
 
 ---
 
@@ -28,8 +28,9 @@
 | **ORM** | SQLAlchemy 2.0 (async) | KEEP | Mature, async support, Alembic migrations | ✅ Confirmed |
 | **Database** | PostgreSQL 16 + TimescaleDB | KEEP | AWS credits; relational + time-series in one | ✅ Confirmed |
 | **Cache** | Redis 7 (ElastiCache) | KEEP | Price caching + rate limiting + query cache | ✅ Confirmed |
-| **Queue** | AWS SQS | KEEP | Managed, no ops; covered by credits | ✅ Confirmed |
-| **Local Dev** | Docker Compose | ADD | PostgreSQL+TimescaleDB + Redis. LocalStack added in Phase 2 when SQS workers are built | ✅ Day 1 |
+| **Queue** | AWS SQS | KEEP | Managed, no ops; covered by credits. Wired in Step 2h — `backend/workers/queue_client.py` async-wraps boto3 via `asyncio.to_thread`; LocalStack for dev, real AWS in prod via empty `SQS_ENDPOINT_URL` → default credential chain | ✅ Phase 2 (Step 2h) |
+| **SQS Client (async wrap)** | `boto3>=1.34` in `requirements.txt` | ADD | Official AWS SDK. Wrapped in `asyncio.to_thread` to live inside async workers without aioboto3 dep overhead — throughput matters at tens-of-thousands msgs/hour, which is well beyond MVP scale | ✅ Phase 2 (Step 2h) |
+| **Local Dev** | Docker Compose | ADD | PostgreSQL+TimescaleDB + Test DB + Redis (Day 1) + LocalStack (Step 2h, SQS only) | ✅ Day 1 + Step 2h |
 | **Auth** | Clerk | KEEP | Existing Pro sub; handles users + API keys. **MCP server** for dev inspection | ✅ Confirmed |
 
 ### AI & ML
@@ -39,7 +40,7 @@
 | **AI Primary** | Claude API (Sonnet + Opus) | KEEP | YC credits; Sonnet for tasks, Opus for Watchdog self-healing | ✅ Confirmed |
 | **AI Fallback** | OpenAI GPT-4o-mini | KEEP | YC credits; fallback when Claude fails | ✅ Confirmed |
 | **AI Structured Output** | Instructor library | KEEP | Pydantic model validation for LLM responses | ⬜ Phase 3 |
-| **Scraper AI (Watchdog)** | Claude Opus | ADD | Watchdog self-healing agent. Highest quality selector rediscovery; YC credits make cost viable | ⬜ Phase 2 |
+| **Scraper AI (Watchdog)** | Claude Opus via `anthropic` SDK | ADD | Watchdog self-healing agent. Highest quality selector rediscovery; YC credits make cost viable. Nightly via `scripts/run_watchdog.py --check-all`; `backend/workers/watchdog.py::WatchdogSupervisor` dispatches heal prompts from `backend/ai/prompts/watchdog_heal.py` | ✅ Phase 2 (Step 2a) |
 | **Extraction Parsing** | Qwen Flash or ERNIE | ADD | Parsing scraped page content into structured data | ⬜ Phase 2 |
 | **Price Prediction** | Prophet (Meta) | KEEP | Python-native time-series forecasting; lightweight | ⬜ Phase 4 |
 | **AI Orchestration** | LangChain | DROP | Overkill for direct API calls; Instructor sufficient | — |
@@ -50,7 +51,9 @@
 |----------|------|--------|--------|--------|
 | **Primary Scraping** | agent-browser | ADD | CLI tool controlling Chrome via CDP. DOM eval pattern wins every test (avg 515ms, Grade A quality). Replaces Playwright for all scraping | ✅ Confirmed |
 | **Playwright** | Playwright | DROP | agent-browser's DOM eval outperforms on all tested sites. Shell-scriptable, better anti-detection | — |
-| **Firecrawl** | Firecrawl | BACKUP | YC credits; absolute last resort when agent-browser + Watchdog heal all fail | ⬜ Phase 2 |
+| **Firecrawl** | Firecrawl v2 (`/v1/scrape` with `rawHtml` + `country=US`) | ADD | Live path for Walmart scraping via `backend/modules/m2_prices/adapters/walmart_firecrawl.py` (post-Step-2a paradigm shift — PerimeterX defeats headless Chromium, `__NEXT_DATA__` is already server-rendered). Also retains its original role as last-resort fallback for other retailers if Watchdog heal fails | ✅ Phase 2 (Step 2a paradigm shift) |
+| **HTML Parsing** | BeautifulSoup 4 | ADD | `backend/workers/portal_rates.py` parses Rakuten / TopCashBack / BeFrugal via stable-attribute selectors (not hash-based CSS classes). Deliberately chosen over agent-browser for portal rate pages since they're static-enough HTML tables — no JS rendering needed, no coupling to scraper containers | ✅ Phase 2 (Step 2h) |
+| **SQS Test Mocking** | `moto[sqs]>=5.0` in `requirements-test.txt` | ADD | Stubs boto3 at the transport layer — hermetic worker tests with zero LocalStack dependency. Tests use `with mock_aws():` and force `SQSClient(endpoint_url=None)` via the `_UNSET` sentinel to bypass the `.env` LocalStack override. Swap to live LocalStack for manual smoke (`docker compose up -d localstack && python3 scripts/run_worker.py setup-queues`) | ✅ Phase 2 (Step 2h) |
 | **Browser Use** | Browser Use | DROP | Fully replaced by agent-browser for all scraping + Watchdog healing | — |
 | **Semantic Search** | Exa | ADD | YC credits; find retailer discount program pages | ⬜ Phase 2 |
 | **PDF Extraction** | Reducto | ADD | YC credits; card benefit docs, fee schedules | ⬜ Phase 4+ |
@@ -95,7 +98,7 @@
 |----------|------|------|------|
 | **PostgreSQL+TimescaleDB** | Docker container | MCP Server | Day 1 |
 | **Redis** | Docker container | MCP Server | Day 1 |
-| **LocalStack** | Docker container | MCP Server | Phase 2 |
+| **LocalStack** | Docker container (SQS only) | Docker compose service | ✅ Phase 2 (Step 2h) — `localstack/localstack:3`, port 4566, `SERVICES=sqs`, healthcheck via `curl /_localstack/health` |
 | **Context7** | Standalone | MCP Server | Day 1 (always on) |
 | **Clerk** | Standalone | MCP Server | Before Step 1a |
 | **XcodeBuildMCP** | Standalone | MCP Server | Step 1d (iOS) |

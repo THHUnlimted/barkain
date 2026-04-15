@@ -2,7 +2,7 @@
 
 > Source: Architecture sessions, March–April 2026
 > Scope: Local dev environment, backend deployment, iOS distribution, CI/CD, environment variables
-> Last updated: April 2026 (v2 — complete rewrite: docker-compose spec, backend deployment, env var inventory, Railway + AWS paths)
+> Last updated: April 2026 (v2.1 — docker-compose spec updated with postgres-test + LocalStack; Step 2h background workers section + cron schedule + prod SQS setup)
 
 ---
 
@@ -11,14 +11,11 @@
 ### docker-compose.yml
 
 ```yaml
-version: "3.9"
-
 services:
   postgres:
     image: timescale/timescaledb:latest-pg16
     container_name: barkain-db
-    ports:
-      - "5432:5432"
+    ports: ["5432:5432"]
     environment:
       POSTGRES_DB: barkain
       POSTGRES_USER: app
@@ -31,22 +28,55 @@ services:
       timeout: 3s
       retries: 5
 
+  postgres-test:
+    image: timescale/timescaledb:latest-pg16
+    container_name: barkain-db-test
+    ports: ["5433:5432"]
+    environment:
+      POSTGRES_DB: barkain_test
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: test
+    tmpfs: ["/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d barkain_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   redis:
     image: redis:7-alpine
     container_name: barkain-redis
-    ports:
-      - "6379:6379"
+    ports: ["6379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
 
+  # Step 2h — SQS emulation for background workers.
+  localstack:
+    image: localstack/localstack:3
+    container_name: barkain-localstack
+    ports: ["4566:4566"]
+    environment:
+      SERVICES: sqs
+      DEFAULT_REGION: us-east-1
+      EAGER_SERVICE_LOADING: "1"
+      DEBUG: "0"
+    volumes:
+      - localstack-data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4566/_localstack/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
 volumes:
   pgdata:
+  localstack-data:
 ```
 
-**Note:** LocalStack (SQS/S3/SNS) is NOT included — added in Phase 2 when background workers are built.
+**Note:** LocalStack is only enabled for SQS (Step 2h). The retailer scraper containers (amazon/best_buy/walmart/target/…) are defined as commented stubs in the real `docker-compose.yml`; they run on EC2 in dev, not locally.
 
 ### Starting Local Dev
 
@@ -104,10 +134,7 @@ OPENAI_API_KEY=sk-xxxxx
 # ── Watchdog (Phase 2) ──────────────────────────────────
 WATCHDOG_SLACK_WEBHOOK=https://hooks.slack.com/services/xxxxx  # Optional, for escalation notifications
 
-# ── Affiliate (Phase 2) ─────────────────────────────
-AMAZON_ASSOCIATE_TAG=barkain-20
-EBAY_CAMPAIGN_ID=xxxxx
-CJ_WEBSITE_ID=xxxxx
+# ── Affiliate (Phase 2) — superseded by the detailed block below ───
 
 # ── Environment ──────────────────────────────────────
 ENVIRONMENT=development          # development | staging | production
