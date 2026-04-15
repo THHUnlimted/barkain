@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** April 2026 (v5.1 — Phase 2 closed at Step 2i-c; awaiting `v0.2.0` tag from Mike)
+> **Last updated:** April 2026 (v5.2 — Phase 2 closed at Step 2i-d; awaiting `v0.2.0` tag from Mike)
 
 ---
 
@@ -262,9 +262,10 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 | 2h | Background Workers (SQS + price ingest + portal rates + discount verify) + migration 0005 | +21 | — | #16 |
 | 2i-a | CLAUDE.md compaction + guiding-doc sweep | — | — | #17 |
 | 2i-b | Code quality sweep: `DEMO_MODE` rename, dead branches removed, `_classify_retailer_result` extraction, migration 0006 | +1 | — | #18 |
-| 2i-c | Operational validation: LocalStack workers end-to-end (caught + fixed worker model-registry FK bug), conftest schema-drift auto-recreate, CI `ruff check`, Phase 2 consolidation docs | — | — | (this step) |
+| 2i-c | Operational validation: LocalStack workers end-to-end (caught + fixed worker model-registry FK bug), conftest schema-drift auto-recreate, CI `ruff check`, Phase 2 consolidation docs | — | — | #19 |
+| 2i-d | Operational validation: EC2 redeploy (11/11 containers, MD5 clean) + PAT scrub + Watchdog live `--check-all` (caught + fixed `CONTAINERS_ROOT` path bug) + deferred retailer validation (3/4 pass) + BarkainUITests E2E smoke test (manual UPC → SSE → affiliate sheet, `tag=barkain-20` verified in DB) | — | +1 UI | (this step) |
 
-**Test totals:** **302 backend** (302 passed / 6 skipped) + **66 iOS unit** = **368 tests**.
+**Test totals:** **302 backend** (302 passed / 6 skipped) + **66 iOS unit** + **2 iOS UI** = **370 tests**.
 `ruff check` clean. `xcodebuild` clean.
 
 **Migrations:** 0001 (initial schema, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert index + `discount_programs.consecutive_failures`) → 0006 (`chk_subscription_tier` CHECK on `users.subscription_tier`).
@@ -279,8 +280,10 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 
 | ID | Severity | Issue | Owner |
 |----|----------|-------|-------|
-| SP-L1 | HIGH | GitHub PAT leaked in EC2 `~/barkain/.git/config` on instance `i-09ce25ed6df7a09b2` — must rotate | Mike |
-| 2b-val-L1 | MEDIUM | EC2 containers run hot-patched code (amazon/best_buy `extract.js` via `docker cp`); next stop+start reverts — run `scripts/ec2_deploy.sh` to re-sync | Mike (post-`v0.2.0`) |
+| SP-L1-b | HIGH | Leaked PAT `gho_UUsp9ML7…` stripped from EC2 `.git/config` in 2i-d, but **not yet revoked** in GitHub Settings → Developer settings. Anyone with the token can still read `molatunji3/barkain` | Mike (GitHub UI only) |
+| 2i-d-L2 | MEDIUM | `lowes` container extract times out (>120 s); classified as `selector_drift` but root cause is hang, not missing selectors. Probably Xvfb / Chromium init issue on the specific container | Phase 3 |
+| 2i-d-L3 | LOW | `ebay_new` / `fb_marketplace` / `walmart` still flagged `selector_drift` after live re-run with real Anthropic key. `ebay_used` heal_staged successfully (2399 Opus tokens → `containers/ebay_used/staging/extract.js`). Residual drift is unrelated to the path bug fix | Phase 3 |
+| 2i-d-L4 | MEDIUM | Watchdog heal prompt passes `page_html=error_details` at `backend/workers/watchdog.py:251` — Opus never sees the real DOM, only the error string from the failed extract, so it cannot usefully repair selectors. Fix requires wiring a browser fetch into the heal path. Not blocking for `v0.2.0` — the `_handle_selector_drift` pipeline itself is now end-to-end verified | Phase 3 |
 | 2b-val-L2 | UX | Best Buy leg ~91 s dominates total runtime; SSE masks it but `domcontentloaded` wait strategy remains a win | Phase 3 |
 | v4.0-L2 | MEDIUM | Sub-variants without digits (Galaxy Buds Pro 1st gen) still pass token overlap — needs richer Gemini output | Phase 3 |
 | 2h-ops | LOW | SQS queues have no DLQ wiring; per-portal fan-out deferred (workers are one-shot orchestrators today) | Phase 3 ops |
@@ -289,11 +292,12 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 
 ## What's Next
 
-1. **Step 2i — Hardening sweep** (in progress):
+1. **Step 2i — Hardening sweep COMPLETE:**
    - **2i-a** ✅ — CLAUDE.md compaction + guiding-doc sweep (#17)
    - **2i-b** ✅ — Code quality + dead-code removal + renames + dedup extraction (#18)
-   - **2i-c** ✅ — Operational validation + conftest drift detection + CI ruff + Phase 2 consolidation (this PR). XCUITest deferred to Phase 3.
-   - **`v0.2.0` tag** — Mike action post-merge: `git checkout main && git pull && git tag -a v0.2.0 -m "Phase 2: Intelligence Layer" && git push origin v0.2.0`
+   - **2i-c** ✅ — Operational validation (LocalStack workers) + conftest drift detection + CI ruff + Phase 2 consolidation (#19)
+   - **2i-d** ✅ — Operational validation (EC2 redeploy 11/11 containers, MD5 clean; Watchdog `CONTAINERS_ROOT` path bug caught+fixed; BarkainUITests E2E smoke test lands; PAT scrubbed from EC2 `.git/config`) (this PR)
+   - **`v0.2.0` tag** — Mike action post-merge: revoke leaked PAT `gho_UUsp9ML7…` in GitHub UI (SP-L1-b), then `git checkout main && git pull && git tag -a v0.2.0 -m "Phase 2: Intelligence Layer" && git push origin v0.2.0`. Real `ANTHROPIC_API_KEY` was populated mid-step 2i-d and heal pipeline is already verified end-to-end.
 2. **Phase 3 — Recommendation Intelligence:** AI synthesis via Claude Sonnet, stacking rules, portal bonus display, coupon discovery, receipt scanning
 3. **Phase 4 — Production Optimization:** Best Buy / eBay Browse / Keepa API adapters for speed, App Store submission, Sentry error tracking
 4. **Phase 5 — Growth:** Push notifications (APNs), web dashboard, Android (KMP)
@@ -337,3 +341,6 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 > - **Migration 0006 — `chk_subscription_tier` CHECK constraint** on `users.subscription_tier IN ('free', 'pro')`. Mirrored on `User.__table_args__` in `app/core_models.py` so `Base.metadata.create_all` (test DB) matches alembic. Idempotent via `DO $$ ... END $$` block keyed on `pg_constraint.conname` (2i-b)
 > - **Worker scripts MUST import `from app import models`** so cross-module FKs resolve at flush time. Latent FK bug discovered by 2i-c Group A's first real LocalStack run: `run_worker.py` imported `AsyncSessionLocal` but never the central model registry, so `Base.metadata` didn't know about `Retailer` when `PortalBonus.retailer_id` tried to flush. The 2h moto test suite passed because every fixture imports models explicitly — only the standalone CLI path exposed it. Same one-line fix applied preemptively to `run_watchdog.py` (2i-c)
 > - **Test DB schema drift is auto-detected** in `backend/tests/conftest.py:_ensure_schema` via a `chk_subscription_tier` marker probe before `Base.metadata.create_all`. Missing → drop+recreate the public schema. Update the marker query whenever a new migration adds a column or constraint (2i-c)
+> - **Watchdog `CONTAINERS_ROOT` must use `parents[2]` not `parents[1]`** — `backend/workers/watchdog.py` previously resolved to `backend/containers/` (nonexistent), so every `selector_drift` heal failed with "extract.js not found" before reaching Opus. The 2h unit tests stubbed the filesystem layer and passed; only the 2i-d live `--check-all` against real containers exposed the gap. Symmetry with 2i-c: both bugs were latent path/registry assumptions that unit tests mocked away, caught by operational validation on first real run (2i-d)
+> - **XCUITest target is now wired** — `BarkainUITests/BarkainUITests.swift` runs `testManualUPCEntryToAffiliateSheet` end-to-end: enters UPC `194252818381`, waits for an SSE-streamed retailer row via `retailerRow_<id>` accessibility IDs, taps it, and asserts the affiliate sheet presents. The final assertion uses an OR of three independent signals (SFSafari webview visible, "Done" button present, or original row no longer hittable) because iOS 26's SFSafariViewController chrome lives in a separate accessibility tree that XCUITest cannot traverse from the host app. Authoritative proof of the affiliate path is the `affiliate_clicks` DB row — we queried it post-run and confirmed `tag=barkain-20` appended and `affiliate_network='amazon_associates'` (2i-d)
+> - **Deploy via rsync when GitHub auth is broken** — 2i-d Group A discovered the EC2 `.git/config` embeds a leaked PAT and deploy keys are disabled on the `THHUnlimted/barkain` repo. Fix without touching GitHub settings: `rsync -az --delete --exclude='.git/'` the local checkout to `ubuntu@ec2:~/barkain/`, then run the Phase C/D portions of `scripts/ec2_deploy.sh` inline (skip `git pull` — the rsync already synced). MD5 check still validates the container extract.js against the rsync'd host copy, so `2b-val-L1` is verifiable without a working `git pull` (2i-d)

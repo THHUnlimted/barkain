@@ -34,7 +34,12 @@ from modules.m2_prices.health_monitor import HealthMonitorService
 
 logger = logging.getLogger("barkain.watchdog")
 
-CONTAINERS_ROOT = Path(__file__).resolve().parents[1] / "containers"
+# `parents[2]` escapes backend/ → repo root, where containers/ actually lives.
+# Latent bug caught by 2i-d Group B: `parents[1]` pointed at backend/containers/
+# (nonexistent), so every selector_drift heal failed with "extract.js not found"
+# before reaching Opus. 2h's watchdog tests stubbed the filesystem layer and
+# passed; only the live CLI path exposed the gap.
+CONTAINERS_ROOT = Path(__file__).resolve().parents[2] / "containers"
 MAX_TRANSIENT_RETRIES = 3
 TRANSIENT_RETRY_DELAY = 5.0  # seconds base delay
 

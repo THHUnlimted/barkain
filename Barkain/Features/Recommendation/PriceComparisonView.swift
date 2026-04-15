@@ -250,6 +250,7 @@ struct PriceComparisonView: View {
                             )
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("retailerRow_\(retailerPrice.retailerId)")
                     case .noMatch(let result):
                         inactiveRow(name: result.retailerName, label: "Not found")
                     case .unavailable(let result):

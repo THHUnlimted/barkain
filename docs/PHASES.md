@@ -2,7 +2,7 @@
 
 > Source: Project Planning Questionnaire + Architecture Sessions, March–April 2026
 > Scope: All planned phases, current position, infrastructure dependencies
-> Last updated: April 2026 (v3.2 — Phase 2 COMPLETE through Step 2h; Step 2i hardening sweep in progress)
+> Last updated: April 2026 (v3.3 — Phase 2 COMPLETE through Step 2i-d; awaiting `v0.2.0` tag from Mike)
 >
 > For per-step file inventories and decision rationale, see `docs/CHANGELOG.md`.
 
@@ -33,7 +33,7 @@
 **Step 2g (M12 Affiliate Router + In-App Browser) — COMPLETE** (2026-04-14)
 **Step 2h (Background Workers — SQS + Price Ingestion + Portal Rates + Discount Verification) — COMPLETE** (2026-04-15)
 **Phase 2 (Intelligence Layer) — COMPLETE** (awaiting `v0.2.0` tag via Step 2i)
-**Step 2i-a (CLAUDE.md compaction + doc sweep) — IN PROGRESS** (2026-04-15)
+**Step 2i-a (CLAUDE.md compaction + doc sweep) — COMPLETE** (2026-04-15, PR #17), **Step 2i-b (Code quality sweep) — COMPLETE** (2026-04-15, PR #18), **Step 2i-c (Operational validation + Phase 2 consolidation) — COMPLETE** (2026-04-15, PR #19), **Step 2i-d (Operational validation — EC2 redeploy + Watchdog live + BarkainUITests + path-bug fix) — COMPLETE** (2026-04-15)
 **Tagged releases:** v0.1.0 (Phase 1)
 
 ---
@@ -158,6 +158,7 @@
 | 2i-a | Hardening: CLAUDE.md compaction + guiding-doc sweep + `.env.example` audit | ✅ (2026-04-15, PR #17) |
 | 2i-b | Hardening: code quality, dead-code removal, renames, dedup extraction (`_classify_retailer_result`), `subscription_tier` CHECK constraint (migration 0006), `DEMO_MODE` rename. Group E (PreviewAPIClient consolidation) skipped — only 1 inline stub exists, no consolidation needed. 301→302 backend tests; 66 iOS unchanged. | ✅ (2026-04-15) |
 | 2i-c | Hardening: operational validation (LocalStack workers end-to-end), conftest schema drift detection, CI ruff enforcement, Phase 2 consolidation docs (`docs/Consolidated_Error_Report_Phase_2.md` + `docs/Consolidated_Conversation_Summaries_Phase_2.md`), tag prep. XCUITest target deferred to Phase 3. Tag `v0.2.0` is a Mike action post-merge. | ✅ (2026-04-15) |
+| 2i-d | Operational validation: EC2 redeployed via rsync (deploy keys disabled; GitHub auth broken) — 11/11 containers built, running, MD5 clean against repo copies (**2b-val-L1 resolved**). PAT `gho_UUsp9ML7…` scrubbed from EC2 `~/barkain/.git/config`; Mike still needs to revoke it in GitHub UI (SP-L1-b). Watchdog `--check-all` live run caught a latent path bug: `CONTAINERS_ROOT = parents[1] / "containers"` pointed at `backend/containers/` instead of `<repo>/containers/`, so every `selector_drift` heal failed with "extract.js not found" before reaching Opus. One-line fix (`parents[2]`) validated end-to-end via a second live `--check-all` with a real `ANTHROPIC_API_KEY`: **`ebay_used` heal_staged** with 2399 Opus tokens and wrote `containers/ebay_used/staging/extract.js`, proving the pipeline path → Opus → JSON parse → staging dir → DB row. 4 of 5 drifts still fail at the Opus step because the heal prompt passes `page_html=error_details` (no real DOM), tracked as 2i-d-L4. Deferred retailer selector validation: **3 of 4 pass** (sams_club, home_depot, backmarket all `success`); `lowes` hangs >120s on extract (2i-d-L2, not missing selectors — Chromium init). `BarkainUITests` target wired end-to-end: `testManualUPCEntryToAffiliateSheet` drives manual UPC `194252818381` → SSE stream → retailer row → affiliate sheet; proof of the affiliate pipeline is the `affiliate_clicks` row with `tag=barkain-20` and `affiliate_network='amazon_associates'` post-tap. 3× accessibility-identifier additions (`manualEntryButton`, `upcTextField`, `resolveButton`, `retailerRow_<id>`). Backend untouched: 302/6. iOS: 66 unit + 2 UI (new `testManualUPCEntryToAffiliateSheet` + existing `testLaunch`). | ✅ (2026-04-15) |
 
 ### Infrastructure Phase 2 Extends
 - Scraper containers (Phase 1) — add Watchdog self-healing + automated health monitoring
