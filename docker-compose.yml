@@ -44,6 +44,28 @@ services:
       timeout: 3s
       retries: 5
 
+  # ── LocalStack (SQS emulation for background workers, Step 2h) ──
+  # Only the `sqs` service is enabled. Workers point at this via
+  # SQS_ENDPOINT_URL=http://localhost:4566 in dev; leave SQS_ENDPOINT_URL
+  # empty in prod so boto3 resolves real AWS SQS via IAM / default chain.
+  localstack:
+    image: localstack/localstack:3
+    container_name: barkain-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: sqs
+      DEFAULT_REGION: us-east-1
+      EAGER_SERVICE_LOADING: "1"
+      DEBUG: "0"
+    volumes:
+      - localstack-data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4566/_localstack/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
   # ── Scraper Containers (uncomment when retailer scripts are built) ──
   # Each retailer runs in its own container with Chromium + agent-browser.
   # Port mapping: amazon=8081, best_buy=8082, walmart=8083, target=8084,
@@ -73,3 +95,4 @@ services:
 
 volumes:
   pgdata:
+  localstack-data:

@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     Text,
     UniqueConstraint,
@@ -105,6 +106,9 @@ class DiscountProgram(Base):
     effective_from: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     effective_until: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("NOW()")
     )
@@ -302,5 +306,11 @@ class PortalBonus(Base):
             "idx_portal_bonuses_active",
             "retailer_id",
             "effective_until",
+        ),
+        Index(
+            "idx_portal_bonuses_upsert",
+            "portal_source",
+            "retailer_id",
+            unique=True,
         ),
     )
