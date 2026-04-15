@@ -1,5 +1,17 @@
 """Prompt template for UPC-to-product resolution via Gemini API."""
 
+# NOTE (Step 2i-b): a rename of `device_name` → `product_name` was considered
+# in this hardening sweep and DEFERRED. `device_name` is the literal Gemini
+# output contract field — it appears in the system instruction below
+# (verbatim, do not edit), in `build_upc_lookup_prompt`, in
+# `build_upc_retry_prompt`, in `m1_product/service.py` (5 parse sites), and
+# in 13+ test assertions across `backend/tests/`. A mechanical rename would
+# require coordinated prompt + service-parse + test updates and risks
+# breaking the LLM contract during a hardening step that isn't supposed
+# to change behavior. Audit count at 2i-b: 26 backend occurrences across 9
+# files, 0 iOS occurrences (the iOS-facing `ProductResponse` schema already
+# uses `name`). Track in Phase 3 if still desired.
+
 # DO NOT CONDENSE OR SHORTEN THIS PROMPT — COPY VERBATIM
 UPC_LOOKUP_SYSTEM_INSTRUCTION = """# DO NOT CONDENSE OR SHORTEN THIS PROMPT — COPY VERBATIM
 

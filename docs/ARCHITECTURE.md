@@ -99,7 +99,7 @@ Phase 3 modules not yet shipped: `m6_recommend` (Claude Sonnet synthesis), `m7_p
 1. **CORS** — Allow iOS app + web dashboard origins
 2. **Request logging** — Structured JSON logs, request ID propagation
 3. **Rate limiting (tier-aware, Step 2f)** — Redis-backed sliding window. Free tier baseline: 60/min general, 30/min write, 10/min AI. Pro tier = base × `RATE_LIMIT_PRO_MULTIPLIER` (default 2×). Tier resolved via `_resolve_user_tier(user_id, redis, db)` in `backend/app/dependencies.py`: read `tier:{user_id}` from Redis (60s TTL) → DB SELECT on miss → `"free"` default on missing user row. Falls open to free on Redis/DB errors. Cache busted by `m11_billing.service.process_webhook` on every state-changing event.
-4. **Auth (Clerk)** — JWT validation via `clerk-backend-api` SDK; extracts `user_id` for downstream modules. `BARKAIN_DEMO_MODE=1` short-circuits to a hardcoded `"demo_user"` for local physical-device testing.
+4. **Auth (Clerk)** — JWT validation via `clerk-backend-api` SDK; extracts `user_id` for downstream modules. `DEMO_MODE=1` (read via `settings.DEMO_MODE`, renamed from `BARKAIN_DEMO_MODE` in 2i-b) short-circuits to a hardcoded `"demo_user"` for local physical-device testing.
 5. **Error handling** — Catches all exceptions, returns structured error responses
 
 ### API Versioning

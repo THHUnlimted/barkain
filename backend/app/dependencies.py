@@ -1,5 +1,4 @@
 import logging
-import os
 import time
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
@@ -15,8 +14,6 @@ from app.config import settings
 from app.database import AsyncSessionLocal
 
 _rate_limit_log = logging.getLogger("barkain.rate_limit")
-
-_DEMO_MODE = os.getenv("BARKAIN_DEMO_MODE") == "1"
 
 
 # MARK: - Database
@@ -51,8 +48,10 @@ async def get_current_user(
     authorization: str | None = Header(None),
 ) -> dict:
     """Extract and validate Clerk JWT. Raises 401 if invalid."""
-    # Demo mode: bypass auth for local testing (BARKAIN_DEMO_MODE=1)
-    if _DEMO_MODE:
+    # Demo mode: bypass auth for local testing (env var DEMO_MODE=1).
+    # Read at call-time via settings so tests can monkeypatch.setattr it
+    # without worrying about module-import ordering.
+    if settings.DEMO_MODE:
         return {"user_id": "demo_user", "email": "demo@barkain.local", "session_id": "demo"}
 
     if not authorization or not authorization.startswith("Bearer "):

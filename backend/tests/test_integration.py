@@ -8,8 +8,6 @@ import json
 import uuid
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from app.core_models import Retailer
 from modules.m2_prices.schemas import (
     ContainerError,
@@ -17,7 +15,8 @@ from modules.m2_prices.schemas import (
     ContainerResponse,
 )
 
-pytestmark = pytest.mark.asyncio
+# `pytestmark = pytest.mark.asyncio` removed in 2i-b — pyproject.toml sets
+# `asyncio_mode = "auto"` which auto-marks every `async def test_*`.
 
 
 # MARK: - Helpers

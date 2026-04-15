@@ -537,6 +537,74 @@ Barkain Prompts/Conversation_Summary_Step_2e_Card_Portfolio.md # Appendix: tooli
 
 ---
 
+### Step 2i-b — Code Quality Sweep (2026-04-15)
+
+**Branch:** `phase-2/step-2i-b` off `main` @ `39988e7` (after PR #17 — Step 2i-a docs — merged)
+**PR target:** `main`
+
+**Context:** Phase 2 (steps 2a–2h) and Step 2i-a (doc compaction) are done. 2i-b is the code-change complement to 2i-a's doc sweep — renames, dead-code removal, schema hardening, and a dedup extraction in the price service. No new features, no behavior changes. The plan was based on a prompt that overestimated the surface area in several places (4 inline `PreviewAPIClient` stubs, several `BARKAIN_DEMO_MODE` call sites, multiple `pytestmark` lines, `ProgressiveLoadingView.swift` still present); reality was leaner because earlier steps had already absorbed most of those items. The PR documents the prompt-vs-reality drift.
+
+**Files changed:**
+```
+backend/app/config.py                                 # +DEMO_MODE: bool field on Settings
+backend/app/dependencies.py                           # _DEMO_MODE module constant → settings.DEMO_MODE call-time read; dropped `import os`
+backend/app/core_models.py                            # User.__table_args__ += chk_subscription_tier; CheckConstraint import
+backend/modules/m5_identity/card_service.py           # B2 dead branch removed; retailer_lowest dict comprehension; ORDER BY price.asc() dropped (no-op under UNIQUE)
+backend/modules/m2_prices/service.py                  # D1 _classify_retailer_result helper; get_prices/stream_prices both delegate; "Step 9" name-merge loop deleted
+backend/ai/prompts/upc_lookup.py                      # A2 device_name deferral comment (above the system instruction string — string itself is verbatim)
+backend/tests/test_integration.py                     # B3 pytestmark removed; unused `import pytest` dropped
+backend/tests/modules/test_m11_billing.py             # +1 test: test_migration_0006_subscription_tier_constraint (savepoint guard)
+infrastructure/migrations/versions/0006_subscription_tier_check.py  # NEW — idempotent DO $$ block, IF NOT EXISTS pattern
+.env.example                                          # BARKAIN_DEMO_MODE=1 → DEMO_MODE=1 (commented sample)
+.github/workflows/backend-tests.yml                   # comment-only: BARKAIN_DEMO_MODE → DEMO_MODE in the env-block explainer
+scripts/run_demo.sh                                   # 4 sites: BARKAIN_DEMO_MODE → DEMO_MODE in echo + uvicorn launch
+Barkain/Services/Networking/AppConfig.swift           # doc-comment rename
+CLAUDE.md                                             # 2i-b row, migration 0006, test totals, +5 decision-log entries
+docs/ARCHITECTURE.md                                  # auth middleware DEMO_MODE rename
+docs/DEPLOYMENT.md                                    # 2 sites: env audit + curl example
+docs/FEATURES.md                                      # platform-features Clerk row DEMO_MODE rename
+docs/TESTING.md                                       # CI workflow note + XCUITest precondition rename
+docs/CHANGELOG.md                                     # this section
+docs/DATA_MODEL.md                                    # +0006 row in migrations table
+docs/PHASES.md                                        # 2i-b ⬜ → ✅
+```
+
+**Key decisions (numbered):**
+
+1. **`DEMO_MODE` is read at call-time, not import-time.** The previous `_DEMO_MODE = os.getenv("BARKAIN_DEMO_MODE") == "1"` module constant cached the value at import, defeating `monkeypatch.setenv` in tests. The new path lives on the pydantic-settings `Settings` instance and is resolved inside `get_current_user` per-request, so tests can `monkeypatch.setattr(settings, 'DEMO_MODE', True)` without import-ordering games. Field-name matching (no `env_prefix` set) means env var `DEMO_MODE` populates it directly.
+
+2. **All live BARKAIN_DEMO_MODE references renamed; CHANGELOG history left frozen.** `.env.example`, the GitHub workflow, `scripts/run_demo.sh`, `AppConfig.swift`, and the live docs (`ARCHITECTURE`, `DEPLOYMENT`, `FEATURES`, `TESTING`) all say `DEMO_MODE` now. Historical CHANGELOG entries for Steps 2a–2h still reference `BARKAIN_DEMO_MODE` — by design, the changelog is the archaeological record. CLAUDE.md's load-bearing decision-log entry (the "Two sources of truth" line) was updated since CLAUDE.md is the canonical agent context.
+
+3. **`device_name` rename to `product_name` deferred — code comment in `upc_lookup.py`.** Audit found 26 backend occurrences across 9 files, **0 iOS occurrences** (the iOS schema already uses `name`). The load-bearing site is `backend/ai/prompts/upc_lookup.py` — `device_name` is the literal Gemini API output contract field. A mechanical rename would require a coordinated prompt + service-parse + test-assertion update and risks breaking the LLM contract during a hardening step that isn't supposed to change behavior. Comment lives above the system instruction string (the string itself is `DO NOT CONDENSE OR SHORTEN — COPY VERBATIM`). Tracked in Phase 3.
+
+4. **`ProgressiveLoadingView.swift` was already deleted.** Zero grep hits across `Barkain/` and `BarkainTests/`. Marked done with no action — the prompt was based on stale state. Some prior step (likely 2c when `PriceComparisonView` became the progressive UI) absorbed the cleanup.
+
+5. **Dead `if retailer_id not in retailer_lowest` branch removed from `CardService.get_best_cards_for_product`.** The `Price` table has `UniqueConstraint("product_id", "retailer_id", "condition")`, so the WHERE clause filtering on `condition == "new"` returns at most one row per retailer. The "collapse to lowest" loop never had a duplicate to collapse. Replaced with a dict comprehension and dropped the `ORDER BY Price.price.asc()` (no-op under the UNIQUE constraint); kept `ORDER BY Price.retailer_id` for deterministic ordering. All 17 M5 card tests still pass.
+
+6. **`pytestmark = pytest.mark.asyncio` removed from `tests/test_integration.py` (only remaining occurrence).** `pyproject.toml` sets `asyncio_mode = "auto"` which auto-marks every `async def test_*`. Also dropped the now-unused `import pytest`. All 12 integration tests still pass.
+
+7. **TODO/FIXME audit complete — 1 legitimate Phase-2 item retained.** Only hit was `containers/template/server.py:91` — `# TODO(Phase-2): Add bearer token auth for container endpoints.` This is a real deferred concern (containers are VPC-only / localhost-only in Phases 1–2; bearer-token auth is a Phase 3+ production hardening item). Left in place.
+
+8. **Migration 0006 — `chk_subscription_tier` CHECK constraint** on `users.subscription_tier IN ('free', 'pro')`. Until now the column was an unconstrained `TEXT` field with a `'free'` server default; only `BillingService` writes to it, but the DB had no defense if a future caller (or a manual psql session) tried to set `'enterprise'`, `'trial'`, etc. Idempotent via `DO $$ ... END $$` block keyed on `pg_constraint.conname`. Mirrored on `User.__table_args__` in `app/core_models.py` so `Base.metadata.create_all` (test DB) gets the constraint without alembic — same parity pattern as Steps 2f / 2h. Required restarting the `postgres-test` tmpfs container so the schema rebuilds with the new constraint.
+
+9. **`_classify_retailer_result` helper in `m2_prices/service.py` is the single classification authority.** Both `get_prices()` and `stream_prices()` previously inlined ~40 lines of identical branching (error-code classification → status, no-listings → no_match, `_pick_best_listing` → no_match-or-success, success-path price payload assembly). Worse, they had already drifted — the stream version embedded `retailer_name` in the price payload directly while the batch version added it via a later "Step 9" loop. Extraction returns `(retailer_result_dict, price_payload_or_none, best_listing_or_none)`; callers handle counter increments, DB writes, and (stream only) SSE emission. The two methods are still NOT merged — they differ in iteration strategy (`as_completed` vs serial dict iteration) and emission semantics (yields events vs accumulates a dict). The "Step 9" name-merge loop in `get_prices` was deleted because the helper now inlines `retailer_name` in the payload at construction time.
+
+10. **Migration 0006 test uses a SAVEPOINT (`db_session.begin_nested()`).** The first attempt called `db_session.rollback()` directly inside the test after catching `IntegrityError`, but that left the outer fixture transaction in an "already deassociated from connection" state and produced a `SAWarning`. Wrapping the failing UPDATE in `async with db_session.begin_nested()` rolls back only the savepoint on the constraint violation, keeping the outer fixture transaction intact for teardown.
+
+11. **Group E (Conformer Consolidation) skipped.** Only 1 `PreviewAPIClient` exists (in `Barkain/Features/Recommendation/PriceComparisonView.swift`), not 4 as the prompt assumed. Premature abstraction with a single consumer was rejected — a shared `PreviewAPIClient.swift` would also require an Xcode `project.pbxproj` update for marginal value. Documented in CHANGELOG and PR. Decision will revisit when a 2nd preview-side conformer appears.
+
+12. **`ruff check backend/ scripts/` was clean before any edits and remains clean.** No auto-fixes run. Deleting the unused `import pytest` from `test_integration.py` was preemptive — ruff would have flagged it anyway.
+
+**Tests:**
+- Backend: **301 → 302 passed, 6 skipped** (added `test_migration_0006_subscription_tier_constraint` in `test_m11_billing.py`).
+- iOS: **66 unique tests passed** on `iPhone 17` simulator (iPhone 16 sim no longer installed locally; xcodebuild + source-line counting agree at 66).
+- Behavior unchanged on `m2_prices` / `stream_prices` — full 74-test m2 suite passes, including the 11 stream tests.
+- Migration 0006 round-trips cleanly: `alembic upgrade head` → `pg_constraint` shows `chk_subscription_tier`; `alembic downgrade -1` removes it; re-`upgrade head` reinstalls. Verified against the dev DB on `localhost:5432` and the tmpfs test DB on `localhost:5433`.
+
+**Verdict:** Step 2i-b ships clean. Code quality items from Phase 2 are paid down; the remaining 2i checklist is 2i-c (operational validation + XCUITest + CI enforcement + tag `v0.2.0`).
+
+---
+
 ### Step 2h — Background Workers (2026-04-14)
 
 **Branch:** `phase-2/step-2h` off `main` @ `ab988cb` (after PR #15 merged)

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Text, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,6 +17,8 @@ class User(Base):
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     email: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     display_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Constrained to {'free', 'pro'} by chk_subscription_tier (migration 0006).
+    # Mirrored here so Base.metadata.create_all (test DB) matches alembic.
     subscription_tier: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="free"
     )
@@ -31,6 +33,13 @@ class User(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("NOW()")
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "subscription_tier IN ('free', 'pro')",
+            name="chk_subscription_tier",
+        ),
     )
 
 

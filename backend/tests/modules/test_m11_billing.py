@@ -420,3 +420,32 @@ async def test_migration_0004_index_exists(db_session):
     assert "UNIQUE" in indexdef
     assert "card_issuer" in indexdef
     assert "card_product" in indexdef
+
+
+async def test_migration_0006_subscription_tier_constraint(db_session):
+    """Verify chk_subscription_tier exists and rejects bogus values."""
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    row = (
+        await db_session.execute(
+            text(
+                "SELECT conname FROM pg_constraint "
+                "WHERE conname = 'chk_subscription_tier'"
+            )
+        )
+    ).first()
+    assert row is not None, "chk_subscription_tier constraint not found"
+
+    # Reject a value outside {'free', 'pro'}. Use a SAVEPOINT so the
+    # IntegrityError doesn't poison the outer fixture transaction.
+    await _seed_user(db_session, subscription_tier="free")
+    with pytest.raises(IntegrityError):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE users SET subscription_tier = 'enterprise' "
+                    "WHERE id = :user_id"
+                ),
+                {"user_id": MOCK_USER_ID},
+            )

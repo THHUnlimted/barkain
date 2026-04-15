@@ -197,7 +197,7 @@ DECODO_PROXY_HOST=gate.decodo.com:7000
 - Duplicate defaults that merely echoed `backend/app/config.py` defaults were removed. Only genuine overrides that MUST differ from code defaults remain.
 - `CONTAINER_URL_PATTERN` line removed entirely — it was the SP-5 root cause. The correct default (`http://localhost:{port}`) lives in `config.py` and should never be overridden in `.env` unless the deployment topology changes.
 - `CONTAINER_TIMEOUT_SECONDS=180` added (matches the post-live-run baseline from SP-6).
-- `BARKAIN_DEMO_MODE=1` added as a comment — uncomment for local physical-device testing without Clerk auth.
+- `DEMO_MODE=1` added as a comment — uncomment for local physical-device testing without Clerk auth. (Renamed from `BARKAIN_DEMO_MODE` in Step 2i-b; pydantic-settings now reads it directly into `settings.DEMO_MODE`.)
 - **Rule:** if a value in `.env.example` matches the default in `config.py`, delete it from `.env.example`. The env file is for secrets and deployment-specific overrides only.
 
 ### iOS (Xcconfig)
@@ -284,7 +284,7 @@ curl http://127.0.0.1:8000/api/v1/affiliate/stats
 # → {"clicks_by_retailer": {"amazon": 1}, "total_clicks": 1}
 ```
 
-Demo mode (`BARKAIN_DEMO_MODE=1`) bypasses Clerk auth for these curl calls.
+Demo mode (`DEMO_MODE=1`) bypasses Clerk auth for these curl calls.
 
 ---
 

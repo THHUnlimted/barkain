@@ -30,7 +30,7 @@ nonisolated enum AppConfig {
     /// sent with authenticated requests.
     ///
     /// Must match the value that `backend/app/dependencies.py::get_current_user`
-    /// returns in demo mode (`BARKAIN_DEMO_MODE=1`) so the RevenueCat webhook
+    /// returns in demo mode (`DEMO_MODE=1`, was `BARKAIN_DEMO_MODE` before 2i-b) so the RevenueCat webhook
     /// can find the matching `users` row when we process purchase events.
     /// When the real Clerk iOS SDK lands, replace the constant with the
     /// live Clerk user id from the signed-in session, and call
