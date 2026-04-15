@@ -2,7 +2,7 @@
 
 > Source: Architecture sessions, March–April 2026
 > Scope: Authentication flow, authorization, rate limiting, security headers, compliance
-> Last updated: April 2026 (v1 — initial)
+> Last updated: April 2026 (v1.1 — tier-aware rate limiting + RevenueCat webhook auth documented after Steps 2f/2g; free-tier scan limit corrected to 10/day)
 
 ---
 
@@ -84,14 +84,16 @@ async def require_pro(user_id: str, db: AsyncSession):
 | Feature | Free Tier | Pro Tier (~$7.99/mo) |
 |---------|-----------|---------------------|
 | Price comparison (11 retailers) | ✅ | ✅ |
-| Barcode scanning | ✅ (5/day) | ✅ (unlimited) |
-| Identity discount display | ✅ (view only) | ✅ (full stacking recs) |
-| Card recommendation | ❌ | ✅ |
-| Portal bonus stacking | ❌ | ✅ |
-| AI recommendation (Claude) | ❌ | ✅ |
-| Receipt scanning | ❌ | ✅ |
-| Price prediction | ❌ | ✅ |
-| Watched items | ❌ | ✅ |
+| Barcode scanning | ✅ (10/day, local TZ rollover) | ✅ (unlimited) |
+| Identity discount display | ✅ (first 3 shown, rest locked) | ✅ (full list + stacking) |
+| Card recommendation | ❌ (banner + upgrade CTA) | ✅ |
+| Portal bonus stacking | ❌ | ✅ (Phase 3) |
+| AI recommendation (Claude) | ❌ | ✅ (Phase 3) |
+| Receipt scanning | ❌ | ✅ (Phase 3) |
+| Price prediction | ❌ | ✅ (Phase 4) |
+| Watched items | ❌ | ✅ (Phase 4) |
+
+Free-tier gates are enforced by `FeatureGateService` on iOS (daily scan counter persisted to `UserDefaults` keyed on `yyyy-MM-dd` in the **local** timezone) and by the tier-aware rate limiter on the backend. Scan quota is gated **after** a successful product resolve, so failed barcode reads or unknown UPCs don't burn quota — a better UX than strict pre-check.
 
 ---
 

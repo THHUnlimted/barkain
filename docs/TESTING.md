@@ -2,7 +2,7 @@
 
 > Source: Architecture sessions, March–April 2026
 > Scope: Backend (pytest) + iOS (XCTest) test conventions, CI configuration, coverage targets
-> Last updated: April 2026 (v2 — complete rewrite: dual backend + iOS strategy, Docker test DB, mock patterns)
+> Last updated: April 2026 (v2.1 — 301 backend / 66 iOS at end of Step 2h; per-test UserDefaults isolation pattern documented)
 
 ---
 
@@ -296,6 +296,7 @@ final class MockAPIClient: APIClientProtocol {
 - **Protocol-first:** Every service has a protocol; mock via conformance
 - **Accessibility identifiers:** `enum AccessibilityID { static let scanButton = "scan_button" }`
 - **No force unwraps** except in test setup
+- **Per-test UserDefaults isolation (Step 2f learning):** any test that touches a service persisting to `UserDefaults` (e.g. `FeatureGateService`'s daily scan counter) must inject a fresh `UserDefaults(suiteName:)` keyed by a UUID in `setUp`. Without isolation, tests share `UserDefaults.standard`, accumulate persisted state across the suite, and eventually trip gates that were never meant to fire in unrelated tests (the 2f tests break `test_reset_clearsPriceState` once cumulative scans hit the daily cap). The `makeDefaults()` helper in `FeatureGateServiceTests.swift` and `ScannerViewModelTests.swift` is the reference implementation.
 
 ---
 
