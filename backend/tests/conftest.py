@@ -31,14 +31,43 @@ _schema_ready = False
 
 
 async def _ensure_schema(engine):
-    """Create TimescaleDB extension and all tables if not already present."""
+    """Create TimescaleDB extension and bootstrap the schema.
+
+    Drift detection: ``Base.metadata.create_all`` is a no-op for tables
+    that already exist, so a stale test DB silently keeps a schema from
+    a prior step (missing new columns or constraints). To catch this,
+    we probe for a marker from the most recent migration before
+    creating tables — if missing, we drop the public schema and
+    recreate everything.
+
+    The marker is the cheapest available signal that proves the schema
+    matches HEAD. Update the query whenever a new migration adds a
+    column/constraint to existing tables.
+    """
     global _schema_ready
     if _schema_ready:
         return
+
+    # Drift marker: chk_subscription_tier from migration 0006.
+    # Update this query when adding new migrations that introduce
+    # constraints or columns to existing tables.
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE"))
-    async with engine.begin() as conn:
+        marker = await conn.execute(
+            text(
+                "SELECT 1 FROM pg_constraint WHERE conname = 'chk_subscription_tier'"
+            )
+        )
+        schema_current = marker.scalar() is not None
+
+        if not schema_current:
+            await conn.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+            await conn.execute(text("CREATE SCHEMA public"))
+            await conn.execute(
+                text("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE")
+            )
         await conn.run_sync(Base.metadata.create_all)
+
     _schema_ready = True
 
 

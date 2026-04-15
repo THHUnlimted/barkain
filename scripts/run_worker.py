@@ -43,6 +43,7 @@ sys.path.insert(0, str(BACKEND))
 
 import redis.asyncio as aioredis  # noqa: E402
 
+from app import models as _models  # noqa: E402, F401  # registers all ORM classes with Base.metadata so cross-module FKs resolve at flush time
 from app.config import settings  # noqa: E402
 from app.database import AsyncSessionLocal  # noqa: E402
 from workers.queue_client import ALL_QUEUES, SQSClient  # noqa: E402

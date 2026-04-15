@@ -537,6 +537,56 @@ Barkain Prompts/Conversation_Summary_Step_2e_Card_Portfolio.md # Appendix: tooli
 
 ---
 
+### Step 2i-c — Operational Validation + Phase 2 Consolidation (2026-04-15)
+
+**Branch:** `phase-2/step-2i-c` off `main` @ `8a50079` (after PR #18 — Step 2i-b — merged)
+**PR target:** `main`
+
+**Context:** Final hardening step before tagging Phase 2 as `v0.2.0`. Three objectives, no new features: (1) validate operationally — first end-to-end run of the Step 2h workers against real LocalStack instead of `moto[sqs]` mocks; (2) Phase 2 consolidation — produce two summary documents drawing from the 14-step CHANGELOG; (3) tag prep — open the PR and document the `git tag v0.2.0` instructions for Mike. Mike runs the actual tag after merge.
+
+**Files changed:**
+```
+backend/tests/conftest.py                                # _ensure_schema: drift marker probe (chk_subscription_tier) + drop+recreate when stale; expanded docstring
+.github/workflows/backend-tests.yml                      # +Lint step: pip install ruff + ruff check backend/ scripts/
+scripts/run_worker.py                                    # +`from app import models as _models` so cross-module FKs resolve at flush time (LATENT FIX from Group A smoke test)
+scripts/run_watchdog.py                                  # same model-registry import (preventive — same latent shape)
+docs/Consolidated_Error_Report_Phase_2.md                # NEW — step summary, recurring patterns, learnings index, open items
+docs/Consolidated_Conversation_Summaries_Phase_2.md      # NEW — timeline, architecture evolution, methodology observations, Phase 3 hand-off
+docs/PHASES.md                                           # 2i-c row flipped ⬜ → ✅
+docs/TESTING.md                                          # +Schema Drift Auto-Recreate section, +SAVEPOINT pattern section, version bump v2.2 → v2.3, 2i-c row added
+docs/CHANGELOG.md                                        # this section
+CLAUDE.md                                                # 2i-c row flipped ✅, "Phase 2 COMPLETE" in What's Next, Migration list unchanged (still 0006)
+```
+
+**Key decisions (numbered):**
+
+1. **Group A discovered a latent FK metadata bug.** First real LocalStack worker run failed with `sqlalchemy.exc.NoReferencedTableError: Foreign key associated with column 'portal_bonuses.retailer_id' could not find table 'retailers' with which to generate a foreign key to target column 'id'`. Root cause: `scripts/run_worker.py` imports `from app.database import AsyncSessionLocal` but never imports `app/models.py` (the central registry that loads all model classes into `Base.metadata`). When the worker tries to flush `PortalBonus`, the lazy `ForeignKey("retailers.id")` resolves at flush time and can't find `Retailer` because `app.core_models` was never imported into the running interpreter. The dev DB itself has all 22 tables — this is a SQLAlchemy ORM metadata problem, not a database problem. **Fix:** one line in `scripts/run_worker.py` and `scripts/run_watchdog.py`: `from app import models as _models  # noqa: F401  # registers all ORM classes with Base.metadata so cross-module FKs resolve at flush time`. The 2h worker test suite (21 tests) passed for 14 days under `moto[sqs]` because the test fixtures explicitly import every model — only the standalone CLI script paths exposed the gap. Caught by Group A's smoke test, which is exactly what operational validation is supposed to do.
+
+2. **LocalStack worker smoke test — all 4 jobs end-to-end.** `setup-queues` created 3 SQS queues (`barkain-price-ingestion`, `barkain-portal-scraping`, `barkain-discount-verification`). `portal-rates` hit live websites and returned `{"rakuten": 5, "topcashback": 4, "befrugal": 3, "chase_shop_through_chase": 0, "capital_one_shopping": 0}`. `discount-verify` hit live discount-program URLs across all 52 catalog rows and returned `{"checked": 52, "verified": 23, "flagged": 12, "failed": 17, "deactivated": 0}` — 17 hard failures are 403 responses from `homedepot.com` and `lowes.com` (military discount registration pages); none have hit 3 consecutive failures yet so `is_active` stays True. `price-enqueue` published 10 SQS messages from 17 seeded products (10 stale, 7 fresh), confirmed via `aws --endpoint-url http://localhost:4566 sqs get-queue-attributes` returning `ApproximateNumberOfMessages: 10`. `price-process` deliberately skipped — would require running scraper containers locally, out of scope for this validation.
+
+3. **Boto3 + Python 3.14 needs explicit AWS credential env vars.** First `setup-queues` invocation failed with `botocore.exceptions.MissingDependencyException: Using the login credential provider requires an additional dependency. You will need to pip install "botocore[crt]"`. The new "login" provider in botocore's credential resolution chain on Python 3.14 needs an extra C-runtime dep that isn't installed. The fix is environmental, not code: prefix every worker invocation with `AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test` (LocalStack accepts any creds; production EC2 uses instance roles). Documented in the `Barkain Prompts/` error report as 2i-c-L2 — production deploy must set these via systemd unit, .env, or instance metadata.
+
+4. **Test DB schema drift is now auto-detected.** `backend/tests/conftest.py:_ensure_schema` previously called `Base.metadata.create_all` once per session via the `_schema_ready` flag — `create_all` is a no-op for tables that already exist, so a stale schema (missing a recent migration's column or constraint) silently kept running. The 2i-b `chk_subscription_tier` test exposed this manually (`docker compose restart postgres-test` was the workaround). The new path probes `pg_constraint` for `chk_subscription_tier` BEFORE running `create_all`; if missing, `DROP SCHEMA public CASCADE` + recreate + `create_all`. Verified by restarting `barkain-db-test` (which wipes the tmpfs volume) and re-running the suite — the drop+recreate branch ran cleanly and 302/6 still passes. **Maintenance:** when a future migration adds a column or constraint to existing tables, update the marker query to point at the new artifact.
+
+5. **CI workflow gets `ruff check`.** The Step 2b-final workflow ran pytest only; ruff was a local-dev-only check. Added a `Lint` step after `Run unit tests` that pip-installs ruff and runs `ruff check backend/ scripts/` from the repo root (NOT `working-directory: backend`, which would resolve `backend/` as `backend/backend/`). One more gate on the PR pipeline. PR #18 is retroactively safe because ruff was clean at commit time, but every future PR will fail CI on lint regressions.
+
+6. **Branch protection on `main` exists but has NO required status checks.** `gh api repos/THHUnlimted/barkain/branches/main/protection` returns `enforce_admins: enabled`, `allow_force_pushes: false`, `allow_deletions: false` — but no `required_status_checks` block. Force pushes are blocked, but a PR can be merged without the `Backend Tests / test` workflow having passed. Fix is repo-admin only (Mike): GitHub UI → Settings → Branches → main → require `Backend Tests / test` to pass. Tracked as 2i-c-L3.
+
+7. **Phase 2 consolidation documents are summaries, not copy-pastes.** Two new files in `docs/`: `Consolidated_Error_Report_Phase_2.md` (100 lines, ≤200 budget) compiles a step summary table, 7 recurring patterns, a 28-row learnings index pulling from CLAUDE.md and the per-step CHANGELOG sections, plus an open-items table with owners. `Consolidated_Conversation_Summaries_Phase_2.md` (84 lines, ≤150 budget) is a 17-row timeline (every Phase 2 step + the 3 substeps `2b-val` / `2c-val` / `2e-val`), 3-paragraph architecture evolution narrative, methodology observations split into "what worked" and "what to change", and Phase 3 hand-off notes. Source-only: pulled from CHANGELOG, NOT from the per-step error reports in `Barkain Prompts/` (which are outside the repo).
+
+8. **Tag `v0.2.0` is a Mike action, not an agent action.** The agent opens the PR; after Mike merges, Mike runs `git checkout main && git pull && git tag -a v0.2.0 -m "Phase 2: Intelligence Layer" && git push origin v0.2.0`. The agent never pushes a tag. Documented in the PR body.
+
+**Tests:**
+- Backend: **302 passed / 6 skipped** — unchanged. No new tests; this is an operational validation step.
+- iOS: **66** — unchanged.
+- Drift detection verified: `docker compose restart postgres-test` → re-run `pytest --tb=short -q` → 302/6 (drop+recreate branch ran cleanly, schema rebuilt with `chk_subscription_tier` from migration 0006).
+- LocalStack smoke test: all 4 worker jobs ran end-to-end against real LocalStack + dev DB.
+- ruff: clean before and after edits to `conftest.py`, `run_worker.py`, `run_watchdog.py`, `.github/workflows/backend-tests.yml`.
+
+**Verdict:** Step 2i-c ships clean. Phase 2 is COMPLETE pending the `v0.2.0` tag. The latent worker-script FK bug is a real Phase 2 fix that wouldn't have been caught without operational validation — exactly the value 2i-c was meant to deliver.
+
+---
+
 ### Step 2i-b — Code Quality Sweep (2026-04-15)
 
 **Branch:** `phase-2/step-2i-b` off `main` @ `39988e7` (after PR #17 — Step 2i-a docs — merged)

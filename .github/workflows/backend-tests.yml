@@ -78,3 +78,8 @@ jobs:
           FIRECRAWL_API_KEY: ""
         run: |
           python -m pytest --tb=short -q
+
+      - name: Lint
+        run: |
+          pip install ruff
+          ruff check backend/ scripts/

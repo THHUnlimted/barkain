@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** April 2026 (v5.0 — Step 2i-a compaction + doc sweep)
+> **Last updated:** April 2026 (v5.1 — Phase 2 closed at Step 2i-c; awaiting `v0.2.0` tag from Mike)
 
 ---
 
@@ -261,7 +261,8 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 | 2g | M12 Affiliate Router (Amazon/eBay/Walmart) + in-app browser | +14 | +6 | #15 |
 | 2h | Background Workers (SQS + price ingest + portal rates + discount verify) + migration 0005 | +21 | — | #16 |
 | 2i-a | CLAUDE.md compaction + guiding-doc sweep | — | — | #17 |
-| 2i-b | Code quality sweep: `DEMO_MODE` rename, dead branches removed, `_classify_retailer_result` extraction, migration 0006 | +1 | — | (this step) |
+| 2i-b | Code quality sweep: `DEMO_MODE` rename, dead branches removed, `_classify_retailer_result` extraction, migration 0006 | +1 | — | #18 |
+| 2i-c | Operational validation: LocalStack workers end-to-end (caught + fixed worker model-registry FK bug), conftest schema-drift auto-recreate, CI `ruff check`, Phase 2 consolidation docs | — | — | (this step) |
 
 **Test totals:** **302 backend** (302 passed / 6 skipped) + **66 iOS unit** = **368 tests**.
 `ruff check` clean. `xcodebuild` clean.
@@ -279,7 +280,7 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 | ID | Severity | Issue | Owner |
 |----|----------|-------|-------|
 | SP-L1 | HIGH | GitHub PAT leaked in EC2 `~/barkain/.git/config` on instance `i-09ce25ed6df7a09b2` — must rotate | Mike |
-| 2b-val-L1 | MEDIUM | EC2 containers run hot-patched code (amazon/best_buy `extract.js` via `docker cp`); next stop+start reverts — run `scripts/ec2_deploy.sh` to re-sync | 2i-c |
+| 2b-val-L1 | MEDIUM | EC2 containers run hot-patched code (amazon/best_buy `extract.js` via `docker cp`); next stop+start reverts — run `scripts/ec2_deploy.sh` to re-sync | Mike (post-`v0.2.0`) |
 | 2b-val-L2 | UX | Best Buy leg ~91 s dominates total runtime; SSE masks it but `domcontentloaded` wait strategy remains a win | Phase 3 |
 | v4.0-L2 | MEDIUM | Sub-variants without digits (Galaxy Buds Pro 1st gen) still pass token overlap — needs richer Gemini output | Phase 3 |
 | 2h-ops | LOW | SQS queues have no DLQ wiring; per-portal fan-out deferred (workers are one-shot orchestrators today) | Phase 3 ops |
@@ -290,8 +291,9 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 
 1. **Step 2i — Hardening sweep** (in progress):
    - **2i-a** ✅ — CLAUDE.md compaction + guiding-doc sweep (#17)
-   - **2i-b** ✅ — Code quality + dead-code removal + renames + dedup extraction (this PR)
-   - **2i-c** — Operational validation + XCUITest + CI enforcement + tag `v0.2.0`
+   - **2i-b** ✅ — Code quality + dead-code removal + renames + dedup extraction (#18)
+   - **2i-c** ✅ — Operational validation + conftest drift detection + CI ruff + Phase 2 consolidation (this PR). XCUITest deferred to Phase 3.
+   - **`v0.2.0` tag** — Mike action post-merge: `git checkout main && git pull && git tag -a v0.2.0 -m "Phase 2: Intelligence Layer" && git push origin v0.2.0`
 2. **Phase 3 — Recommendation Intelligence:** AI synthesis via Claude Sonnet, stacking rules, portal bonus display, coupon discovery, receipt scanning
 3. **Phase 4 — Production Optimization:** Best Buy / eBay Browse / Keepa API adapters for speed, App Store submission, Sentry error tracking
 4. **Phase 5 — Growth:** Push notifications (APNs), web dashboard, Android (KMP)
@@ -333,3 +335,5 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 > - **`_classify_retailer_result` is the single classification authority** for both `get_prices()` and `stream_prices()` — extracted in 2i-b to delete ~80 duplicated lines that had already drifted (the stream version embedded `retailer_name` in the price payload directly while the batch version added it in a later loop). The two methods still differ in iteration strategy (`as_completed` vs serial dict iteration) and emission semantics (yields events vs accumulates a dict), which is why they're not merged (2i-b)
 > - **`device_name` rename to `product_name` deferred:** 26 backend occurrences across 9 files including the load-bearing Gemini system instruction in `backend/ai/prompts/upc_lookup.py`. A mechanical rename would require a coordinated prompt + service-parse + test-assertion update and risks breaking the LLM contract during a hardening step. iOS already uses `name` so there's no consumer pressure. Tracked in Phase 3 if still desired (2i-b)
 > - **Migration 0006 — `chk_subscription_tier` CHECK constraint** on `users.subscription_tier IN ('free', 'pro')`. Mirrored on `User.__table_args__` in `app/core_models.py` so `Base.metadata.create_all` (test DB) matches alembic. Idempotent via `DO $$ ... END $$` block keyed on `pg_constraint.conname` (2i-b)
+> - **Worker scripts MUST import `from app import models`** so cross-module FKs resolve at flush time. Latent FK bug discovered by 2i-c Group A's first real LocalStack run: `run_worker.py` imported `AsyncSessionLocal` but never the central model registry, so `Base.metadata` didn't know about `Retailer` when `PortalBonus.retailer_id` tried to flush. The 2h moto test suite passed because every fixture imports models explicitly — only the standalone CLI path exposed it. Same one-line fix applied preemptively to `run_watchdog.py` (2i-c)
+> - **Test DB schema drift is auto-detected** in `backend/tests/conftest.py:_ensure_schema` via a `chk_subscription_tier` marker probe before `Base.metadata.create_all`. Missing → drop+recreate the public schema. Update the marker query whenever a new migration adds a column or constraint (2i-c)
