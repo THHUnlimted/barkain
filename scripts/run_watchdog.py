@@ -19,6 +19,7 @@ from pathlib import Path
 # Add backend to sys.path so we can import modules
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
+from app import models as _models  # noqa: E402, F401  # registers all ORM classes with Base.metadata so cross-module FKs resolve at flush time
 from app.config import settings  # noqa: E402
 from app.database import AsyncSessionLocal  # noqa: E402
 
