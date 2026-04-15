@@ -203,18 +203,35 @@ DECODO_PROXY_HOST=gate.decodo.com:7000
 
 One env-var change, redeploy, done. No code change between demo and production.
 
-### Background Workers
+### Background Workers (Step 2h — IMPLEMENTED)
 
-Standalone Python scripts that poll SQS queues. Not Celery.
+Standalone Python scripts invoked via `scripts/run_worker.py <subcommand>`.
+Not Celery. SQS is the queue — LocalStack in dev (`SQS_ENDPOINT_URL=http://localhost:4566`),
+real AWS SQS in prod (empty `SQS_ENDPOINT_URL` → default credential chain).
+boto3 wrapped in `asyncio.to_thread` inside `backend/workers/queue_client.py`
+so the sync SDK lives cleanly inside async workers.
 
-| Worker | Queue | Schedule | Purpose |
-|---|---|---|---|
-| price_ingestion | price-ingest-queue | Every 6h by category | Fetches prices from retailer APIs/containers |
-| portal_rates | portal-rate-queue | Every 6h | Scrapes portal cashback rates (Rakuten, TopCashBack, etc.) |
-| discount_verification | discount-verify-queue | Weekly | Verifies identity discount programs still active |
-| coupon_validator | coupon-validate-queue | Daily | Tests coupon codes for validity |
-| prediction_trainer | predict-train-queue | Nightly | Retrains Prophet model on price history |
-| watchdog | — (cron-triggered) | Nightly (2 AM cron) | Health checks, failure classification, self-healing via Claude Opus, Slack escalation |
+**Pipeline:** `cron → run_worker.py → AsyncSessionLocal → worker module → (SQS | httpx | service) → Postgres`
+
+| Worker | Module | Mode | Schedule | Reuses | Purpose |
+|---|---|---|---|---|---|
+| price_ingestion (enqueue) | `workers/price_ingestion.py::enqueue_stale_products` | one-shot | `0 */6 * * *` | `GROUP BY products HAVING MAX(last_checked) < cutoff` | Enqueue one SQS message per product with stale prices |
+| price_ingestion (process) | `workers/price_ingestion.py::process_queue` | long-poll | long-lived | `PriceAggregationService.get_prices(force_refresh=True)` | Drain ingestion queue; reuses the user-scan pipeline |
+| portal_rates | `workers/portal_rates.py::run_portal_scrape` | one-shot | `30 */6 * * *` | `httpx`+`BeautifulSoup` | Scrape Rakuten, TopCashBack, BeFrugal cashback rates → `portal_bonuses` upsert |
+| discount_verification | `workers/discount_verification.py::run_discount_verification` | one-shot | `0 4 * * 0` | `httpx` mentions-name check | Weekly URL check for active `discount_programs`; 3-failure deactivation threshold |
+| coupon_validator | TBD (`m4_coupons` placeholder) | — | Phase 3 | — | Coupon code validation (not yet implemented) |
+| prediction_trainer | TBD (`m7_predict`) | — | Phase 4 | — | Retrains Prophet on price_history (not yet implemented) |
+| watchdog | `workers/watchdog.py::WatchdogSupervisor` | one-shot | `0 3 * * *` | agent-browser containers + Claude Opus | Nightly retailer health check, selector rediscovery, Slack escalation |
+
+**Queues:**
+- `barkain-price-ingestion` — price refresh jobs
+- `barkain-portal-scraping` — future per-portal scrape jobs (currently run_portal_scrape is one-shot; queue reserved for future per-portal fan-out)
+- `barkain-discount-verification` — future per-program verify jobs (currently run_discount_verification is one-shot; queue reserved for fan-out)
+
+**Retry contract:** workers that hit external services (price_ingestion.process_queue)
+rely on SQS visibility timeout for retry — failing messages are NOT deleted so
+they re-appear after the timeout. Malformed bodies and missing-product lookups
+are ack+skipped (no retry spiral on permanently bad data).
 
 ### Error Handling Format
 

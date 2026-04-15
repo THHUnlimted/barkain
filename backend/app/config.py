@@ -90,5 +90,16 @@ class Settings(BaseSettings):
     WALMART_AFFILIATE_ID: str = ""          # Empty until Impact Radius approval
     AFFILIATE_WEBHOOK_SECRET: str = ""      # Bearer token for /conversion (placeholder)
 
+    # SQS / Background Workers (Step 2h)
+    # LocalStack override for dev; empty string in prod so boto3 resolves
+    # the real AWS SQS endpoint from the default credential chain.
+    SQS_ENDPOINT_URL: str = ""
+    SQS_REGION: str = "us-east-1"
+
+    # Worker cadence tuning (Step 2h)
+    PRICE_INGESTION_STALE_HOURS: int = 6
+    DISCOUNT_VERIFICATION_STALE_DAYS: int = 7
+    DISCOUNT_VERIFICATION_FAILURE_THRESHOLD: int = 3
+
 
 settings = Settings()

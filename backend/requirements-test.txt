@@ -4,3 +4,4 @@ httpx>=0.28.0
 fakeredis[aioredis]>=2.26.0
 pytest-cov>=6.0.0
 respx>=0.22.0
+moto[sqs]>=5.0.0

@@ -1051,8 +1051,18 @@ These run on schedule and keep the discount catalog fresh. Zero user-facing late
 ```python
 # ─── Job 1: Portal Rate Scraping ──────────────────────────────
 # Runs: Every 6 hours
-# Method: agent-browser scripts (deterministic, no LLM)
+# Original plan: agent-browser scripts (deterministic, no LLM)
 # Updates: portal_bonuses table
+#
+# >>> IMPLEMENTED in Step 2h — backend/workers/portal_rates.py <<<
+# Deliberate deviation from the pseudocode below: the real worker uses
+# httpx + BeautifulSoup, NOT agent-browser. Portal rate pages are static
+# enough that a browser render is overkill; pure-function parsers are
+# trivially unit-testable against committed HTML fixtures. Rakuten,
+# TopCashBack, and BeFrugal are the three "Low difficulty" portals
+# from docs/CARD_REWARDS.md; Chase Shop Through Chase and Capital One
+# Shopping are deferred (auth-gated). See docs/CHANGELOG.md §Step 2h
+# decision #6 for the full reasoning.
 async def batch_portal_rates():
     portals = ["rakuten", "topcashback", "mr_rebates"]
     for portal in portals:
@@ -1072,8 +1082,18 @@ async def batch_rotating_categories():
 
 # ─── Job 3: Discount Program Verification ─────────────────────
 # Runs: Weekly
-# Method: Mix of agent-browser (for known pages) + probe agents (for dynamic ones)
-# Updates: discount_programs.last_verified
+# Original plan: Mix of agent-browser + probe agents
+# Updates: discount_programs.last_verified + consecutive_failures + is_active
+#
+# >>> IMPLEMENTED in Step 2h — backend/workers/discount_verification.py <<<
+# Real worker uses a plain httpx GET with Chrome headers and checks
+# whether the program name appears in the response body. Introduces a
+# "flagged but not failed" distinction: a 200 response without the
+# program name is a soft flag (operator review) that does NOT
+# increment the failure counter — a program rename should not
+# auto-deactivate. Only hard HTTP 4xx/5xx and network errors count
+# toward the 3-consecutive-failure deactivation threshold. The
+# `consecutive_failures` column was added by migration 0005.
 async def batch_verify_discount_programs():
     stale_programs = await get_programs_needing_verification(
         stale_threshold=timedelta(days=7)

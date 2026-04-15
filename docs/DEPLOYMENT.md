@@ -261,6 +261,125 @@ Demo mode (`BARKAIN_DEMO_MODE=1`) bypasses Clerk auth for these curl calls.
 
 ---
 
+## Background Workers (Step 2h)
+
+Step 2h ships four background worker commands plus a unified CLI runner at `scripts/run_worker.py`, backed by SQS. LocalStack emulates SQS locally via docker-compose; production points at real AWS SQS by leaving `SQS_ENDPOINT_URL` empty.
+
+### Local setup
+
+```bash
+# 1. Start LocalStack (first time only — docker-compose has it now)
+docker compose up -d localstack
+docker compose ps  # confirm barkain-localstack is healthy
+
+# 2. Create SQS queues (idempotent — safe to re-run)
+python3 scripts/run_worker.py setup-queues
+# Expected:
+#   queue ready: barkain-price-ingestion -> http://localhost:4566/000000000000/...
+#   queue ready: barkain-portal-scraping -> http://...
+#   queue ready: barkain-discount-verification -> http://...
+
+# 3. Inspect queues via aws CLI (optional)
+aws --endpoint-url http://localhost:4566 sqs list-queues --region us-east-1
+```
+
+### Running each worker
+
+```bash
+# Enqueue stale products (one-shot, designed for cron)
+python3 scripts/run_worker.py price-enqueue
+# Expected: "price-enqueue done: N messages"
+# Precondition: at least one product with prices.last_checked > 6h ago.
+# Quick seed for testing:
+#   docker exec barkain-db psql -U app -d barkain -c \
+#     "UPDATE prices SET last_checked = NOW() - interval '7 hours' WHERE product_id IS NOT NULL LIMIT 1;"
+
+# Process the ingestion queue (long-poll, Ctrl+C to stop)
+python3 scripts/run_worker.py price-process
+
+# Scrape portal rates (one-shot)
+python3 scripts/run_worker.py portal-rates
+# Expected: {"rakuten": N, "topcashback": N, "befrugal": N, "chase_shop_through_chase": 0, "capital_one_shopping": 0}
+
+# Verify discount URLs (one-shot, weekly)
+python3 scripts/run_worker.py discount-verify
+# Expected: {"checked": N, "verified": N, "flagged": 0, "failed": 0, "deactivated": 0}
+```
+
+### Cron schedule (production, UTC)
+
+```cron
+# Price refresh enqueue — every 6 hours
+0 */6 * * *   cd /path/to/barkain && python3 scripts/run_worker.py price-enqueue
+
+# Portal rate scrape — offset 30m so it doesn't race the price enqueue
+30 */6 * * *  cd /path/to/barkain && python3 scripts/run_worker.py portal-rates
+
+# Discount program verification — weekly Sunday 04:00
+0 4 * * 0     cd /path/to/barkain && python3 scripts/run_worker.py discount-verify
+
+# Watchdog health check — nightly 03:00 (legacy, separate CLI)
+0 3 * * *     cd /path/to/barkain && python3 scripts/run_watchdog.py --check-all
+```
+
+`price-process` is the one long-running command — run it as a systemd service or a supervised worker process, not from cron.
+
+### Production AWS SQS setup
+
+When ready to flip off LocalStack:
+
+1. **Create real queues** via `aws sqs create-queue` or Terraform:
+   ```bash
+   aws sqs create-queue --queue-name barkain-price-ingestion --region us-east-1
+   aws sqs create-queue --queue-name barkain-portal-scraping --region us-east-1
+   aws sqs create-queue --queue-name barkain-discount-verification --region us-east-1
+   ```
+
+2. **IAM policy** for the worker host (EC2/ECS/Lambda role):
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [{
+       "Effect": "Allow",
+       "Action": [
+         "sqs:SendMessage",
+         "sqs:ReceiveMessage",
+         "sqs:DeleteMessage",
+         "sqs:GetQueueUrl",
+         "sqs:CreateQueue"
+       ],
+       "Resource": [
+         "arn:aws:sqs:us-east-1:*:barkain-price-ingestion",
+         "arn:aws:sqs:us-east-1:*:barkain-portal-scraping",
+         "arn:aws:sqs:us-east-1:*:barkain-discount-verification"
+       ]
+     }]
+   }
+   ```
+
+3. **Env vars in production**:
+   ```
+   SQS_ENDPOINT_URL=              # empty → boto3 uses default chain
+   SQS_REGION=us-east-1
+   # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY inherit from IAM role
+   ```
+
+4. **Optional: dead-letter queues.** Configure `maxReceiveCount` on each queue so messages that fail repeatedly land on a DLQ for manual inspection. Not wired in Step 2h (latent ops hardening item).
+
+### Verification
+
+```bash
+# portal_bonuses populated
+docker exec barkain-db psql -U app -d barkain -c \
+    "SELECT portal_source, retailer_id, bonus_value, normal_value, is_elevated FROM portal_bonuses ORDER BY portal_source, retailer_id LIMIT 20;"
+
+# discount_programs verification stamps
+docker exec barkain-db psql -U app -d barkain -c \
+    "SELECT program_name, last_verified, consecutive_failures, is_active FROM discount_programs ORDER BY last_verified DESC NULLS LAST LIMIT 10;"
+```
+
+---
+
 ## Backend Deployment
 
 ### MVP: Railway
