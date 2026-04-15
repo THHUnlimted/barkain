@@ -40,6 +40,7 @@ struct ScannerView: View {
                     Image(systemName: "keyboard")
                         .accessibilityLabel("Enter UPC manually")
                 }
+                .accessibilityIdentifier("manualEntryButton")
             }
         }
         .sheet(isPresented: $showManualEntry) {
@@ -114,9 +115,11 @@ struct ScannerView: View {
                         .textInputAutocapitalization(.never)
                         .submitLabel(.go)
                         .onSubmit { submitManual(manualUPC) }
+                        .accessibilityIdentifier("upcTextField")
                     Button("Resolve") {
                         submitManual(manualUPC)
                     }
+                    .accessibilityIdentifier("resolveButton")
                 }
 
                 Section("Quick picks — untested UPCs") {
