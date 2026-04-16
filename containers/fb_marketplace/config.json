@@ -3,7 +3,7 @@
   "display_name": "Facebook Marketplace",
   "base_url": "https://www.facebook.com/marketplace",
   "script_version": "0.1.0",
-  "search_url_template": "https://www.facebook.com/marketplace/search?query=",
+  "search_url_template": "https://www.facebook.com/marketplace/{location}/search/?query={query}&exact=false",
   "default_condition": "used",
   "login_modal_handling": "hide_with_css",
   "login_modal_note": "Hide login modal with display:none. NEVER use .remove() — it breaks React virtual DOM reconciliation.",
