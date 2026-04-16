@@ -84,12 +84,14 @@ async def _seed_product_with_price(
     price: float,
     *,
     name: str = "Test Product",
+    brand: str = "Test",
+    category: str = "Electronics",
 ) -> Product:
     product = Product(
         name=name,
-        brand="Test",
+        brand=brand,
         upc="000000000000",
-        category="test",
+        category=category,
         source="test",
     )
     db_session.add(product)
@@ -306,6 +308,100 @@ async def test_eligible_discounts_inactive_excluded(db_session):
     assert "Retired Program" not in names
 
 
+# MARK: - Product relevance filtering
+
+
+async def test_brand_direct_filtered_by_product_brand(db_session):
+    """Apple.com discounts only appear for Apple products, not Samsung."""
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "apple_direct")
+    await _seed_retailer(db_session, "samsung_direct")
+    await _seed_retailer(db_session, "walmart_test")
+    await _seed_program(db_session, "apple_direct", "Military Discount", "military", discount_value=10)
+    await _seed_program(db_session, "samsung_direct", "Samsung Offer Program", "military", discount_value=30)
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_military=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+
+    apple_product = await _seed_product_with_price(db_session, "walmart_test", 999.00, brand="Apple")
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=apple_product.id)
+    retailer_ids = {d.retailer_id for d in resp.eligible_discounts}
+    assert "apple_direct" in retailer_ids
+    assert "samsung_direct" not in retailer_ids
+
+
+async def test_universal_retailer_always_shown(db_session):
+    """Amazon Prime Student shows regardless of product brand."""
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "amazon_test")
+    await _seed_retailer(db_session, "walmart_test")
+    await _seed_program(db_session, "amazon_test", "Prime Student", "student", discount_value=50)
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_student=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+
+    product = await _seed_product_with_price(db_session, "walmart_test", 500.00, brand="Apple")
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=product.id)
+    assert len(resp.eligible_discounts) == 1
+    assert resp.eligible_discounts[0].retailer_id == "amazon_test"
+
+
+async def test_no_filter_without_product_id(db_session):
+    """Without product_id, all eligible programs are returned (browse mode)."""
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "apple_direct")
+    await _seed_retailer(db_session, "samsung_direct")
+    await _seed_program(db_session, "apple_direct", "Military Discount", "military", discount_value=10)
+    await _seed_program(db_session, "samsung_direct", "Samsung Offer Program", "military", discount_value=30)
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_military=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=None)
+    assert len(resp.eligible_discounts) == 2
+
+
+async def test_category_filtered_programs(db_session):
+    """Home Depot discount only shows for Appliances category, not Electronics."""
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "home_depot_test")
+    await _seed_retailer(db_session, "walmart_test")
+    prog = await _seed_program(
+        db_session, "home_depot_test", "Military Discount", "military", discount_value=10
+    )
+    prog.applies_to_categories = ["Appliances", "Tools", "Home Improvement"]
+    await db_session.flush()
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_military=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+
+    electronics = await _seed_product_with_price(
+        db_session, "walmart_test", 500.00, brand="Sony", category="Electronics > Audio"
+    )
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=electronics.id)
+    assert len(resp.eligible_discounts) == 0
+
+    appliance = Product(
+        name="LG Washer", brand="LG", upc="222222222222",
+        category="Appliances > Washers", source="test",
+    )
+    db_session.add(appliance)
+    await db_session.flush()
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=appliance.id)
+    assert len(resp.eligible_discounts) == 1
+
+
 # MARK: - Savings math
 
 
@@ -314,7 +410,7 @@ async def test_eligible_discounts_percentage_savings(db_session):
     await _seed_user(db_session)
     await _seed_retailer(db_session, "samsung_direct")
     await _seed_retailer(db_session, "walmart_test")
-    product = await _seed_product_with_price(db_session, "walmart_test", 1500.00)
+    product = await _seed_product_with_price(db_session, "walmart_test", 1500.00, brand="Samsung")
     await _seed_program(
         db_session, "samsung_direct", "Samsung Offer Program", "military", discount_value=30
     )
@@ -361,7 +457,7 @@ async def test_eligible_discounts_fixed_amount(db_session):
     await _seed_user(db_session)
     await _seed_retailer(db_session, "samsung_direct")
     await _seed_retailer(db_session, "walmart_test")
-    product = await _seed_product_with_price(db_session, "walmart_test", 1500.00)
+    product = await _seed_product_with_price(db_session, "walmart_test", 1500.00, brand="Samsung")
     await _seed_program(
         db_session,
         "samsung_direct",
@@ -404,7 +500,7 @@ async def test_eligible_discounts_no_prices_no_savings(db_session):
     await _seed_user(db_session)
     await _seed_retailer(db_session, "samsung_direct")
     product = Product(
-        name="Unpriced Product", upc="111111111111", source="test"
+        name="Unpriced Product", upc="111111111111", brand="Samsung", source="test"
     )
     db_session.add(product)
     await db_session.flush()

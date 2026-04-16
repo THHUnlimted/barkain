@@ -601,12 +601,22 @@ CLAUDE.md                                                  # v5.1 → v5.2, 2i-d
 5. **Deferred retailers: 3/4 pass, 1 hangs (lowes).** sams_club / home_depot / backmarket are now the 7th / 8th / 9th retailers validated on x86. lowes needs a separate debugging session — the symptom is a 120+ s extract timeout, which points at Chromium / Xvfb init inside the container, not at selector drift. Classified as `2i-d-L2` for Phase 3.
 
 **Tests:**
-- Backend: **302 passed / 6 skipped** — unchanged. Watchdog path fix has no unit-test coverage gap (the 2h tests stubbed the filesystem); a direct assertion on `CONTAINERS_ROOT` would re-mock the same layer. Real protection is the live smoke test documented here.
+- Backend: **306 passed / 6 skipped** (+4 identity discount relevance filter tests). Watchdog path fix has no unit-test coverage gap (the 2h tests stubbed the filesystem); a direct assertion on `CONTAINERS_ROOT` would re-mock the same layer. Real protection is the live smoke test documented here.
 - iOS unit: **66** — unchanged.
 - iOS UI: **2** (`testManualUPCEntryToAffiliateSheet` + existing `testLaunch`).
 - ruff: clean on `backend/ scripts/`.
 
 **Verdict:** Step 2i-d ships clean. Phase 2 closes. The watchdog path bug is a real pre-`v0.2.0` fix that wouldn't have been caught without operational validation on first real run — same value proposition as 2i-c's worker-script FK bug. The leaked PAT is off EC2 disk; Mike's remaining deliverables are (1) revoke the token in GitHub UI (SP-L1-b), (2) keep the real `ANTHROPIC_API_KEY` in `.env`, (3) tag `v0.2.0` post-merge.
+
+**Addendum — Facebook Marketplace Decodo proxy fix (2026-04-15):**
+- Facebook gates Marketplace by IP reputation: AWS datacenter IPs (AS14618) get a hard redirect to `/login/`; residential IPs see content with a dismissible overlay. Created `containers/fb_marketplace/proxy_relay.py` — an asyncio relay that listens on `localhost:18080` and forwards through Decodo's residential proxy (`gate.decodo.com:7000`) with `Proxy-Authorization` injected. POC: 17 listings returned via Decodo vs 0 direct. Rewrote `extract.sh` to start the relay, pass `--proxy-server=http://127.0.0.1:18080` to Chromium, and corrected the URL format to `/marketplace/{location}/search/?query=…&exact=false`.
+
+**Addendum — Identity discount product-relevance filter (2026-04-15):**
+- **Problem:** scanning an Apple product showed Samsung.com, LG.com, HP.com discounts — every eligible program appeared regardless of product. Scanning a Samsung appliance showed Apple.com discounts. No relevance filtering existed despite `applies_to_categories` and `excluded_brands` columns being in the schema since Step 2d.
+- **Fix:** added `IdentityService._is_relevant()` in `service.py` with two rules: (1) brand-direct retailers (`*_direct`) only surface when product brand matches (static map in `_BRAND_DIRECT_MAP`); (2) programs with `applies_to_categories` set only surface when the product category contains a match. Universal retailers (Amazon, Best Buy) always pass. Filter is applied only when `product_id` is provided — browse mode still returns all programs.
+- **Seed script:** added `applicable_brands` metadata to each brand-direct template (used in comments for documentation; actual enforcement is via the `_BRAND_DIRECT_MAP` in service code, not a DB column, to avoid a migration). Added `applies_to_categories` to Home Depot and Lowe's (`["Appliances", "Tools", "Home Improvement", "Home & Garden"]`). Updated `_expand_programs()` and the UPSERT SQL to write `applies_to_categories` to the DB.
+- **Tests:** +4 new tests (`test_brand_direct_filtered_by_product_brand`, `test_universal_retailer_always_shown`, `test_no_filter_without_product_id`, `test_category_filtered_programs`). Updated 3 existing savings tests to pass the correct brand for `samsung_direct` programs. Total: 306 backend (was 302).
+- **Files:** `backend/modules/m5_identity/service.py`, `backend/tests/modules/test_m5_identity.py`, `scripts/seed_discount_catalog.py`.
 
 ---
 

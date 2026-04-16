@@ -265,7 +265,7 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 | 2i-c | Operational validation: LocalStack workers end-to-end (caught + fixed worker model-registry FK bug), conftest schema-drift auto-recreate, CI `ruff check`, Phase 2 consolidation docs | — | — | #19 |
 | 2i-d | Operational validation: EC2 redeploy (11/11 containers, MD5 clean) + PAT scrub + Watchdog live `--check-all` (caught + fixed `CONTAINERS_ROOT` path bug) + deferred retailer validation (3/4 pass) + BarkainUITests E2E smoke test (manual UPC → SSE → affiliate sheet, `tag=barkain-20` verified in DB) | — | +1 UI | (this step) |
 
-**Test totals:** **302 backend** (302 passed / 6 skipped) + **66 iOS unit** + **2 iOS UI** = **370 tests**.
+**Test totals:** **306 backend** (306 passed / 6 skipped) + **66 iOS unit** + **2 iOS UI** = **374 tests**.
 `ruff check` clean. `xcodebuild` clean.
 
 **Migrations:** 0001 (initial schema, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert index + `discount_programs.consecutive_failures`) → 0006 (`chk_subscription_tier` CHECK on `users.subscription_tier`).
@@ -321,7 +321,7 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 ### Phase 2
 
 > - **SSE streaming:** `text/event-stream` with `asyncio.as_completed`; per-retailer events arrive progressively. iOS consumer uses a manual byte splitter (not `AsyncBytes.lines`) and falls back to the batch endpoint on any stream error (2c, 2c-fix)
-> - **Identity discounts:** zero-LLM pure-SQL matching < 150 ms; deduped by `(retailer_id, program_name)`; fetched AFTER the SSE loop exits OR AFTER batch fallback — never inside `.done` (would race still-streaming events); failure is non-fatal (2d)
+> - **Identity discounts:** zero-LLM pure-SQL matching < 150 ms; deduped by `(retailer_id, program_name)`; fetched AFTER SSE exits; failure non-fatal. **Product-relevance filter (2i-d):** brand-direct retailers only surface when product brand matches (`_BRAND_DIRECT_MAP`); category-restricted programs (Home Depot, Lowe's) only for matching categories; universal retailers always pass. `IdentityService._is_relevant`, applied only with `product_id` (2d, 2i-d)
 > - **Card matching priority:** rotating > user-selected > static > base rate, per card × retailer, `max()` in memory; inline subtitle on `PriceRow`. Cash+ / Customized Cash / Shopper Cash Rewards resolve per-user via `user_category_selections`, NOT seeded in `rotating_categories` (2e)
 > - **Two sources of truth for billing tier, by design:** iOS `SubscriptionService` reads RC SDK for UI gating (offline, instant); backend `users.subscription_tier` is the rate-limit authority; they converge via the RC webhook with up to 60 s accepted drift. RC demo app user id `"demo_user"` matches `settings.DEMO_MODE` (renamed from `BARKAIN_DEMO_MODE` in 2i-b) (2f)
 > - **Webhook idempotency:** SETNX dedup (`revenuecat:processed:{event.id}`, 7-day TTL) AND SET-not-delta math — replays produce the same final row (2f)

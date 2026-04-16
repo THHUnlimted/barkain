@@ -118,7 +118,7 @@ BRAND_RETAILERS: list[dict] = [
 #                    discount_type, discount_value, discount_max_value,
 #                    verification_method, verification_url, url, notes)
 _PROGRAM_TEMPLATES: list[dict] = [
-    # Apple
+    # Apple — brand-direct, only relevant for Apple products
     {
         "retailer_id": "apple_direct",
         "program_name": "Military & Veterans Discount",
@@ -131,6 +131,7 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.apple.com/shop/browse/home/veterans_military",
         "url": "https://www.apple.com/shop/browse/home/veterans_military",
         "discount_details": "10% off select products. Household family eligible. Cannot combine with education pricing.",
+        "applicable_brands": ["apple"],
     },
     {
         "retailer_id": "apple_direct",
@@ -144,8 +145,9 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.apple.com/us-hed/shop",
         "url": "https://www.apple.com/us-hed/shop",
         "discount_details": "Education Store pricing (5-10% depending on product). Back-to-school promo adds gift card.",
+        "applicable_brands": ["apple"],
     },
-    # Samsung
+    # Samsung — brand-direct, relevant for Samsung products
     {
         "retailer_id": "samsung_direct",
         "program_name": "Samsung Offer Program",
@@ -167,8 +169,9 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.samsung.com/us/shop/offer-program/military",
         "url": "https://www.samsung.com/us/shop/offer-program/military",
         "discount_details": "Up to 30% off. 2 products per category per calendar year.",
+        "applicable_brands": ["samsung"],
     },
-    # HP
+    # HP — brand-direct, relevant for HP products
     {
         "retailer_id": "hp_direct",
         "program_name": "Frontline Heroes Program",
@@ -187,6 +190,7 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.hp.com/us-en/shop/cv/hp-frontline-heroes",
         "url": "https://www.hp.com/us-en/shop/cv/hp-frontline-heroes",
         "discount_details": "Up to 40% military/first responders, up to 55% healthcare workers. Free shipping.",
+        "applicable_brands": ["hp"],
     },
     {
         "retailer_id": "hp_direct",
@@ -200,8 +204,9 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.hp.com/us-en/shop/cv/hp-education",
         "url": "https://www.hp.com/us-en/shop/cv/hp-education",
         "discount_details": "Education pricing (product-specific, up to ~40%).",
+        "applicable_brands": ["hp"],
     },
-    # Dell
+    # Dell — brand-direct
     {
         "retailer_id": "dell_direct",
         "program_name": "Military Store",
@@ -214,6 +219,7 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.dell.com/military",
         "url": "https://www.dell.com/military",
         "discount_details": "Extra 5% off. Requires WeSalute+ membership.",
+        "applicable_brands": ["dell"],
     },
     {
         "retailer_id": "dell_direct",
@@ -227,6 +233,7 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.dell.com/mpp",
         "url": "https://www.dell.com/mpp",
         "discount_details": "Up to 30% on select products. Employer email required.",
+        "applicable_brands": ["dell"],
     },
     {
         "retailer_id": "dell_direct",
@@ -240,8 +247,9 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.dell.com/en-us/lp/student",
         "url": "https://www.dell.com/en-us/lp/student",
         "discount_details": "Dell University pricing. Varies by product.",
+        "applicable_brands": ["dell"],
     },
-    # Lenovo
+    # Lenovo — brand-direct
     {
         "retailer_id": "lenovo_direct",
         "program_name": "Military Discount",
@@ -254,6 +262,7 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.lenovo.com/us/en/d/deals/military/",
         "url": "https://www.lenovo.com/us/en/d/deals/discount-programs/",
         "discount_details": "Extra 5% off sitewide. First responders additionally eligible.",
+        "applicable_brands": ["lenovo"],
     },
     {
         "retailer_id": "lenovo_direct",
@@ -267,8 +276,9 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.lenovo.com/us/en/d/deals/student/",
         "url": "https://www.lenovo.com/us/en/d/deals/student/",
         "discount_details": "Education pricing. Varies by product.",
+        "applicable_brands": ["lenovo"],
     },
-    # Microsoft
+    # Microsoft — brand-direct
     {
         "retailer_id": "microsoft_direct",
         "program_name": "Military Store",
@@ -281,6 +291,7 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.microsoft.com/en-us/store/b/military",
         "url": "https://www.microsoft.com/en-us/store/b/military",
         "discount_details": "10% off select products. Cannot combine with education or seasonal discounts.",
+        "applicable_brands": ["microsoft"],
     },
     {
         "retailer_id": "microsoft_direct",
@@ -294,8 +305,9 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.microsoft.com/en-us/store/b/education",
         "url": "https://www.microsoft.com/en-us/store/b/education",
         "discount_details": "10% off select products (K-12 + Higher Ed). Cannot combine with military discount.",
+        "applicable_brands": ["microsoft"],
     },
-    # Sony
+    # Sony — brand-direct
     {
         "retailer_id": "sony_direct",
         "program_name": "Identity Discount Program",
@@ -315,8 +327,9 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://electronics.sony.com",
         "url": "https://electronics.sony.com",
         "discount_details": "10% off electronics (TVs, headphones, cameras, consoles). Applied at checkout after ID.me verification.",
+        "applicable_brands": ["sony"],
     },
-    # LG
+    # LG — brand-direct, covers electronics + appliances
     {
         "retailer_id": "lg_direct",
         "program_name": "Appreciation Program",
@@ -338,8 +351,9 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.lg.com/us/appreciation-program",
         "url": "https://www.lg.com/us/appreciation-program",
         "discount_details": "Minimum 10% additional savings on appliances; up to 40-46% on select items.",
+        "applicable_brands": ["lg"],
     },
-    # Home Depot
+    # Home Depot — home improvement retailer, relevant for appliances/tools/home
     {
         "retailer_id": "home_depot",
         "program_name": "Military Discount",
@@ -352,8 +366,9 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.homedepot.com/c/military_discount_registration",
         "url": "https://www.homedepot.com/c/military",
         "discount_details": "$400 annual cap. Must register digitally. Spouses included. Expanded May 2025 to include tax-free shopping on 2M+ products.",
+        "applies_to_categories": ["Appliances", "Tools", "Home Improvement", "Home & Garden"],
     },
-    # Lowe's
+    # Lowe's — home improvement retailer
     {
         "retailer_id": "lowes",
         "program_name": "Honor Our Military",
@@ -366,8 +381,9 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.lowes.com/mylowes/mymilitarydiscount",
         "url": "https://www.lowes.com/l/about/honor-our-military",
         "discount_details": "$400 annual cap. Most full-price products. Cannot combine with sale pricing or Lowe's credit 5% discount. In-store only since 2024.",
+        "applies_to_categories": ["Appliances", "Tools", "Home Improvement", "Home & Garden"],
     },
-    # Amazon
+    # Amazon — universal retailer, no brand/category restriction
     {
         "retailer_id": "amazon",
         "program_name": "Prime Student",
@@ -402,6 +418,7 @@ def _expand_programs() -> list[dict]:
                 "verification_url": template["verification_url"],
                 "url": template["url"],
                 "discount_details": template["discount_details"],
+                "applies_to_categories": template.get("applies_to_categories"),
                 "is_active": True,
             }
             rows.append(row)
@@ -451,13 +468,15 @@ async def seed_discount_programs(session: AsyncSession) -> int:
                 INSERT INTO discount_programs (
                     retailer_id, program_name, program_type, eligibility_type,
                     discount_type, discount_value, discount_max_value,
-                    discount_details, verification_method, verification_url,
+                    discount_details, applies_to_categories,
+                    verification_method, verification_url,
                     url, is_active
                 )
                 VALUES (
                     :retailer_id, :program_name, :program_type, :eligibility_type,
                     :discount_type, :discount_value, :discount_max_value,
-                    :discount_details, :verification_method, :verification_url,
+                    :discount_details, :applies_to_categories,
+                    :verification_method, :verification_url,
                     :url, :is_active
                 )
                 ON CONFLICT (retailer_id, program_name, eligibility_type) DO UPDATE SET
@@ -466,6 +485,7 @@ async def seed_discount_programs(session: AsyncSession) -> int:
                     discount_value = EXCLUDED.discount_value,
                     discount_max_value = EXCLUDED.discount_max_value,
                     discount_details = EXCLUDED.discount_details,
+                    applies_to_categories = EXCLUDED.applies_to_categories,
                     verification_method = EXCLUDED.verification_method,
                     verification_url = EXCLUDED.verification_url,
                     url = EXCLUDED.url,

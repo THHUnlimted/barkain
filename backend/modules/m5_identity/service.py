@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core_models import Retailer
+from modules.m1_product.models import Product
 from modules.m2_prices.models import Price
 from modules.m5_identity.models import DiscountProgram, UserDiscountProfile
 from modules.m5_identity.schemas import (
@@ -118,6 +119,7 @@ class IdentityService:
             unique.append((prog, retailer_name))
 
         best_price: float | None = None
+        product: Product | None = None
         if product_id is not None:
             result = await self.db.execute(
                 select(Price.price)
@@ -128,6 +130,18 @@ class IdentityService:
             )
             raw = result.scalar_one_or_none()
             best_price = float(raw) if raw is not None else None
+
+            result = await self.db.execute(
+                select(Product).where(Product.id == product_id)
+            )
+            product = result.scalar_one_or_none()
+
+        if product is not None:
+            unique = [
+                (prog, rname)
+                for prog, rname in unique
+                if self._is_relevant(prog, product)
+            ]
 
         discounts = [self._build(prog, rname, best_price) for prog, rname in unique]
         # Sort: highest estimated savings first, then highest discount_value
@@ -198,6 +212,39 @@ class IdentityService:
             "government": profile.is_government,
         }
         return [k for k, v in mapping.items() if v]
+
+    # Maps brand-direct retailer IDs to the brand they sell.
+    _BRAND_DIRECT_MAP: dict[str, str] = {
+        "apple_direct": "apple",
+        "samsung_direct": "samsung",
+        "hp_direct": "hp",
+        "dell_direct": "dell",
+        "lenovo_direct": "lenovo",
+        "microsoft_direct": "microsoft",
+        "sony_direct": "sony",
+        "lg_direct": "lg",
+    }
+
+    @staticmethod
+    def _is_relevant(prog: DiscountProgram, product: "Product") -> bool:
+        """Filter discount programs by product brand and category.
+
+        Brand-direct retailers only show for matching brands. Programs with
+        applies_to_categories only show when the product category overlaps.
+        Universal retailers (Amazon, Best Buy, etc.) always pass.
+        """
+        retailer_brand = IdentityService._BRAND_DIRECT_MAP.get(prog.retailer_id)
+        if retailer_brand is not None:
+            product_brand = (product.brand or "").lower().strip()
+            if retailer_brand != product_brand:
+                return False
+
+        if prog.applies_to_categories:
+            product_cat = (product.category or "").lower()
+            if not any(cat.lower() in product_cat for cat in prog.applies_to_categories):
+                return False
+
+        return True
 
     @staticmethod
     def _build(
