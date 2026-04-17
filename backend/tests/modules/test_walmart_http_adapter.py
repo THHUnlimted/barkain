@@ -243,6 +243,32 @@ async def test_fetch_walmart_without_credentials_reports_adapter_error():
     assert "DECODO_PROXY_USER" in result.error.message
 
 
+# MARK: - Proxy Scoping Regression Guards (SP-decodo-scoping, 2026-04-17)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_walmart_makes_exactly_one_request_per_call():
+    """The Decodo-scoped HTTP adapter is a single GET per invocation — it must
+    never follow subresource URLs from the returned HTML. Any future refactor
+    that accidentally adds image/script fetching would inflate per-scrape
+    bandwidth by 10–100× on paid residential bytes."""
+    cfg = _test_settings()
+    route = respx.get("https://www.walmart.com/search").mock(
+        return_value=httpx.Response(
+            200, text=NEXT_DATA_SAMPLE, headers={"content-type": "text/html"}
+        )
+    )
+
+    result = await fetch_walmart(query="one-shot", cfg=cfg)
+
+    assert result.error is None
+    assert route.call_count == 1, (
+        f"walmart_http must make exactly one request per call, made {route.call_count}. "
+        "A subresource loader has likely been accidentally introduced."
+    )
+
+
 # MARK: - Parser-specific edge cases
 
 

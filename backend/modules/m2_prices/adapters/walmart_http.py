@@ -147,9 +147,13 @@ async def fetch_walmart(
             elapsed_ms = int((time.perf_counter() - start) * 1000)
             wire_bytes = len(resp.content or b"")
 
-            # Log bandwidth per request for cost observability
+            # Structured per-request bandwidth log for cost observability.
+            # Format is key=value so `docker logs | grep adapter=walmart_http`
+            # + simple awk slices give accurate Decodo-per-scrape accounting
+            # without an exporter. See docs/SCRAPING_AGENT_ARCHITECTURE.md §C.11.
             logger.info(
-                "walmart_http attempt=%d status=%s wire_bytes=%d elapsed_ms=%d",
+                "adapter=walmart_http target=%s attempt=%d status=%s wire_bytes=%d elapsed_ms=%d",
+                search_url,
                 attempts,
                 resp.status_code,
                 wire_bytes,

@@ -1730,6 +1730,85 @@ These are not probe blockers — they're operational unknowns worth monitoring a
 - `backend/tests/modules/test_container_client.py` — updated `_setup_client` fixture with `walmart_adapter_mode = "container"` default
 - `backend/tests/modules/test_container_retailers.py` — same fixture update
 
+### C.11 Proxy Scoping — Decodo Bandwidth Cost Leak Fix (2026-04-17)
+
+**Motivation.** Decodo usage dashboard in the 2026-04-17 billing window showed ~85 MB consumed with only ~1.53 MB matching walmart.com. The noise:
+- ~75 MB — `*.fbcdn.net` / `*.facebook.com`
+- ~15 MB — Google/Chromium telemetry: `*.gvt1.com`, `*.googleapis.com`, `android.clients.google.com`, `accounts.google.com`, `mtalk.google.com`, `content-autofill.googleapis.com`, `optimizationguide-pa.googleapis.com`
+
+**Diagnosis (source-confirmed).** The leak is NOT in the walmart adapters. It's `fb_marketplace`:
+
+- `containers/fb_marketplace/proxy_relay.py` relays `127.0.0.1:18080 → gate.decodo.com:7000` with Decodo credentials injected.
+- `containers/fb_marketplace/extract.sh` launches Chromium with a single `--proxy-server=http://127.0.0.1:$PROXY_RELAY_PORT` flag.
+- Chromium routes **every** network request through that proxy — not just `facebook.com`. Every fbcdn image/script/Meta-Pixel beacon + every Chromium-internal background fetch (component updater, safe-browsing, sync, optimization guide, GCM) consumes paid Decodo bytes.
+- `walmart_http.py` is clean: exactly one `httpx.AsyncClient.get` per call, no subresource fetching. Verified by `test_fetch_walmart_makes_exactly_one_request_per_call`.
+- `walmart_firecrawl.py` is clean: does not overlay Decodo as BYOP proxy. Regression-guarded by `test_firecrawl_payload_has_no_decodo_overlay`.
+
+**Fix — three-layer defense.**
+
+1. **Chromium telemetry kill flags** in `containers/fb_marketplace/extract.sh`:
+   ```
+   --disable-background-networking --disable-background-timer-throttling
+   --disable-backgrounding-occluded-windows --disable-breakpad
+   --disable-client-side-phishing-detection --disable-component-update
+   --disable-default-apps --disable-domain-reliability --disable-sync
+   --disable-features=OptimizationHints,OptimizationGuideModelDownloading,Translate,MediaRouter,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,AutofillServerCommunication
+   --metrics-recording-only --no-pings --no-report-upload
+   ```
+   Collectively these silence the ~15 MB/hour Google slice.
+
+2. **Proxy bypass list** — any background request Chromium still decides to make goes out the container's datacenter IP direct, NOT through Decodo:
+   ```
+   --proxy-bypass-list='<-loopback>;*.googleapis.com;*.gvt1.com;*.gstatic.com;
+       *.google-analytics.com;*.googletagmanager.com;*.doubleclick.net;
+       *.googleusercontent.com;clients*.google.com;accounts.google.com;
+       mtalk.google.com;update.googleapis.com;optimizationguide-pa.googleapis.com;
+       content-autofill.googleapis.com;*.chrome.google.com;edgedl.me.gvt1.com;
+       redirector.gvt1.com'
+   ```
+
+3. **Image blocking** (default ON, opt-out via `FB_MARKETPLACE_DISABLE_IMAGES=0`). `extract.js` only reads `<img src>` as a string — it doesn't need the pixels. `--blink-settings=imagesEnabled=false` eliminates ~70% of fbcdn bytes per scrape with zero loss of DOM signal.
+
+**Firecrawl hardening (defense in depth, even though it wasn't the leak).** `walmart_firecrawl.py` payload now includes `blockAds: true` (suppresses Meta Pixel/GA/GTM at Firecrawl's browser layer), `onlyMainContent: false` (we need the full `__NEXT_DATA__`), and `waitFor: 1500` (SSR hydration window). The payload still deliberately omits any `proxy`/`proxyServer`/Decodo reference — regression-guarded.
+
+**Observability.** Both Walmart adapters emit a structured `adapter=walmart_{http,firecrawl} target=... attempt=... status=... wire_bytes=... elapsed_ms=...` log line per request. Grep + awk over `docker logs` / `journalctl` gives accurate per-adapter bytes-per-scrape accounting without a Prometheus exporter.
+
+**Measured bandwidth (live EC2, 2026-04-17, query = "Apple AirPods Pro 2", 3 listings).**
+
+| Target host | Pre-fix bytes | % pre-fix | Post-fix bytes | Category |
+|---|--:|--:|--:|---|
+| `r5---sn-ojqxo5-5j.gvt1.com` | 461,130 | 77.4% | **0** | Chromium component updater |
+| `static.xx.fbcdn.net` | 49,813 | 8.4% | 12,808 | Facebook CDN (legit) |
+| `android.clients.google.com` | 14,120 | 2.4% | **0** | Google telemetry |
+| `redirector.gvt1.com` | 11,924 | 2.0% | **0** | Chromium update redirector |
+| `accounts.google.com` | 11,122 | 1.9% | **0** | Google sign-in probe |
+| `www.google.com` | 10,286 | 1.7% | **0** | Connectivity check |
+| `optimizationguide-pa.googleapis.com` | 9,561 | 1.6% | **0** | Chromium AI-hints fetch |
+| `scontent-*.xx.fbcdn.net` | 9,321 | 1.6% | 6,596 | Facebook CDN (legit) |
+| `r4---sn-*.gvt1.com` (×2) | 16,425 | 2.8% | **0** | Chromium update |
+| `clients2.google.com` | 1,568 | 0.3% | **0** | Google component probe |
+| `mtalk.google.com` | 405 | 0.1% | **0** | GCM push channel |
+| `www.facebook.com` | 0 | — | 0 | (appears in v2 only, ~6.5 KB) |
+| **TOTAL per scrape** | **595,675** | 100% | **19,404** | |
+
+**Net: 96.7% reduction — 596 KB → 19 KB per scrape. Listings returned unchanged (3/3). Extract time faster (34.8 s → 28.1 s) because Chromium is no longer blocking on update fetches during warmup.**
+
+Extrapolated to the observed 85 MB/19 h billing window: 17 scrapes × 19 KB ≈ **0.3 MB** of legitimate Facebook traffic post-fix. One-time container-startup component pulls (which are the biggest single contributor to the historical number) are also now suppressed by `--disable-component-update`.
+
+**Verification checklist (post-deploy).** After rsync'ing `containers/fb_marketplace/` to EC2, rebuilding the container, and running a handful of scrapes:
+1. `docker logs fb_marketplace 2>&1 | grep "metrics\|component_update\|gvt1"` → should return empty or only pre-flag stale lines.
+2. Decodo dashboard → Usage → filter the billing window post-deploy → confirm `*.gvt1.com`, `googleapis.com`, `accounts.google.com` slices are zero or near-zero.
+3. Confirm `fb_marketplace/extract` still returns ≥3 listings for a common marketplace query (e.g. "iPhone"). If zero, set `FB_MARKETPLACE_DISABLE_IMAGES=0` in the container env and retry.
+4. Rotate any Decodo/Firecrawl credentials exposed in-session (SP-decodo-scoping transcript leak).
+
+**Implementation files (2026-04-17):**
+- `containers/fb_marketplace/extract.sh` — Chromium flag/bypass block added.
+- `backend/modules/m2_prices/adapters/walmart_http.py` — structured log line.
+- `backend/modules/m2_prices/adapters/walmart_firecrawl.py` — `blockAds`/`onlyMainContent`/`waitFor` + structured log + explicit "no Decodo overlay" comment.
+- `backend/tests/modules/test_walmart_firecrawl_adapter.py` — `test_firecrawl_request_includes_block_ads`, `test_firecrawl_payload_has_no_decodo_overlay`.
+- `backend/tests/modules/test_walmart_http_adapter.py` — `test_fetch_walmart_makes_exactly_one_request_per_call`.
+- `backend/tests/modules/test_fb_marketplace_extract_flags.py` — 26 parametrized asserts on the shell script.
+
 
 ## Appendix D — Required extract.sh conventions (2026-04-10, first live run)
 

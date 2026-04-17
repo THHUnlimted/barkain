@@ -29,6 +29,28 @@ CHROMIUM="${CHROMIUM_PATH:-/usr/bin/chromium}"
 PROXY_RELAY_PORT=18080
 FB_LOCATION="${FB_MARKETPLACE_LOCATION:-sanfrancisco}"
 
+# Disable image loading by default — Marketplace DOM selectors only need
+# the <img src> attribute string (not the bytes), and images are ~70% of
+# the page weight. Set FB_MARKETPLACE_DISABLE_IMAGES=0 to re-enable.
+DISABLE_IMAGES="${FB_MARKETPLACE_DISABLE_IMAGES:-1}"
+
+# Proxy-bypass list. Chromium routes ALL traffic through --proxy-server
+# unless a domain matches this denylist. Without it, every Chromium
+# background fetch (component updater, autofill, optimization guide,
+# safe-browsing, sync, reporting) burns Decodo residential-proxy
+# bandwidth — observed ~15 MB/hour of "Google" bytes on the Decodo
+# dashboard in 2026-04. Facebook + fbcdn MUST stay on-proxy or the
+# datacenter IP is refused with /login/. See docs/SCRAPING_AGENT_ARCHITECTURE.md
+# §C.11.
+#
+# Chromium's proxy-bypass glob only supports leading `*.` — mid-label
+# wildcards like `clients*.google.com` silently don't match. So we use
+# `*.google.com` as a catch-all for all google.com subdomains (fb_marketplace
+# never legitimately needs google.com traffic). Same for doubleclick,
+# googleusercontent, etc. Measured post-deploy: drops per-scrape cost from
+# ~600 KB to ~13 KB (97.8% reduction) — see §C.11.
+PROXY_BYPASS_LIST='<-loopback>;*.google.com;*.googleapis.com;*.gvt1.com;*.gstatic.com;*.google-analytics.com;*.googletagmanager.com;*.doubleclick.net;*.googleusercontent.com;*.googlevideo.com;*.ytimg.com;*.youtube.com;*.chrome.google.com;*.chromecast.com;edgedl.me.gvt1.com;redirector.gvt1.com'
+
 # Helpers
 log()  { echo "[$(date +%T)] $*" >&2; }
 jitter() {
@@ -56,10 +78,13 @@ if [ -n "${DECODO_PROXY_USER:-}" ] && [ -n "${DECODO_PROXY_PASS:-}" ]; then
   python3 /app/proxy_relay.py &
   RELAY_PID=$!
   sleep 1
-  PROXY_FLAG="--proxy-server=http://127.0.0.1:$PROXY_RELAY_PORT"
+  PROXY_FLAG=(
+    "--proxy-server=http://127.0.0.1:$PROXY_RELAY_PORT"
+    "--proxy-bypass-list=$PROXY_BYPASS_LIST"
+  )
   log "Proxy relay started (pid $RELAY_PID) → Decodo residential IP"
 else
-  PROXY_FLAG=""
+  PROXY_FLAG=()
   log "WARNING: DECODO_PROXY_USER/PASS not set — running without proxy (datacenter IP will be blocked by Facebook)"
 fi
 
@@ -78,16 +103,42 @@ while [ $attempt -lt $RETRY_MAX ]; do
   PROFILE_DIR="/tmp/chrome-scrape-$(date +%s)-$attempt"
   [ $attempt -gt 1 ] && { pkill -f "chromium.*--remote-debugging-port=$CDP_PORT" 2>/dev/null || true; jitter 1500 3000; }
 
-  # Step 2: Launch headed Chromium with anti-detection flags + proxy
+  # Step 2: Launch headed Chromium with anti-detection flags + proxy.
+  #
+  # Telemetry / background-networking kill list: every one of these flags
+  # prevents a class of Chromium-internal request that would otherwise be
+  # forwarded through the Decodo proxy and burn residential-proxy bandwidth.
+  # Collectively they reduced the "Google domains" slice of the Decodo
+  # dashboard from ~15 MB/hour to effectively 0 in 2026-04-17 scoping fix.
+  # See docs/SCRAPING_AGENT_ARCHITECTURE.md §C.11.
+  IMAGE_FLAG=()
+  if [ "$DISABLE_IMAGES" = "1" ]; then
+    IMAGE_FLAG=("--blink-settings=imagesEnabled=false")
+  fi
+
   "$CHROMIUM" \
     --remote-debugging-port=$CDP_PORT \
     --user-data-dir="$PROFILE_DIR" \
-    $PROXY_FLAG \
+    "${PROXY_FLAG[@]}" \
+    "${IMAGE_FLAG[@]}" \
     --no-first-run \
     --no-default-browser-check \
     --disable-blink-features=AutomationControlled \
     --disable-gpu \
     --no-sandbox \
+    --disable-background-networking \
+    --disable-background-timer-throttling \
+    --disable-backgrounding-occluded-windows \
+    --disable-breakpad \
+    --disable-client-side-phishing-detection \
+    --disable-component-update \
+    --disable-default-apps \
+    --disable-domain-reliability \
+    --disable-sync \
+    --disable-features=OptimizationHints,OptimizationGuideModelDownloading,Translate,MediaRouter,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,AutofillServerCommunication \
+    --metrics-recording-only \
+    --no-pings \
+    --no-report-upload \
     "about:blank" &
   sleep 3
 

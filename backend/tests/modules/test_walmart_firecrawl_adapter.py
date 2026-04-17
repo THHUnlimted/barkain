@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import httpx
@@ -202,6 +203,62 @@ async def test_firecrawl_empty_body_is_reported():
 
     assert result.error is not None
     assert result.error.code == "FIRECRAWL_EMPTY_BODY"
+
+
+# MARK: - Proxy Scoping Regression Guards (SP-decodo-scoping, 2026-04-17)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_firecrawl_request_includes_block_ads():
+    """blockAds: true must be in the payload — suppresses Meta Pixel / GA / GTM
+    subresource fetches at Firecrawl's browser layer. Regression guard: if
+    someone removes the flag thinking it's unnecessary, this catches it."""
+    cfg = _test_settings()
+    route = respx.post("https://api.firecrawl.dev/v1/scrape").mock(
+        return_value=httpx.Response(
+            200, json={"success": True, "data": {"rawHtml": NEXT_DATA_SAMPLE}}
+        )
+    )
+
+    await fetch_walmart(query="test", cfg=cfg)
+
+    body = json.loads(route.calls[0].request.content.decode())
+    assert body["blockAds"] is True
+    assert body["onlyMainContent"] is False
+    assert body["waitFor"] == 1500
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_firecrawl_payload_has_no_decodo_overlay():
+    """Firecrawl's managed pool handles Walmart — we must NEVER forward
+    Decodo credentials into the Firecrawl payload (double-billing + leak).
+    Even when DECODO_PROXY_* env is populated, the request body must not
+    reference Decodo, the creds, or a BYOP proxy field."""
+    cfg = _test_settings(
+        DECODO_PROXY_USER="sentinel-user-abc",
+        DECODO_PROXY_PASS="sentinel-pass-xyz",
+    )
+    route = respx.post("https://api.firecrawl.dev/v1/scrape").mock(
+        return_value=httpx.Response(
+            200, json={"success": True, "data": {"rawHtml": NEXT_DATA_SAMPLE}}
+        )
+    )
+
+    await fetch_walmart(query="test", cfg=cfg)
+
+    body_raw = route.calls[0].request.content.decode()
+    body = json.loads(body_raw)
+
+    for forbidden_key in ("proxy", "proxyServer", "proxyUrl", "upstream"):
+        assert forbidden_key not in body, (
+            f"Firecrawl payload must not contain BYOP field {forbidden_key!r}"
+        )
+    assert "sentinel-user-abc" not in body_raw
+    assert "sentinel-pass-xyz" not in body_raw
+    assert "decodo" not in body_raw.lower()
+    assert "gate.decodo" not in body_raw.lower()
 
 
 # MARK: - First-Party Filter (Step 2b — SP-L5)
