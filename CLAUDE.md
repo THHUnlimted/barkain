@@ -146,7 +146,7 @@ python3 scripts/run_worker.py price-process     # long-poll worker
 
 **Backend:** FastAPI (Python 3.12+). Per-module layout: `router.py`, `service.py`, `schemas.py`. Modules communicate via direct imports. All LLM calls go through `backend/ai/abstraction.py` — never import `google.genai` / `anthropic` / `openai` directly from a module.
 
-**Scrapers:** Per-retailer Docker containers (Chromium + agent-browser CLI + extraction script + Watchdog). Walmart uses an HTTP adapter (`WALMART_ADAPTER={container,firecrawl,decodo_http}`) instead of the browser container — PerimeterX defeats headless Chromium but the `__NEXT_DATA__` JSON is server-rendered before JS runs.
+**Scrapers:** Per-retailer Docker containers (Chromium + agent-browser CLI + extraction script + Watchdog). Walmart uses an HTTP adapter (`WALMART_ADAPTER={decodo_http (default),firecrawl,container}`) instead of the browser container — PerimeterX defeats headless Chromium but the `__NEXT_DATA__` JSON is server-rendered before JS runs. Firecrawl is currently non-functional (100% CHALLENGE response) as of 2026-04-17; kept selectable for future recovery.
 
 **Zero-LLM matching:** Identity discounts, card rewards, rotating categories, and portal bonuses are stored in PostgreSQL and resolved via pure SQL joins at query time. Claude Sonnet is only used for the final recommendation synthesis (Phase 3+).
 
@@ -263,14 +263,14 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 | 2i-a | CLAUDE.md compaction + guiding-doc sweep | — | — | #17 |
 | 2i-b | Code quality sweep: `DEMO_MODE` rename, dead branches removed, `_classify_retailer_result` extraction, migration 0006 | +1 | — | #18 |
 | 2i-c | Operational validation: LocalStack workers end-to-end (caught + fixed worker model-registry FK bug), conftest schema-drift auto-recreate, CI `ruff check`, Phase 2 consolidation docs | — | — | #19 |
-| 2i-d | EC2 redeploy (11/11 containers, MD5 clean) + PAT scrub + Watchdog live `--check-all` (`CONTAINERS_ROOT` fix) + BarkainUITests E2E smoke | — | +1 UI | — |
+| 2i-d | EC2 redeploy (11/11 containers, MD5 clean) + PAT scrub + Watchdog live `--check-all` (`CONTAINERS_ROOT` fix) + BarkainUITests E2E smoke | — | +1 UI | #20, #21 |
 
 **Phase 3 — Recommendation Intelligence: IN PROGRESS**
 
 | Step | What | Backend tests | iOS tests | PR |
 |------|------|:-:|:-:|:-:|
-| 3a | M1 Product Text Search: `POST /products/search` + pg_trgm + Gemini fallback + SearchView | +10 | +6 unit/+1 UI | #23 |
-| 3b | eBay Marketplace Deletion webhook (GDPR) + Browse API adapter replacing `ebay_new`/`ebay_used` scrapers (sub-second, +API) + FastAPI deploy on scraper EC2 (Caddy+LE) | +13 | — | (this PR) |
+| 3a | M1 Product Text Search: `POST /products/search` + pg_trgm + Gemini fallback + SearchView (base + sim-testing follow-ups) | +10 | +6 unit/+1 UI | #22, #23 |
+| 3b | eBay Marketplace Deletion webhook (GDPR) + Browse API adapter replacing `ebay_new`/`ebay_used` scrapers (sub-second, +API) + FastAPI deploy on scraper EC2 (Caddy+LE) | +13 | — | #24 |
 
 **Test totals:** **335 backend** (335 passed / 6 skipped) + **72 iOS unit** + **3 iOS UI** = **410 tests**.
 `ruff check` clean. `xcodebuild` clean.
@@ -299,14 +299,9 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 
 ## What's Next
 
-1. **Step 2i — Hardening sweep COMPLETE:**
-   - **2i-a** ✅ — CLAUDE.md compaction + guiding-doc sweep (#17)
-   - **2i-b** ✅ — Code quality + dead-code removal + renames + dedup extraction (#18)
-   - **2i-c** ✅ — Operational validation (LocalStack workers) + conftest drift detection + CI ruff + Phase 2 consolidation (#19)
-   - **2i-d** ✅ — Operational validation (EC2 redeploy 11/11 containers, MD5 clean; Watchdog `CONTAINERS_ROOT` path bug caught+fixed; BarkainUITests E2E smoke test lands; PAT scrubbed from EC2 `.git/config`) (this PR)
-   - **`v0.2.0` tag** — Mike action post-merge: revoke leaked PAT `gho_UUsp9ML7…` in GitHub UI (SP-L1-b), then `git checkout main && git pull && git tag -a v0.2.0 -m "Phase 2: Intelligence Layer" && git push origin v0.2.0`. Real `ANTHROPIC_API_KEY` was populated mid-step 2i-d and heal pipeline is already verified end-to-end.
-2. **Phase 3 — Recommendation Intelligence:** AI synthesis via Claude Sonnet, stacking rules, portal bonus display, coupon discovery, receipt scanning
-3. **Phase 4 — Production Optimization:** Best Buy / eBay Browse / Keepa API adapters for speed, App Store submission, Sentry error tracking
+1. **Phase 2 CLOSED** — `v0.2.0` tagged (2026-04-16). Outstanding: revoke leaked PAT `gho_UUsp9ML7…` in GitHub UI (SP-L1-b, Mike).
+2. **Phase 3 — Recommendation Intelligence (IN PROGRESS):** 3a ✅ text search (#22, #23). 3b ✅ eBay Browse API + deletion webhook (#24). Next: 3c M6 Recommendation Engine (Claude Sonnet synthesis), 3d card rewards, 3e portal stacking, 3f image scan, 3g receipts, 3h identity stacking, 3i savings dashboard, 3j coupons, 3k hardening + `v0.3.0`.
+3. **Phase 4 — Production Optimization:** Best Buy / Keepa API adapters, App Store submission, Sentry error tracking
 4. **Phase 5 — Growth:** Push notifications (APNs), web dashboard, Android (KMP)
 
 ---

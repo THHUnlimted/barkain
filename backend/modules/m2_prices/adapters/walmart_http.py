@@ -38,6 +38,11 @@ logger = logging.getLogger("barkain.m2.walmart_http")
 _SEARCH_URL_TEMPLATE = "https://www.walmart.com/search?q={query}"
 _REQUEST_TIMEOUT = 30  # seconds
 
+# PerimeterX retry budget — initial attempt + 2 retries on CHALLENGE only.
+# Retries rotate the Decodo residential IP, so a different egress often gets
+# through. Never retries on other failure modes.
+CHALLENGE_MAX_ATTEMPTS = 3
+
 # Chrome 132 header set — matches the fingerprint that passed in our AWS
 # residential-proxy probe (docs/SCRAPING_AGENT_ARCHITECTURE.md Appendix C.1).
 _CHROME_HEADERS = {
@@ -120,11 +125,15 @@ async def fetch_walmart(
             message=str(e),
         )
 
+    # Retry budget is CHALLENGE-only. PerimeterX hits a rotating residential IP
+    # pool — the next attempt draws a different egress IP, so a clean retry is
+    # often enough to land on a non-challenged response. Every other failure
+    # mode (HTTP_ERROR, PARSE_ERROR, TIMEOUT, NETWORK_ERROR, NO_LISTINGS)
+    # fails fast: no amount of retrying helps those.
     attempts = 0
-    max_attempts = 2  # one retry on challenge or parse failure
     last_error: tuple[str, str, dict] | None = None
 
-    while attempts < max_attempts:
+    while attempts < CHALLENGE_MAX_ATTEMPTS:
         attempts += 1
         try:
             async with httpx.AsyncClient(
@@ -153,7 +162,7 @@ async def fetch_walmart(
                     f"Walmart returned HTTP {resp.status_code}",
                     {"status_code": resp.status_code, "attempt": attempts},
                 )
-                continue  # retry
+                break  # fail fast — upstream error won't fix itself
 
             html = resp.text
 
@@ -164,8 +173,9 @@ async def fetch_walmart(
                     {"attempt": attempts, "wire_bytes": wire_bytes},
                 )
                 logger.warning(
-                    "walmart_http challenge detected on attempt %d (wire=%d)",
+                    "walmart_http challenge detected on attempt %d/%d (wire=%d)",
                     attempts,
+                    CHALLENGE_MAX_ATTEMPTS,
                     wire_bytes,
                 )
                 continue  # retry — rotating residential IP may succeed next time
@@ -174,8 +184,8 @@ async def fetch_walmart(
                 listings = extract_listings(html, max_listings=max_listings)
             except ValueError as e:
                 last_error = ("PARSE_ERROR", str(e), {"attempt": attempts})
-                logger.warning("walmart_http parse failed on attempt %d: %s", attempts, e)
-                continue
+                logger.warning("walmart_http parse failed: %s", e)
+                break  # fail fast — page shape drift needs code, not retry
 
             if not listings:
                 last_error = (
@@ -183,8 +193,7 @@ async def fetch_walmart(
                     "Walmart returned a valid page with zero parseable listings",
                     {"attempt": attempts},
                 )
-                # Don't retry on empty results — the query is probably niche
-                break
+                break  # empty result is a real answer, not a failure to retry
 
             return build_success_response(
                 query=query,
@@ -197,7 +206,7 @@ async def fetch_walmart(
         except httpx.TimeoutException as e:
             last_error = ("TIMEOUT", f"Request timed out: {e}", {"attempt": attempts})
             logger.warning("walmart_http timeout on attempt %d", attempts)
-            continue
+            break
 
         except httpx.HTTPError as e:
             last_error = (
@@ -206,7 +215,7 @@ async def fetch_walmart(
                 {"attempt": attempts},
             )
             logger.warning("walmart_http network error on attempt %d: %s", attempts, e)
-            continue
+            break
 
         except Exception as e:  # pragma: no cover — defensive safety net
             logger.exception("walmart_http unexpected error on attempt %d", attempts)

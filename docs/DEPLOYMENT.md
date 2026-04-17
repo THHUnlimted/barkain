@@ -171,10 +171,15 @@ AFFILIATE_WEBHOOK_SECRET=
 # Selects which path handles walmart scrapes. All other retailers always use
 # the container dispatch. See docs/ARCHITECTURE.md#walmart-adapter-routing and
 # docs/SCRAPING_AGENT_ARCHITECTURE.md Appendices A–C.
-#   container    — legacy browser container (broken on any cloud, do not use)
-#   firecrawl    — demo path via Firecrawl managed API (default for demo)
-#   decodo_http  — production path via Decodo residential proxy
-WALMART_ADAPTER=firecrawl
+#   decodo_http  — DEFAULT. Production path via Decodo US residential proxy
+#                  (flipped from `firecrawl` default on 2026-04-17 after
+#                  Firecrawl's upstream started returning PerimeterX
+#                  challenge pages 100% of the time on Walmart).
+#   firecrawl    — legacy demo path via Firecrawl managed API, currently
+#                  non-functional for Walmart. Retry logic now mirrors
+#                  Decodo's (3 attempts on CHALLENGE, fail-fast on others).
+#   container    — legacy browser container, broken on any cloud IP.
+WALMART_ADAPTER=decodo_http
 
 # ── Firecrawl (walmart demo path) ─────────────────────
 # Get your API key from https://firecrawl.dev/app/api-keys

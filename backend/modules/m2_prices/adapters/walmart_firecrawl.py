@@ -41,6 +41,13 @@ _SEARCH_URL_TEMPLATE = "https://www.walmart.com/search?q={query}"
 _FIRECRAWL_ENDPOINT = "https://api.firecrawl.dev/v1/scrape"
 _REQUEST_TIMEOUT = 45  # Firecrawl is slower than direct proxy — 7-30s typical
 
+# PerimeterX retry budget — initial attempt + 2 retries on CHALLENGE only.
+# Firecrawl normally absorbs anti-bot internally; when a challenge does slip
+# through, a second call usually lands on a different upstream egress path
+# and succeeds. Never retries on other failure modes (HTTP 4xx/5xx, timeout,
+# network, empty body, parse error).
+CHALLENGE_MAX_ATTEMPTS = 3
+
 
 class FirecrawlNotConfiguredError(RuntimeError):
     """Raised when WALMART_ADAPTER=firecrawl but FIRECRAWL_API_KEY is missing."""
@@ -83,99 +90,118 @@ async def fetch_walmart(
         "Content-Type": "application/json",
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
-            resp = await client.post(_FIRECRAWL_ENDPOINT, json=payload, headers=headers)
+    attempts = 0
+    last_challenge_elapsed_ms: int = 0
 
-        elapsed_ms = int((time.perf_counter() - start) * 1000)
-
-        if resp.status_code >= 400:
-            logger.warning(
-                "firecrawl walmart HTTP %d: %s",
-                resp.status_code,
-                resp.text[:500],
-            )
-            return build_error_response(
-                query=query,
-                code="FIRECRAWL_HTTP_ERROR",
-                message=f"Firecrawl returned HTTP {resp.status_code}",
-                extraction_time_ms=elapsed_ms,
-                details={"status_code": resp.status_code, "body": resp.text[:500]},
-            )
-
-        data = resp.json()
-        if not data.get("success"):
-            return build_error_response(
-                query=query,
-                code="FIRECRAWL_UNSUCCESSFUL",
-                message=data.get("error") or "Firecrawl reported success=false",
-                extraction_time_ms=elapsed_ms,
-                details={"response": data},
-            )
-
-        html = (data.get("data") or {}).get("rawHtml") or ""
-        if not html:
-            return build_error_response(
-                query=query,
-                code="FIRECRAWL_EMPTY_BODY",
-                message="Firecrawl returned success=true but rawHtml was empty",
-                extraction_time_ms=elapsed_ms,
-            )
-
-        if detect_challenge(html):
-            logger.warning("firecrawl walmart returned challenge page")
-            return build_error_response(
-                query=query,
-                code="CHALLENGE",
-                message="Firecrawl returned a PerimeterX challenge page (unexpected)",
-                extraction_time_ms=elapsed_ms,
-            )
-
+    while attempts < CHALLENGE_MAX_ATTEMPTS:
+        attempts += 1
         try:
-            listings = extract_listings(html, max_listings=max_listings)
-        except ValueError as e:
-            return build_error_response(
-                query=query,
-                code="PARSE_ERROR",
-                message=str(e),
-                extraction_time_ms=elapsed_ms,
+            async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+                resp = await client.post(_FIRECRAWL_ENDPOINT, json=payload, headers=headers)
+
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
+
+            if resp.status_code >= 400:
+                logger.warning(
+                    "firecrawl walmart HTTP %d on attempt %d: %s",
+                    resp.status_code,
+                    attempts,
+                    resp.text[:500],
+                )
+                return build_error_response(
+                    query=query,
+                    code="FIRECRAWL_HTTP_ERROR",
+                    message=f"Firecrawl returned HTTP {resp.status_code}",
+                    extraction_time_ms=elapsed_ms,
+                    details={"status_code": resp.status_code, "body": resp.text[:500]},
+                )
+
+            data = resp.json()
+            if not data.get("success"):
+                return build_error_response(
+                    query=query,
+                    code="FIRECRAWL_UNSUCCESSFUL",
+                    message=data.get("error") or "Firecrawl reported success=false",
+                    extraction_time_ms=elapsed_ms,
+                    details={"response": data},
+                )
+
+            html = (data.get("data") or {}).get("rawHtml") or ""
+            if not html:
+                return build_error_response(
+                    query=query,
+                    code="FIRECRAWL_EMPTY_BODY",
+                    message="Firecrawl returned success=true but rawHtml was empty",
+                    extraction_time_ms=elapsed_ms,
+                )
+
+            if detect_challenge(html):
+                last_challenge_elapsed_ms = elapsed_ms
+                logger.warning(
+                    "firecrawl walmart challenge detected on attempt %d/%d",
+                    attempts,
+                    CHALLENGE_MAX_ATTEMPTS,
+                )
+                continue  # retry — next Firecrawl call may use a different upstream path
+
+            try:
+                listings = extract_listings(html, max_listings=max_listings)
+            except ValueError as e:
+                return build_error_response(
+                    query=query,
+                    code="PARSE_ERROR",
+                    message=str(e),
+                    extraction_time_ms=elapsed_ms,
+                )
+
+            logger.info(
+                "firecrawl walmart success attempt=%d elapsed_ms=%d listings=%d",
+                attempts,
+                elapsed_ms,
+                len(listings),
             )
 
-        logger.info(
-            "firecrawl walmart success elapsed_ms=%d listings=%d",
-            elapsed_ms,
-            len(listings),
-        )
+            return build_success_response(
+                query=query,
+                listings=listings,
+                extraction_time_ms=elapsed_ms,
+                source_url=search_url,
+                extraction_method="firecrawl_next_data",
+            )
 
-        return build_success_response(
-            query=query,
-            listings=listings,
-            extraction_time_ms=elapsed_ms,
-            source_url=search_url,
-            extraction_method="firecrawl_next_data",
-        )
+        except httpx.TimeoutException:
+            return build_error_response(
+                query=query,
+                code="TIMEOUT",
+                message=f"Firecrawl request timed out after {_REQUEST_TIMEOUT}s",
+                extraction_time_ms=int((time.perf_counter() - start) * 1000),
+            )
 
-    except httpx.TimeoutException:
-        return build_error_response(
-            query=query,
-            code="TIMEOUT",
-            message=f"Firecrawl request timed out after {_REQUEST_TIMEOUT}s",
-            extraction_time_ms=int((time.perf_counter() - start) * 1000),
-        )
+        except httpx.HTTPError as e:
+            return build_error_response(
+                query=query,
+                code="NETWORK_ERROR",
+                message=f"{type(e).__name__}: {e}",
+                extraction_time_ms=int((time.perf_counter() - start) * 1000),
+            )
 
-    except httpx.HTTPError as e:
-        return build_error_response(
-            query=query,
-            code="NETWORK_ERROR",
-            message=f"{type(e).__name__}: {e}",
-            extraction_time_ms=int((time.perf_counter() - start) * 1000),
-        )
+        except Exception as e:  # pragma: no cover — defensive safety net
+            logger.exception("firecrawl walmart unexpected error on attempt %d", attempts)
+            return build_error_response(
+                query=query,
+                code="ADAPTER_ERROR",
+                message=f"{type(e).__name__}: {e}",
+                extraction_time_ms=int((time.perf_counter() - start) * 1000),
+            )
 
-    except Exception as e:  # pragma: no cover — defensive safety net
-        logger.exception("firecrawl walmart unexpected error")
-        return build_error_response(
-            query=query,
-            code="ADAPTER_ERROR",
-            message=f"{type(e).__name__}: {e}",
-            extraction_time_ms=int((time.perf_counter() - start) * 1000),
-        )
+    # Exhausted — all CHALLENGE_MAX_ATTEMPTS attempts came back as challenge pages
+    return build_error_response(
+        query=query,
+        code="CHALLENGE",
+        message=(
+            f"Firecrawl returned a PerimeterX challenge page on all "
+            f"{CHALLENGE_MAX_ATTEMPTS} attempts"
+        ),
+        extraction_time_ms=last_challenge_elapsed_ms,
+        details={"total_attempts": attempts},
+    )
