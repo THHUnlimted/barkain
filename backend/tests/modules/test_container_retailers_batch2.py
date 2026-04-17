@@ -59,6 +59,7 @@ def client() -> ContainerClient:
 
 @pytest.fixture(autouse=True)
 def _setup_client(client: ContainerClient):
+    from app.config import Settings
     client.url_pattern = "http://localhost:{port}"
     client.timeout = 5
     client.retry_count = 1
@@ -70,6 +71,11 @@ def _setup_client(client: ContainerClient):
         "ebay_used": 8088,
         "backmarket": 8090,
     }
+    client.walmart_adapter_mode = "container"
+    # Empty eBay creds → Browse API adapter not configured → falls through
+    # to container path, keeping these legacy batch-dispatch tests on the
+    # original scraper route.
+    client._cfg = Settings(EBAY_APP_ID="", EBAY_CERT_ID="")
 
 
 # MARK: - Response Parsing

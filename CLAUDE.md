@@ -269,9 +269,10 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 
 | Step | What | Backend tests | iOS tests | PR |
 |------|------|:-:|:-:|:-:|
-| 3a | M1 Product Text Search: `POST /products/search` + pg_trgm + Gemini fallback + SearchView | +10 | +6 unit/+1 UI | (this PR) |
+| 3a | M1 Product Text Search: `POST /products/search` + pg_trgm + Gemini fallback + SearchView | +10 | +6 unit/+1 UI | #23 |
+| 3b | eBay Marketplace Deletion webhook (GDPR) + Browse API adapter replacing `ebay_new`/`ebay_used` scrapers (sub-second, +API) + FastAPI deploy on scraper EC2 (Caddy+LE) | +13 | — | (this PR) |
 
-**Test totals:** **312 backend** (312 passed / 6 skipped) + **72 iOS unit** + **3 iOS UI** = **387 tests**.
+**Test totals:** **335 backend** (335 passed / 6 skipped) + **72 iOS unit** + **3 iOS UI** = **410 tests**.
 `ruff check` clean. `xcodebuild` clean.
 
 **Migrations:** 0001 (initial, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert + failure counter) → 0006 (`chk_subscription_tier` CHECK) → 0007 (pg_trgm extension + `idx_products_name_trgm` GIN index).
@@ -310,6 +311,62 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 
 ---
 
+## Production Infra (EC2) — How Future Sessions Reach + Monitor It
+
+> **Single-host deployment** for Phase 2 / early Phase 3 live-testing. All 11 scraper containers + the FastAPI backend (eBay webhook) run on one `t3.xlarge` in `us-east-1`. Instance is intentionally left running between sessions — don't auto-stop unless Mike says.
+
+**Access:**
+- **SSH:** `ssh -i ~/.ssh/barkain-scrapers.pem ubuntu@54.197.27.219`
+- **EC2 instance id:** `i-09ce25ed6df7a09b2` (region `us-east-1`)
+- **Security group:** `sg-0235e0aafe9fa446e` (scrapers 8081-8091 + web 80/443)
+- **Public webhook:** `https://ebay-webhook.barkain.app` (A record → EC2 IP; Let's Encrypt auto-renew via Caddy)
+
+**Quick health sweep** (copy-paste friendly):
+```bash
+# All 11 scraper containers (ports 8081–8091)
+ssh -i ~/.ssh/barkain-scrapers.pem ubuntu@54.197.27.219 \
+  'docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"'
+
+# Backend API (eBay webhook + Browse API adapter)
+ssh -i ~/.ssh/barkain-scrapers.pem ubuntu@54.197.27.219 \
+  'systemctl is-active barkain-api caddy && \
+   sudo journalctl -u barkain-api -n 20 --no-pager'
+
+# Fire an extract against a specific retailer (replace port)
+ssh -i ~/.ssh/barkain-scrapers.pem ubuntu@54.197.27.219 \
+  'curl -s --max-time 120 -X POST http://localhost:8081/extract \
+    -H "Content-Type: application/json" \
+    -d "{\"query\":\"Apple AirPods Pro 2\",\"max_listings\":3}" | jq .'
+
+# Webhook live-verify (handshake + POST)
+curl -s "https://ebay-webhook.barkain.app/api/v1/webhooks/ebay/account-deletion?challenge_code=test" | jq .
+```
+
+**Ports:** `amazon:8081 bestbuy:8082 walmart:8083 target:8084 homedepot:8085 lowes:8086 ebaynew:8087 ebayused:8088 samsclub:8089 backmarket:8090 fbmarketplace:8091`. Backend `uvicorn` on `127.0.0.1:8000` behind Caddy on `:443`.
+
+**Redeploy** (backend code change — webhook or Browse API adapter):
+```bash
+rsync -az --delete --exclude='.git/' --exclude='__pycache__/' --exclude='tests/' --exclude='.venv/' \
+  -e "ssh -i ~/.ssh/barkain-scrapers.pem" \
+  backend/ ubuntu@54.197.27.219:/home/ubuntu/barkain-api/
+ssh -i ~/.ssh/barkain-scrapers.pem ubuntu@54.197.27.219 'sudo systemctl restart barkain-api'
+```
+
+**Redeploy** (scraper containers — selector fixes): use `ec2_deploy.sh` at `/home/ubuntu/` or rsync to `/home/ubuntu/barkain/` and rebuild the affected container (`docker compose up -d --build <name>`).
+
+**Env file:** `/etc/barkain-api.env` (mode 600). Holds `EBAY_APP_ID`, `EBAY_CERT_ID`, `EBAY_VERIFICATION_TOKEN`, `EBAY_ACCOUNT_DELETION_ENDPOINT`, `DATABASE_URL` (placeholder), `REDIS_URL` (placeholder). DB/Redis are not actually running on this host — backend only serves webhook + Browse API adapter, neither hits PG/Redis.
+
+**Known retailer health** (as of 3b live run): `amazon / bestbuy / walmart / target / homedepot / samsclub / backmarket / fbmarketplace` return listings. `lowes` degrades to 0 under parallel load (resource contention on t3.xlarge). `ebaynew` + `ebayused` no longer served by containers — route through the Browse API adapter in `backend/modules/m2_prices/adapters/ebay_browse_api.py` at 0.5-1.5 s/call.
+
+**Cost-stop if idle:**
+```bash
+aws ec2 stop-instances --instance-ids i-09ce25ed6df7a09b2 --region us-east-1
+# Restart: aws ec2 start-instances ... — Caddy + systemd auto-start; the public IP
+# is static (54.197.27.219) so DNS doesn't need to change.
+```
+
+---
+
 ## Key Decisions Log
 
 > Full decision log with rationale: see `docs/CHANGELOG.md`. Only load-bearing quick-refs live here.
@@ -326,28 +383,30 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 
 ### Phase 2
 
-> - **SSE streaming:** `text/event-stream` with `asyncio.as_completed`; per-retailer events arrive progressively. iOS consumer uses a manual byte splitter (not `AsyncBytes.lines`) and falls back to the batch endpoint on any stream error (2c, 2c-fix)
-> - **Identity discounts:** zero-LLM pure-SQL matching < 150 ms; deduped by `(retailer_id, program_name)`; fetched AFTER the SSE loop exits OR AFTER batch fallback — never inside `.done` (would race still-streaming events); failure is non-fatal (2d)
-> - **Card matching priority:** rotating > user-selected > static > base rate, per card × retailer, `max()` in memory; inline subtitle on `PriceRow`. Cash+ / Customized Cash / Shopper Cash Rewards resolve per-user via `user_category_selections`, NOT seeded in `rotating_categories` (2e)
-> - **Two sources of truth for billing tier, by design:** iOS `SubscriptionService` reads RC SDK for UI gating (offline, instant); backend `users.subscription_tier` is the rate-limit authority; they converge via the RC webhook with up to 60 s accepted drift. RC demo app user id `"demo_user"` matches `settings.DEMO_MODE` (renamed from `BARKAIN_DEMO_MODE` in 2i-b) (2f)
-> - **Webhook idempotency:** SETNX dedup (`revenuecat:processed:{event.id}`, 7-day TTL) AND SET-not-delta math — replays produce the same final row (2f)
-> - **Tier-aware rate limit:** `_resolve_user_tier(user_id, redis, db)` caches `tier:{user_id}` for 60 s; pro = base × `RATE_LIMIT_PRO_MULTIPLIER`; missing user → free (not an error); falls open to free on infra blips (2f)
-> - **Migration 0004 owns `idx_card_reward_programs_product`** — previously created by the seed script; model `__table_args__` mirrors the index so fresh test DBs get it without alembic (2f)
-> - **Affiliate URLs:** backend-only construction via `AffiliateService.build_affiliate_url` (pure `@staticmethod`). Amazon `?tag=barkain-20`, eBay rover `campid=5339148665`, Walmart Impact Radius placeholder. Untagged clicks log `affiliate_network='passthrough'` sentinel (2g)
-> - **In-app browser:** `SFSafariViewController` (not `WKWebView`) — shares cookies with Safari so affiliate tracking persists (2g)
-> - **Fail-open affiliate resolver:** `ScannerViewModel.resolveAffiliateURL` never throws; falls back to original URL on any API error; identity-discount verification URLs open in the same sheet but bypass `/affiliate/click` (they're not affiliate links) (2g)
-> - **Background workers:** LocalStack SQS for dev, `moto[sqs]` for tests (hermetic, no container), boto3 wrapped in `asyncio.to_thread`. Workers reuse existing services — `process_queue` calls `PriceAggregationService.get_prices(force_refresh=True)` (2h)
-> - **Portal rate scraping via `httpx` + `BeautifulSoup`** — deliberate deviation from Job 1's agent-browser pseudocode (portal pages are static-enough; avoids coupling to scraper containers). Parsers anchor on stable attributes (`aria-label`, semantic class names), NOT hash-based CSS classes. Rakuten's `"was X%"` marker refreshes `portal_bonuses.normal_value`; other portals rely on first-observation seed (2h)
-> - **`is_elevated` is `GENERATED ALWAYS STORED`** — never written by the worker; reading it after upsert confirms the spike math end-to-end (2h)
-> - **Discount verification:** three-state outcome — `verified` / `flagged_missing_mention` (soft, counter NOT incremented — program renames shouldn't auto-deactivate) / `hard_failed` (4xx/5xx/network → `consecutive_failures += 1`). 3 consecutive hard failures flip `is_active=False`. `last_verified` updates on every run regardless of outcome (2h)
-> - **`SQSClient` uses an `_UNSET` sentinel** so tests can pass explicit `endpoint_url=None` to bypass the `.env` LocalStack override — `or`-chains collapse `None → settings fallback` and break moto (2h)
-> - **`DEMO_MODE` is read at call-time, not import-time:** `settings.DEMO_MODE` lives on the pydantic-settings `Settings` instance and is resolved inside `get_current_user` per-request, so tests can `monkeypatch.setattr(settings, 'DEMO_MODE', True)` without import-ordering games. The previous `_DEMO_MODE = os.getenv("BARKAIN_DEMO_MODE") == "1"` module constant cached the value and broke testability (2i-b)
-> - **`_classify_retailer_result` is the single classification authority** for both `get_prices()` and `stream_prices()` — extracted in 2i-b to delete ~80 duplicated lines that had already drifted (the stream version embedded `retailer_name` in the price payload directly while the batch version added it in a later loop). The two methods still differ in iteration strategy (`as_completed` vs serial dict iteration) and emission semantics (yields events vs accumulates a dict), which is why they're not merged (2i-b)
-> - **`device_name` rename to `product_name` deferred:** 26 backend occurrences across 9 files including the load-bearing Gemini system instruction in `backend/ai/prompts/upc_lookup.py`. A mechanical rename would require a coordinated prompt + service-parse + test-assertion update and risks breaking the LLM contract during a hardening step. iOS already uses `name` so there's no consumer pressure. Tracked in Phase 3 if still desired (2i-b)
-> - **Migration 0006 — `chk_subscription_tier` CHECK constraint** on `users.subscription_tier IN ('free', 'pro')`. Mirrored on `User.__table_args__` in `app/core_models.py` so `Base.metadata.create_all` (test DB) matches alembic. Idempotent via `DO $$ ... END $$` block keyed on `pg_constraint.conname` (2i-b)
-> - **Worker scripts MUST import `from app import models`** so cross-module FKs resolve at flush time. Latent FK bug discovered by 2i-c Group A's first real LocalStack run: `run_worker.py` imported `AsyncSessionLocal` but never the central model registry, so `Base.metadata` didn't know about `Retailer` when `PortalBonus.retailer_id` tried to flush. The 2h moto test suite passed because every fixture imports models explicitly — only the standalone CLI path exposed it. Same one-line fix applied preemptively to `run_watchdog.py` (2i-c)
-> - **Test DB schema drift is auto-detected** in `backend/tests/conftest.py:_ensure_schema` via a `chk_subscription_tier` marker probe before `Base.metadata.create_all`. Missing → drop+recreate the public schema. Update the marker query whenever a new migration adds a column or constraint (2i-c)
-> - **Watchdog `CONTAINERS_ROOT` must use `parents[2]` not `parents[1]`** — `backend/workers/watchdog.py` previously resolved to `backend/containers/` (nonexistent), so every `selector_drift` heal failed with "extract.js not found" before reaching Opus. The 2h unit tests stubbed the filesystem layer and passed; only the 2i-d live `--check-all` against real containers exposed the gap. Symmetry with 2i-c: both bugs were latent path/registry assumptions that unit tests mocked away, caught by operational validation on first real run (2i-d)
-> - **XCUITest target is now wired** — `BarkainUITests/BarkainUITests.swift` runs `testManualUPCEntryToAffiliateSheet` end-to-end: enters UPC `194252818381`, waits for an SSE-streamed retailer row via `retailerRow_<id>` accessibility IDs, taps it, and asserts the affiliate sheet presents. The final assertion uses an OR of three independent signals (SFSafari webview visible, "Done" button present, or original row no longer hittable) because iOS 26's SFSafariViewController chrome lives in a separate accessibility tree that XCUITest cannot traverse from the host app. Authoritative proof of the affiliate path is the `affiliate_clicks` DB row — we queried it post-run and confirmed `tag=barkain-20` appended and `affiliate_network='amazon_associates'` (2i-d)
-> - **Deploy via rsync when GitHub auth is broken** — 2i-d Group A discovered the EC2 `.git/config` embeds a leaked PAT and deploy keys are disabled on the `THHUnlimted/barkain` repo. Fix without touching GitHub settings: `rsync -az --delete --exclude='.git/'` the local checkout to `ubuntu@ec2:~/barkain/`, then run the Phase C/D portions of `scripts/ec2_deploy.sh` inline (skip `git pull` — the rsync already synced). MD5 check still validates the container extract.js against the rsync'd host copy, so `2b-val-L1` is verifiable without a working `git pull` (2i-d)
-> - **Facebook Marketplace needs Decodo residential proxy** — FB redirects datacenter IPs (`AS14618`) to `/login/`; residential IPs see content behind a dismissible overlay. `containers/fb_marketplace/proxy_relay.py` relays `localhost:18080` → `gate.decodo.com:7000` with `Proxy-Authorization` injected. POC: 17 items via Decodo vs 0 direct. URL fixed to `/marketplace/{location}/search/?query=…&exact=false`. Needs `DECODO_PROXY_USER` + `DECODO_PROXY_PASS` env vars (2i-d)
+> - **SSE streaming:** `text/event-stream` + `asyncio.as_completed`; iOS uses manual byte splitter (not `AsyncBytes.lines`); falls back to batch on error (2c, 2c-fix)
+> - **Identity discounts:** zero-LLM SQL match < 150 ms; dedupe `(retailer_id, program_name)`; fetched post-SSE-loop (never inside `.done`); failure non-fatal (2d)
+> - **Card matching priority:** rotating > user-selected > static > base; Cash+ / Customized Cash / Shopper Cash resolve per-user via `user_category_selections` (2e)
+> - **Billing tier — two sources of truth by design:** iOS RC SDK for UI gating; backend `users.subscription_tier` for rate limiting; webhook converges with ≤60 s drift. `DEMO_MODE` renamed from `BARKAIN_DEMO_MODE` in 2i-b and read via `settings.DEMO_MODE` at call-time, not import (2f, 2i-b)
+> - **Webhook idempotency:** SETNX dedup (`revenuecat:processed:{event.id}`, 7d TTL) + SET-not-delta math (replays idempotent) (2f)
+> - **Tier-aware rate limit:** `_resolve_user_tier` caches `tier:{user_id}` 60 s; pro = base × `RATE_LIMIT_PRO_MULTIPLIER`; falls open to free on infra blip (2f)
+> - **Migrations 0004/0006:** index + CHECK constraint mirrored on `__table_args__` so test DB via `create_all` matches alembic. Idempotent `DO $$...END $$` keyed on catalog (2f, 2i-b)
+> - **Affiliate URLs:** backend-only construction via `AffiliateService.build_affiliate_url`; `SFSafariViewController` (not WKWebView) so cookies persist; fail-open resolver never throws (2g)
+> - **Background workers:** LocalStack SQS for dev, `moto[sqs]` for tests; boto3 via `asyncio.to_thread`; workers reuse services (`get_prices(force_refresh=True)`). `SQSClient` uses `_UNSET` sentinel so tests can force `endpoint_url=None` (2h)
+> - **Portal rates via `httpx` + BeautifulSoup** — deliberate deviation from Job 1 agent-browser spec. Parsers anchor on stable attributes (`aria-label`, semantic classes), NOT hash-based CSS. Rakuten `"was X%"` refreshes `portal_bonuses.normal_value`; others seed on first observation (2h)
+> - **`is_elevated` column is `GENERATED ALWAYS STORED`** — worker never writes it; reading post-upsert confirms spike math (2h)
+> - **Discount verification three-state:** `verified` / `flagged_missing_mention` (soft, no counter bump) / `hard_failed` (4xx/5xx/net → `consecutive_failures += 1`); 3 strikes flips `is_active=False`; `last_verified` always updates (2h)
+> - **`_classify_retailer_result` is the single classification authority** for batch + stream paths (extracted 2i-b; deleted ~80 drifted duplicate lines) (2i-b)
+> - **`device_name` → `product_name` rename deferred** — 26 call sites incl. load-bearing Gemini system instruction; too risky during hardening; iOS already uses `name` (2i-b)
+> - **Worker CLI scripts MUST `from app import models`** so cross-module FKs resolve at flush time. The 2h moto tests passed because fixtures imported explicitly; only real LocalStack runs exposed it. Same fix applied preemptively to `run_watchdog.py` (2i-c)
+> - **Test DB drift auto-detected** in `conftest.py:_ensure_schema` via `idx_products_name_trgm` marker probe (Step 3a updated from `chk_subscription_tier`). Missing → drop+recreate. Update marker with each new migration (2i-c, 3a)
+> - **Watchdog `CONTAINERS_ROOT` = `parents[2]`** (was `parents[1]` → nonexistent `backend/containers/`). 2h unit tests stubbed the FS and missed it; 2i-d live `--check-all` exposed it. Same pattern as 2i-c worker-model bug — mocks hid the latent path assumption (2i-d)
+> - **XCUITest affiliate-sheet assertion uses OR-of-3 signals** (SFSafari visible / Done button / original row non-hittable) because iOS 26 SFSafariVC chrome lives outside the host-app accessibility tree. Authoritative proof is the `affiliate_clicks` DB row (2i-d)
+> - **Deploy via rsync when GitHub auth is broken:** `rsync -az --delete --exclude='.git/'` then run Phase C/D of `scripts/ec2_deploy.sh` inline (skip `git pull`). MD5 still validates against rsync'd host copy (2i-d)
+> - **Facebook Marketplace needs Decodo residential proxy:** datacenter IPs (AS14618) redirect to `/login/`; `containers/fb_marketplace/proxy_relay.py` relays `:18080` → `gate.decodo.com:7000`. Needs `DECODO_PROXY_USER`/`_PASS` (2i-d)
+
+### Phase 3
+
+> - **eBay Browse API adapter replaces `ebay_new`/`ebay_used` container legs** when `EBAY_APP_ID` + `EBAY_CERT_ID` are set (else falls through to container, same pattern as `WALMART_ADAPTER`). Sub-second vs 70-second container calls. Tokens via `client_credentials` grant, 2 hr TTL, cached in-process with asyncio lock around refresh. On 401 we invalidate the cache so the next call re-mints (3b)
+> - **eBay filter DSL uses `|` not `,`:** `conditionIds:{1000|1500}` filters, `conditionIds:{1000,1500}` silently doesn't. Discovered in live smoke when ebay_new/ebay_used returned identical mixed-condition results. The text form (`conditions:{NEW}`) also silently no-ops — always use numeric `conditionIds` (3b)
+> - **eBay Marketplace Account Deletion webhook is a GDPR prerequisite** for Browse API production access. GET handshake returns `SHA-256(challenge_code + token + endpoint_url)` as hex; POST is log-and-ack-204 since Barkain doesn't store per-user eBay data. Both env vars MUST match the portal exactly or the hash drifts (3b)
+> - **Backend deploys onto the scraper EC2 via Caddy + systemd uvicorn** (not a separate host) — Caddy auto-manages Let's Encrypt via TLS-ALPN-01 challenge, reverse-proxies `:443` to `127.0.0.1:8000`. Single-host was the cheap path for the eBay webhook; full ECS Fargate + ALB when the broader backend ships (3b)

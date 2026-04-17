@@ -48,6 +48,22 @@ def _resolve_walmart_adapter(mode: str) -> AdapterFn | None:
     return None
 
 
+def _resolve_ebay_adapter(cfg: Settings) -> AdapterFn | None:
+    """Return the eBay Browse API adapter when credentials are set, else None.
+
+    Unlike Walmart's explicit mode switch, eBay auto-prefers the API path
+    whenever ``EBAY_APP_ID`` + ``EBAY_CERT_ID`` are both populated — the
+    container leg is strictly a fallback (selector drift makes it worse than
+    the API on every dimension). When creds are missing we return None so
+    ``_extract_one`` falls through to the container path.
+    """
+    from modules.m2_prices.adapters.ebay_browse_api import is_configured
+    if not is_configured(cfg):
+        return None
+    from modules.m2_prices.adapters.ebay_browse_api import fetch_ebay
+    return fetch_ebay
+
+
 class ContainerClient:
     """HTTP client for communicating with retailer scraper containers."""
 
@@ -183,6 +199,18 @@ class ContainerClient:
                     "routing walmart via adapter mode=%s", self.walmart_adapter_mode
                 )
                 return await adapter(
+                    query=query,
+                    product_name=product_name,
+                    upc=upc,
+                    max_listings=max_listings,
+                    cfg=self._cfg,
+                )
+        if retailer_id in ("ebay_new", "ebay_used"):
+            adapter = _resolve_ebay_adapter(self._cfg)
+            if adapter is not None:
+                logger.debug("routing %s via ebay_browse_api", retailer_id)
+                return await adapter(
+                    retailer_id=retailer_id,
                     query=query,
                     product_name=product_name,
                     upc=upc,

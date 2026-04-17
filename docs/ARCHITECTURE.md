@@ -145,8 +145,8 @@ Backend sends `POST /extract` to container → container runs extraction → ret
 | Best Buy | 8082 | `containers/best_buy/` | `.sku-item` anchor, standard networkidle flow |
 | Home Depot | 8085 | `containers/home_depot/` | `[data-testid="product-pod"]` anchor, needs live validation |
 | Lowe's | 8086 | `containers/lowes/` | Multi-fallback selectors, needs live validation |
-| eBay (new) | 8087 | `containers/ebay_new/` | `.s-item` anchor, URL filter `LH_ItemCondition=1000` for new only |
-| eBay (used/refurb) | 8088 | `containers/ebay_used/` | `.s-item` anchor, URL filter for used+refurb, extracts condition from `.SECONDARY_INFO` |
+| eBay (new) | 8087 | `containers/ebay_new/` | **Step 3b — deprecated in favor of Browse API adapter.** Container leg falls back if `EBAY_APP_ID`/`EBAY_CERT_ID` unset |
+| eBay (used/refurb) | 8088 | `containers/ebay_used/` | **Step 3b — deprecated in favor of Browse API adapter.** Same credential-gated fallback as ebay_new |
 | BackMarket | 8090 | `containers/backmarket/` | All items condition "refurbished", seller extraction |
 
 ### Walmart Adapter Routing (post-Step-2a paradigm shift)
@@ -319,6 +319,8 @@ All AI calls request JSON output. Use Instructor library for Pydantic model vali
 
 | Method | Path | Module | Description | Rate Limit |
 |---|---|---|---|---|
+| GET | /api/v1/webhooks/ebay/account-deletion | app/ebay_webhook | **Step 3b** — eBay Marketplace Account Deletion verification handshake. Returns `{"challengeResponse": SHA-256(challenge_code + EBAY_VERIFICATION_TOKEN + EBAY_ACCOUNT_DELETION_ENDPOINT)}` as lowercase hex. 503 if either env var is unset. GDPR prerequisite for Browse API production access. | Exempt |
+| POST | /api/v1/webhooks/ebay/account-deletion | app/ebay_webhook | **Step 3b** — eBay Marketplace Account Deletion notification. Logs `notificationId` / `userId` / `eoiUserId`, returns 204. Swallows malformed JSON (still 204) so eBay doesn't retry. Barkain does not store per-user eBay data today — log-and-ack is GDPR-compliant. Extend to row-level purge in `_handle_notification` if Phase 5 adds wishlists. | Exempt |
 | POST | /api/v1/products/identify | M1 | Image → product (vision AI) | 10/min |
 | POST | /api/v1/recommend | M6 | Full-stack recommendation | 10/min |
 | GET | /api/v1/card-match/{product_id} | M5 | ~~Card recommendation for product at retailer~~ — **landed early in Step 2e as `/api/v1/cards/recommendations`**; Phase 3 wraps it with the pre-redirect purchase interstitial. | 60/min |
