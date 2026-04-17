@@ -181,6 +181,11 @@ final class SearchViewModelTests: XCTestCase {
         XCTAssertNotNil(viewModel.presentedProductViewModel)
         XCTAssertEqual(viewModel.presentedProductViewModel?.product?.id, productId)
         XCTAssertEqual(mockClient.getPricesCallCount, 1)
+        // Identity + card chain fires after the price batch completes so the
+        // Search flow renders the SAME ancillary data the Scanner flow does.
+        XCTAssertEqual(mockClient.getEligibleDiscountsCallCount, 1)
+        XCTAssertEqual(mockClient.getCardRecommendationsCallCount, 1)
+        XCTAssertEqual(mockClient.getEligibleDiscountsLastProductId, productId)
     }
 
     // MARK: - Tap handling — Gemini source
@@ -207,6 +212,64 @@ final class SearchViewModelTests: XCTestCase {
         XCTAssertEqual(mockClient.resolveProductLastUPC, "195949046674")
         XCTAssertNotNil(viewModel.presentedProductViewModel)
         XCTAssertEqual(mockClient.getPricesCallCount, 1)
+        XCTAssertEqual(mockClient.getEligibleDiscountsCallCount, 1)
+        XCTAssertEqual(mockClient.getCardRecommendationsCallCount, 1)
+    }
+
+    func test_handleResultTap_geminiSource_noUPC_callsResolveFromSearch() async {
+        // Given — a Gemini row WITHOUT a UPC (common for older / discontinued
+        // SKUs like iPhone 8) should fall through to /products/resolve-from-search,
+        // not surface a failure alert.
+        let result = ProductSearchResult(
+            deviceName: "Apple iPhone 8 (64GB)",
+            model: "iPhone 8",
+            brand: "Apple",
+            category: "phones",
+            confidence: 0.6,
+            primaryUpc: nil,
+            source: .gemini,
+            productId: nil,
+            imageUrl: nil
+        )
+
+        // When
+        await viewModel.handleResultTap(result)
+
+        // Then — the fallback endpoint fired and resolveProduct(upc:) did NOT.
+        XCTAssertEqual(mockClient.resolveFromSearchCallCount, 1)
+        XCTAssertEqual(mockClient.resolveFromSearchLastDeviceName, "Apple iPhone 8 (64GB)")
+        XCTAssertEqual(mockClient.resolveFromSearchLastBrand, "Apple")
+        XCTAssertEqual(mockClient.resolveFromSearchLastModel, "iPhone 8")
+        XCTAssertEqual(mockClient.resolveProductCallCount, 0)
+        XCTAssertNil(viewModel.resolveFailureMessage)
+        XCTAssertNotNil(viewModel.presentedProductViewModel)
+        XCTAssertEqual(mockClient.getPricesCallCount, 1)
+        XCTAssertEqual(mockClient.getEligibleDiscountsCallCount, 1)
+        XCTAssertEqual(mockClient.getCardRecommendationsCallCount, 1)
+    }
+
+    func test_handleResultTap_geminiSource_noUPC_backend404_showsToast() async {
+        // Given — backend returns 404 (UPC_NOT_FOUND_FOR_PRODUCT) → toast.
+        mockClient.resolveFromSearchResult = .failure(.notFound)
+        let result = ProductSearchResult(
+            deviceName: "Unknown Mystery Gadget",
+            model: nil,
+            brand: nil,
+            category: nil,
+            confidence: 0.3,
+            primaryUpc: nil,
+            source: .gemini,
+            productId: nil,
+            imageUrl: nil
+        )
+
+        // When
+        await viewModel.handleResultTap(result)
+
+        // Then — toast set; no product presented.
+        XCTAssertEqual(mockClient.resolveFromSearchCallCount, 1)
+        XCTAssertNotNil(viewModel.resolveFailureMessage)
+        XCTAssertNil(viewModel.presentedProductViewModel)
     }
 }
 

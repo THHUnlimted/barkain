@@ -13,11 +13,13 @@ from modules.m1_product.schemas import (
     ProductResponse,
     ProductSearchRequest,
     ProductSearchResponse,
+    ResolveFromSearchRequest,
 )
 from modules.m1_product.search_service import ProductSearchService
 from modules.m1_product.service import (
     ProductNotFoundError,
     ProductResolutionService,
+    UPCNotFoundForDescriptionError,
 )
 
 logger = logging.getLogger("barkain.m1")
@@ -75,3 +77,51 @@ async def search_products(
     """
     service = ProductSearchService(db=db, redis=redis_client)
     return await service.search(body.query, body.max_results)
+
+
+@router.post(
+    "/resolve-from-search",
+    response_model=ProductResponse,
+    status_code=200,
+    responses={
+        404: {"description": "UPC could not be derived from the description, or no product found"},
+        422: {"description": "Invalid device_name / brand / model payload"},
+        429: {"description": "Rate limit exceeded"},
+    },
+)
+async def resolve_from_search(
+    body: ResolveFromSearchRequest,
+    user: dict = Depends(get_current_user),
+    _rate: None = Depends(get_rate_limiter("general")),
+    db: AsyncSession = Depends(get_db),
+    redis_client: aioredis.Redis = Depends(get_redis),
+) -> ProductResponse:
+    """Resolve a Gemini-sourced search result (no UPC) into a persisted Product.
+
+    Runs a targeted Gemini device→UPC lookup, then delegates to the
+    standard ``/resolve`` path for cross-validation and persistence. This
+    is the tap-time fallback for search results where ``primary_upc`` was
+    null at search time (common for older / discontinued SKUs).
+    """
+    service = ProductResolutionService(db=db, redis=redis_client)
+    try:
+        product = await service.resolve_from_search(
+            device_name=body.device_name,
+            brand=body.brand,
+            model=body.model,
+        )
+        return ProductResponse.model_validate(product)
+    except UPCNotFoundForDescriptionError:
+        raise_http_error(
+            404,
+            "UPC_NOT_FOUND_FOR_PRODUCT",
+            f"Could not find a barcode for {body.device_name!r}",
+            {"device_name": body.device_name},
+        )
+    except ProductNotFoundError as exc:
+        raise_http_error(
+            404,
+            "PRODUCT_NOT_FOUND",
+            f"No product found for derived UPC {exc.upc}",
+            {"device_name": body.device_name, "derived_upc": exc.upc},
+        )

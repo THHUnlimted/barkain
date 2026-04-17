@@ -80,7 +80,16 @@ final class SubscriptionService {
     func configure(apiKey: String, appUserId: String) {
         guard !isConfigured else { return }
         guard !apiKey.isEmpty else {
-            billingLog.warning("RevenueCat API key missing — billing disabled, staying free tier")
+            billingLog.warning("RevenueCat API key missing — billing disabled")
+            #if DEBUG
+            // In DEBUG builds without a configured RevenueCat key we're in
+            // demo mode (matches the backend's DEMO_MODE=1 signal). Grant
+            // Pro locally so paywalled UI is reachable for testing. Release
+            // builds stay on free and show the "billing not available"
+            // error path if the user tries to purchase.
+            billingLog.info("DEBUG build — forcing Pro tier for demo")
+            currentTier = .pro
+            #endif
             return
         }
 

@@ -8,6 +8,7 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     // MARK: - Configurable Results
 
     var resolveProductResult: Result<Product, APIError> = .success(TestFixtures.sampleProduct)
+    var resolveFromSearchResult: Result<Product, APIError> = .success(TestFixtures.sampleProduct)
     var searchProductsResult: Result<ProductSearchResponse, APIError> = .success(
         ProductSearchResponse(query: "", results: [], totalResults: 0, cached: false)
     )
@@ -22,6 +23,10 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
 
     var resolveProductCallCount = 0
     var resolveProductLastUPC: String?
+    var resolveFromSearchCallCount = 0
+    var resolveFromSearchLastDeviceName: String?
+    var resolveFromSearchLastBrand: String?
+    var resolveFromSearchLastModel: String?
     var searchProductsCallCount = 0
     var searchProductsLastQuery: String?
     var searchProductsLastMaxResults: Int?
@@ -114,6 +119,18 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
             try await Task.sleep(for: .seconds(resolveProductDelay))
         }
         return try resolveProductResult.get()
+    }
+
+    func resolveProductFromSearch(
+        deviceName: String,
+        brand: String?,
+        model: String?
+    ) async throws -> Product {
+        resolveFromSearchCallCount += 1
+        resolveFromSearchLastDeviceName = deviceName
+        resolveFromSearchLastBrand = brand
+        resolveFromSearchLastModel = model
+        return try resolveFromSearchResult.get()
     }
 
     func searchProducts(query: String, maxResults: Int) async throws -> ProductSearchResponse {
