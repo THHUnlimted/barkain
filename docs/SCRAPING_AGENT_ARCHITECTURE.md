@@ -1324,6 +1324,8 @@ The current container fleet only works because the user runs it on a residential
 
 ## Appendix B — Firecrawl Managed-Service Probe (2026-04-10)
 
+> **STATUS UPDATE (2026-04-17):** Firecrawl is non-functional for Walmart as of this date — every call returns a PerimeterX challenge page (verified via 9 consecutive live calls). The `walmart_firecrawl` adapter is retained in the codebase (with symmetric 3-attempt CHALLENGE retry added 2026-04-17) and remains selectable via `WALMART_ADAPTER=firecrawl`, but the default has been flipped to `decodo_http` (Appendix C). Appendix B below is preserved as the original 2026-04-10 probe record; its conclusions no longer reflect current Firecrawl health on Walmart.
+
 > Motivation: after confirming in Appendix A that 7 of 10 retailers reject direct HTTP requests from AWS datacenter IPs at the network layer, test whether a managed scraping service (Firecrawl) passes those same blocks and how it compares on latency, cost, and operational simplicity. Firecrawl is a SaaS scraper with its own proxy pool, browser rendering, and anti-bot handling; from the caller's perspective it's a single HTTP API: give it a URL, receive rendered HTML back.
 
 ### B.1 Methodology

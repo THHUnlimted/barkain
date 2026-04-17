@@ -73,10 +73,12 @@ class Settings(BaseSettings):
     }
 
     # Walmart adapter routing — selects which path handles walmart scrapes.
-    # Valid values: "container" (legacy browser container, default), "firecrawl"
-    # (demo path via Firecrawl managed API), "decodo_http" (production path via
-    # Decodo residential proxy). See docs/SCRAPING_AGENT_ARCHITECTURE.md App. A–C.
-    WALMART_ADAPTER: str = "container"
+    # Valid values: "decodo_http" (default, production path via Decodo US
+    # residential proxy), "firecrawl" (legacy demo path — Firecrawl's upstream
+    # pool is currently caught by PerimeterX 100% of the time, kept selectable
+    # for future recovery), "container" (legacy browser container, broken).
+    # See docs/SCRAPING_AGENT_ARCHITECTURE.md App. A–C.
+    WALMART_ADAPTER: str = "decodo_http"
 
     # Firecrawl — managed scraping service (demo path for walmart).
     FIRECRAWL_API_KEY: str = ""

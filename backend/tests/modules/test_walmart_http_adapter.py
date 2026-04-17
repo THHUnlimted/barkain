@@ -123,8 +123,8 @@ async def test_fetch_walmart_max_listings_caps_results():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_fetch_walmart_challenge_triggers_retry_and_surfaces_error():
-    """Challenge page on both attempts → returns CHALLENGE error."""
+async def test_fetch_walmart_challenge_three_attempts_then_surfaces_error():
+    """Challenge on all three attempts → returns CHALLENGE error after 3 tries."""
     cfg = _test_settings()
     route = respx.get("https://www.walmart.com/search").mock(
         return_value=httpx.Response(200, text=CHALLENGE_SAMPLE)
@@ -136,8 +136,8 @@ async def test_fetch_walmart_challenge_triggers_retry_and_surfaces_error():
     assert result.error.code == "CHALLENGE"
     assert result.metadata.bot_detected is True
     assert len(result.listings) == 0
-    # Two attempts made (initial + 1 retry on challenge)
-    assert route.call_count == 2
+    # Initial + 2 retries, challenge-only retry budget exhausted
+    assert route.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -159,15 +159,35 @@ async def test_fetch_walmart_retry_succeeds_on_second_attempt():
     assert route.call_count == 2
 
 
-# MARK: - Error paths
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_walmart_retry_succeeds_on_third_attempt():
+    """Challenge on attempts 1 & 2, success on attempt 3 → returns listings."""
+    cfg = _test_settings()
+    route = respx.get("https://www.walmart.com/search").mock(
+        side_effect=[
+            httpx.Response(200, text=CHALLENGE_SAMPLE),
+            httpx.Response(200, text=CHALLENGE_SAMPLE),
+            httpx.Response(200, text=NEXT_DATA_SAMPLE),
+        ]
+    )
+
+    result = await fetch_walmart(query="test", cfg=cfg)
+
+    assert result.error is None
+    assert len(result.listings) == 4
+    assert route.call_count == 3
+
+
+# MARK: - Error paths (fail-fast: no retry except on CHALLENGE)
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_fetch_walmart_http_error_is_retried_then_reported():
-    """HTTP 500 on both attempts → HTTP_ERROR surfaced."""
+async def test_fetch_walmart_http_error_fails_fast_no_retry():
+    """HTTP 500 → HTTP_ERROR surfaced after a single call; no retry."""
     cfg = _test_settings()
-    respx.get("https://www.walmart.com/search").mock(
+    route = respx.get("https://www.walmart.com/search").mock(
         return_value=httpx.Response(500, text="boom")
     )
 
@@ -176,14 +196,15 @@ async def test_fetch_walmart_http_error_is_retried_then_reported():
     assert result.error is not None
     assert result.error.code == "HTTP_ERROR"
     assert result.error.details["status_code"] == 500
+    assert route.call_count == 1
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_fetch_walmart_missing_next_data_reports_parse_error():
-    """200 response with no __NEXT_DATA__ tag → PARSE_ERROR after retry."""
+async def test_fetch_walmart_missing_next_data_fails_fast_no_retry():
+    """200 response with no __NEXT_DATA__ tag → PARSE_ERROR after a single call."""
     cfg = _test_settings()
-    respx.get("https://www.walmart.com/search").mock(
+    route = respx.get("https://www.walmart.com/search").mock(
         return_value=httpx.Response(200, text="<html><body>no data</body></html>")
     )
 
@@ -191,14 +212,15 @@ async def test_fetch_walmart_missing_next_data_reports_parse_error():
 
     assert result.error is not None
     assert result.error.code == "PARSE_ERROR"
+    assert route.call_count == 1
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_fetch_walmart_timeout_returns_timeout_error():
-    """httpx.TimeoutException → TIMEOUT error."""
+async def test_fetch_walmart_timeout_fails_fast_no_retry():
+    """httpx.TimeoutException → TIMEOUT error after a single call."""
     cfg = _test_settings()
-    respx.get("https://www.walmart.com/search").mock(
+    route = respx.get("https://www.walmart.com/search").mock(
         side_effect=httpx.ReadTimeout("timeout")
     )
 
@@ -206,6 +228,7 @@ async def test_fetch_walmart_timeout_returns_timeout_error():
 
     assert result.error is not None
     assert result.error.code == "TIMEOUT"
+    assert route.call_count == 1
 
 
 @pytest.mark.asyncio

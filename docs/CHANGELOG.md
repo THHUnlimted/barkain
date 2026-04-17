@@ -1374,7 +1374,7 @@ Tab-bar Search → type "AirPods 3rd Generation" into `searchTextField` → wait
 
 ### Verdict
 
-All 387 tests pass. `ruff check backend/ scripts/` clean. `xcodebuild build` clean. Migration 0007 applied in dev; drift detector will recreate the test DB on the next fresh run and pytest has already exercised the fresh-schema path. CLAUDE.md at 27,995 chars (under the 28,000 budget). Docs sweep covers all 7 guiding docs. PR ready from `phase-3/step-3a` → `main`.
+All 387 tests pass. `ruff check backend/ scripts/` clean. `xcodebuild build` clean. Migration 0007 applied in dev; drift detector will recreate the test DB on the next fresh run and pytest has already exercised the fresh-schema path. CLAUDE.md at 27,995 chars (under the 28,000 budget). Docs sweep covers all 7 guiding docs. Landed on `main` as squash commit `2b3a31e` (PR #22); sim-testing follow-ups (resolve-from-search, discount relevance, demo Pro) landed as squash commit `27eeac1` (PR #23) the same day.
 
 ---
 
@@ -1435,5 +1435,5 @@ The scraper fleet's two eBay legs (`ebay_new` / `ebay_used`) were effectively de
 
 ### Verdict
 
-All 335 backend tests pass (410 total including iOS). `ruff check backend/ scripts/` clean. Webhook is production-verified end-to-end against real eBay traffic (GET handshake + POST notification both logged). Browse API adapter live-verified against AirPods Pro 2 and matches the scraper contract 1:1 — drop-in replacement requires only `EBAY_APP_ID` + `EBAY_CERT_ID` in the env. EC2 `/etc/barkain-api.env` already updated and `barkain-api.service` restarted; existing scraper containers unaffected (SG edit only added `:80` / `:443`). CLAUDE.md now carries the EC2 ops cheat-sheet so any future session can reach + monitor the host without re-discovering SSH keys / instance IDs / ports.
+All 335 backend tests pass (410 total including iOS). `ruff check backend/ scripts/` clean. Webhook is production-verified end-to-end against real eBay traffic (GET handshake + POST notification both logged). Browse API adapter live-verified against AirPods Pro 2 and matches the scraper contract 1:1 — drop-in replacement requires only `EBAY_APP_ID` + `EBAY_CERT_ID` in the env. EC2 `/etc/barkain-api.env` already updated and `barkain-api.service` restarted; existing scraper containers unaffected (SG edit only added `:80` / `:443`). CLAUDE.md now carries the EC2 ops cheat-sheet so any future session can reach + monitor the host without re-discovering SSH keys / instance IDs / ports. Landed on `main` as squash commit `a95a68b` (PR #24, 2026-04-17).
 

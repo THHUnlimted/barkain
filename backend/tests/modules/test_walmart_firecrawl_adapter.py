@@ -116,10 +116,10 @@ async def test_firecrawl_success_false_is_surfaced():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_firecrawl_challenge_in_response_is_reported():
-    """Unexpected but possible — Firecrawl returns a challenge page verbatim."""
+async def test_firecrawl_challenge_three_attempts_then_surfaces_error():
+    """Challenge page on all three attempts → CHALLENGE error after 3 tries."""
     cfg = _test_settings()
-    respx.post("https://api.firecrawl.dev/v1/scrape").mock(
+    route = respx.post("https://api.firecrawl.dev/v1/scrape").mock(
         return_value=httpx.Response(
             200, json={"success": True, "data": {"rawHtml": CHALLENGE_SAMPLE}}
         )
@@ -129,6 +129,63 @@ async def test_firecrawl_challenge_in_response_is_reported():
 
     assert result.error is not None
     assert result.error.code == "CHALLENGE"
+    assert result.error.details["total_attempts"] == 3
+    assert route.call_count == 3
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_firecrawl_retry_succeeds_on_second_attempt():
+    """Challenge on attempt 1, success on attempt 2 → returns listings."""
+    cfg = _test_settings()
+    route = respx.post("https://api.firecrawl.dev/v1/scrape").mock(
+        side_effect=[
+            httpx.Response(200, json={"success": True, "data": {"rawHtml": CHALLENGE_SAMPLE}}),
+            httpx.Response(200, json={"success": True, "data": {"rawHtml": NEXT_DATA_SAMPLE}}),
+        ]
+    )
+
+    result = await fetch_walmart(query="test", cfg=cfg)
+
+    assert result.error is None
+    assert len(result.listings) == 4
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_firecrawl_retry_succeeds_on_third_attempt():
+    """Challenge on attempts 1 & 2, success on attempt 3 → returns listings."""
+    cfg = _test_settings()
+    route = respx.post("https://api.firecrawl.dev/v1/scrape").mock(
+        side_effect=[
+            httpx.Response(200, json={"success": True, "data": {"rawHtml": CHALLENGE_SAMPLE}}),
+            httpx.Response(200, json={"success": True, "data": {"rawHtml": CHALLENGE_SAMPLE}}),
+            httpx.Response(200, json={"success": True, "data": {"rawHtml": NEXT_DATA_SAMPLE}}),
+        ]
+    )
+
+    result = await fetch_walmart(query="test", cfg=cfg)
+
+    assert result.error is None
+    assert len(result.listings) == 4
+    assert route.call_count == 3
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_firecrawl_http_error_fails_fast_no_retry():
+    """HTTP 429 → FIRECRAWL_HTTP_ERROR after a single call; no retry."""
+    cfg = _test_settings()
+    route = respx.post("https://api.firecrawl.dev/v1/scrape").mock(
+        return_value=httpx.Response(429, text="rate limited")
+    )
+
+    result = await fetch_walmart(query="test", cfg=cfg)
+
+    assert result.error is not None
+    assert result.error.code == "FIRECRAWL_HTTP_ERROR"
+    assert route.call_count == 1
 
 
 @pytest.mark.asyncio
