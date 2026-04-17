@@ -9,6 +9,7 @@ private let sseLog = Logger(subsystem: "com.barkain.app", category: "SSE")
 
 protocol APIClientProtocol: Sendable {
     func resolveProduct(upc: String) async throws -> Product
+    func resolveProductFromSearch(deviceName: String, brand: String?, model: String?) async throws -> Product
     func searchProducts(query: String, maxResults: Int) async throws -> ProductSearchResponse
     func getPrices(productId: UUID, forceRefresh: Bool) async throws -> PriceComparison
     func streamPrices(productId: UUID, forceRefresh: Bool) -> AsyncThrowingStream<RetailerStreamEvent, Error>
@@ -108,6 +109,16 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
 
     func resolveProduct(upc: String) async throws -> Product {
         try await request(endpoint: .resolveProduct(upc: upc))
+    }
+
+    func resolveProductFromSearch(
+        deviceName: String,
+        brand: String? = nil,
+        model: String? = nil
+    ) async throws -> Product {
+        try await request(
+            endpoint: .resolveFromSearch(deviceName: deviceName, brand: brand, model: model)
+        )
     }
 
     func searchProducts(query: String, maxResults: Int = 10) async throws -> ProductSearchResponse {

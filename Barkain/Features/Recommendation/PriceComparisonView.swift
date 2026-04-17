@@ -406,6 +406,7 @@ private struct PreviewAPIClient: APIClientProtocol {
     func resolveProduct(upc: String) async throws -> Product {
         fatalError("Preview only")
     }
+    func resolveProductFromSearch(deviceName: String, brand: String?, model: String?) async throws -> Product { fatalError("Preview only") }
     func searchProducts(query: String, maxResults: Int) async throws -> ProductSearchResponse {
         ProductSearchResponse(query: query, results: [], totalResults: 0, cached: false)
     }

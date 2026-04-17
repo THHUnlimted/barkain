@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core_models import Retailer
+from modules.m1_product.models import Product
 from modules.m2_prices.models import Price
 from modules.m5_identity.models import DiscountProgram, UserDiscountProfile
 from modules.m5_identity.schemas import (
@@ -18,6 +19,90 @@ from modules.m5_identity.schemas import (
 )
 
 logger = logging.getLogger("barkain.m5")
+
+
+# MARK: - Product-relevance filters
+#
+# Identity discounts are matched by the user's identity flags (veteran,
+# student, etc.) but a program is only USEFUL if the retailer actually
+# stocks the product being viewed. Without this filter, veteran status on
+# an iPhone 17 surfaces Samsung.com + LG.com + Lowe's discounts — none of
+# which carry Apple phones. The data lives in two hardcoded maps below:
+#
+#   1. BRAND_SPECIFIC_RETAILERS — retailer_id → the ONE brand it sells.
+#      If product.brand doesn't match, drop the discount.
+#   2. RETAILER_CATEGORY_KEYWORDS — retailer_id → substrings that must
+#      appear in product.category for the retailer to be plausible.
+#
+# Both filters are FAIL-OPEN: a product with null brand or null category
+# sidesteps the gate. Rationale: missing data shouldn't silently hide
+# relevant discounts; we only prune when we have clear disconfirming
+# evidence. Tech debt: move to a DB column on retailers before the
+# catalog grows past ~20 rows.
+
+# Exact brand match (case-insensitive). A retailer not in this dict is
+# treated as broad / multi-brand (amazon, home_depot, lowes, best_buy).
+BRAND_SPECIFIC_RETAILERS: dict[str, str] = {
+    "apple_direct": "apple",
+    "samsung_direct": "samsung",
+    "hp_direct": "hp",
+    "dell_direct": "dell",
+    "lenovo_direct": "lenovo",
+    "lg_direct": "lg",
+    "sony_direct": "sony",
+    "microsoft_direct": "microsoft",
+}
+
+# Substring keywords that must appear in Product.category (the
+# verbose Google product taxonomy string: "Electronics > Communications >
+# Telephony > Mobile Phones"). A retailer not in this dict is unbounded.
+RETAILER_CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    # Home-improvement stores don't sell phones/tablets/laptops.
+    "lowes": ("appliance", "kitchen", "home & garden", "garden", "tool"),
+    "home_depot": ("appliance", "kitchen", "home & garden", "garden", "tool"),
+    # Brand-direct tech stores — narrow to their tech category surface.
+    # (Brand gate already handles the main filter; this is defense in depth.)
+    "apple_direct": ("electronics", "phone", "tablet", "computer", "laptop", "audio", "watch"),
+    "samsung_direct": ("electronics", "phone", "tablet", "television", "tv", "appliance", "audio"),
+    "lg_direct": ("electronics", "television", "tv", "appliance", "audio", "kitchen"),
+    "sony_direct": ("electronics", "television", "tv", "audio", "camera", "gaming"),
+    "hp_direct": ("electronics", "computer", "laptop", "printer", "monitor"),
+    "dell_direct": ("electronics", "computer", "laptop", "monitor"),
+    "lenovo_direct": ("electronics", "computer", "laptop", "tablet"),
+    "microsoft_direct": ("electronics", "computer", "laptop", "tablet", "gaming"),
+}
+
+
+def _retailer_covers_product(
+    retailer_id: str,
+    product_brand: str | None,
+    product_category: str | None,
+    product_name: str | None = None,
+) -> bool:
+    """Return True if ``retailer_id`` plausibly sells a product of this
+    brand/category — applied post-identity-match to prune irrelevant rows.
+
+    Fails open on missing data EXCEPT when there's strong disconfirming
+    evidence: for a category-gated retailer (Lowe's/Home Depot), if the
+    category is null we fall back to matching the ``product_name`` against
+    the same keyword set. Many products arrive without a category (Gemini
+    rows, UPCitemdb misses) but always have a name, so keyword-matching
+    the name is the only way to keep "iPhone 17" out of Lowe's results.
+    """
+    # Brand gate.
+    required_brand = BRAND_SPECIFIC_RETAILERS.get(retailer_id)
+    if required_brand is not None and product_brand:
+        if required_brand != product_brand.strip().lower():
+            return False
+
+    # Category gate — try category first, name as fallback.
+    keywords = RETAILER_CATEGORY_KEYWORDS.get(retailer_id)
+    if keywords:
+        haystack = (product_category or "").lower() or (product_name or "").lower()
+        if haystack and not any(kw in haystack for kw in keywords):
+            return False
+
+    return True
 
 
 class IdentityService:
@@ -118,6 +203,9 @@ class IdentityService:
             unique.append((prog, retailer_name))
 
         best_price: float | None = None
+        product_brand: str | None = None
+        product_category: str | None = None
+        product_name: str | None = None
         if product_id is not None:
             result = await self.db.execute(
                 select(Price.price)
@@ -128,6 +216,36 @@ class IdentityService:
             )
             raw = result.scalar_one_or_none()
             best_price = float(raw) if raw is not None else None
+
+            # Pull brand + category + name for the relevance gate.
+            prod_row = await self.db.execute(
+                select(Product.brand, Product.category, Product.name).where(
+                    Product.id == product_id
+                )
+            )
+            prod_tuple = prod_row.one_or_none()
+            if prod_tuple is not None:
+                product_brand, product_category, product_name = prod_tuple
+
+        # Filter out discounts whose retailer can't plausibly stock this
+        # product (see BRAND_SPECIFIC_RETAILERS + RETAILER_CATEGORY_KEYWORDS).
+        # Skip the gate entirely when product_id is None (browse view).
+        if product_id is not None and (product_brand or product_category or product_name):
+            before = len(unique)
+            unique = [
+                (prog, rname)
+                for prog, rname in unique
+                if _retailer_covers_product(
+                    prog.retailer_id, product_brand, product_category, product_name
+                )
+            ]
+            dropped = before - len(unique)
+            if dropped:
+                logger.debug(
+                    "Identity relevance filter: dropped %d/%d programs "
+                    "(brand=%s category=%s name=%s)",
+                    dropped, before, product_brand, product_category, product_name,
+                )
 
         discounts = [self._build(prog, rname, best_price) for prog, rname in unique]
         # Sort: highest estimated savings first, then highest discount_value

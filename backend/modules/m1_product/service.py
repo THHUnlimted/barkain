@@ -14,6 +14,7 @@ Cross-validation (Step 2b):
 """
 
 import logging
+import re
 import uuid
 
 import redis.asyncio as aioredis
@@ -22,6 +23,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai.abstraction import gemini_generate_json
+from ai.prompts.device_to_upc import (
+    DEVICE_TO_UPC_SYSTEM_INSTRUCTION,
+    build_device_to_upc_prompt,
+    build_device_to_upc_retry_prompt,
+)
 from ai.prompts.upc_lookup import (
     UPC_LOOKUP_SYSTEM_INSTRUCTION,
     build_upc_lookup_prompt,
@@ -36,6 +42,9 @@ REDIS_CACHE_TTL = 86400  # 24 hours
 REDIS_KEY_PREFIX = "product:upc:"
 
 
+_UPC_RE = re.compile(r"^\d{12,13}$")
+
+
 class ProductNotFoundError(Exception):
     """Raised when no source can resolve a UPC."""
 
@@ -44,12 +53,91 @@ class ProductNotFoundError(Exception):
         super().__init__(f"No product found for UPC {upc}")
 
 
+class UPCNotFoundForDescriptionError(Exception):
+    """Raised when Gemini cannot resolve a device description to a UPC.
+
+    Distinct from ``ProductNotFoundError`` (which means the UPC existed but
+    no source identified a product) — here the UPC itself could not be
+    derived from the description. The router maps this to HTTP 404 with a
+    specific error code so the iOS client can surface a clearer message
+    than the generic "product not found".
+    """
+
+    def __init__(self, device_name: str):
+        self.device_name = device_name
+        super().__init__(f"No UPC found for product description: {device_name!r}")
+
+
 class ProductResolutionService:
     """Resolves a UPC barcode to a canonical Product record."""
 
     def __init__(self, db: AsyncSession, redis: aioredis.Redis):
         self.db = db
         self.redis = redis
+
+    async def resolve_from_search(
+        self,
+        device_name: str,
+        brand: str | None = None,
+        model: str | None = None,
+    ) -> Product:
+        """Resolve a Gemini-sourced search result (no UPC yet) to a canonical Product.
+
+        Runs a targeted Gemini ``device → UPC`` lookup, then delegates to
+        :meth:`resolve` so the existing Gemini + UPCitemdb cross-validation
+        and Redis caching paths handle persistence.
+
+        Raises:
+            UPCNotFoundForDescriptionError: Gemini could not derive a UPC.
+            ProductNotFoundError: UPC was derived but no source identified a product.
+        """
+        upc = await self._lookup_upc_from_description(device_name, brand, model)
+        if not upc:
+            raise UPCNotFoundForDescriptionError(device_name)
+        return await self.resolve(upc)
+
+    async def _lookup_upc_from_description(
+        self,
+        device_name: str,
+        brand: str | None,
+        model: str | None,
+    ) -> str | None:
+        """Call Gemini to convert a device description into a canonical UPC.
+
+        Retries once with a broader prompt if the first attempt returns
+        null. Returns a validated 12/13-digit string or None.
+        """
+        try:
+            prompt = build_device_to_upc_prompt(device_name, brand, model)
+            raw = await gemini_generate_json(
+                prompt,
+                system_instruction=DEVICE_TO_UPC_SYSTEM_INSTRUCTION,
+            )
+            upc = _extract_upc(raw)
+
+            if not upc:
+                logger.info(
+                    "Gemini returned null UPC for device %r, retrying", device_name
+                )
+                retry = build_device_to_upc_retry_prompt(device_name, brand, model)
+                raw = await gemini_generate_json(
+                    retry,
+                    system_instruction=DEVICE_TO_UPC_SYSTEM_INSTRUCTION,
+                )
+                upc = _extract_upc(raw)
+
+            if upc:
+                logger.info("Gemini resolved device→UPC: %r → %s", device_name, upc)
+            else:
+                logger.info(
+                    "Gemini could not resolve device→UPC after retry: %r", device_name
+                )
+            return upc
+        except Exception:
+            logger.warning(
+                "Gemini device→UPC lookup failed for %r", device_name, exc_info=True
+            )
+            return None
 
     async def resolve(self, upc: str) -> Product:
         """Resolve a UPC to a Product, checking all sources in order.
@@ -295,3 +383,23 @@ class ProductResolutionService:
             str(product.id),
             ex=REDIS_CACHE_TTL,
         )
+
+
+def _extract_upc(raw) -> str | None:
+    """Pull a validated 12/13-digit UPC string out of a Gemini device→UPC response.
+
+    Gemini may return ``{"upc": "0279..."}`` or a bare dict shaped slightly
+    differently on retry. Be defensive: unwrap, coerce to str, validate with
+    the same regex the resolve request uses, reject anything else.
+    """
+    if not isinstance(raw, dict):
+        return None
+    candidate = raw.get("upc")
+    if candidate is None:
+        return None
+    if not isinstance(candidate, str):
+        candidate = str(candidate)
+    candidate = candidate.strip()
+    if not _UPC_RE.match(candidate):
+        return None
+    return candidate

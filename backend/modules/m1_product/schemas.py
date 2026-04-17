@@ -59,6 +59,22 @@ class ProductSearchRequest(BaseModel):
     max_results: int = Field(10, ge=1, le=20)
 
 
+class ResolveFromSearchRequest(BaseModel):
+    """Request body for POST /api/v1/products/resolve-from-search.
+
+    Used when the iOS client taps a Gemini-sourced search result that had
+    ``primary_upc=null``. The backend runs a targeted Gemini device→UPC
+    lookup and then delegates to the normal ``/resolve`` path so the product
+    is persisted and returned in the same shape as ``/resolve``.
+    """
+
+    device_name: str = Field(..., min_length=3, max_length=300)
+    brand: str | None = Field(default=None, max_length=120)
+    model: str | None = Field(default=None, max_length=120)
+
+    model_config = {"protected_namespaces": ()}
+
+
 class ProductSearchResult(BaseModel):
     """A single result in a product search response.
 

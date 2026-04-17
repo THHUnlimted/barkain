@@ -13,6 +13,7 @@ nonisolated enum HTTPMethod: String {
 
 nonisolated enum Endpoint {
     case resolveProduct(upc: String)
+    case resolveFromSearch(deviceName: String, brand: String?, model: String?)
     case searchProducts(query: String, maxResults: Int)
     case getPrices(productId: UUID, forceRefresh: Bool = false)
     case streamPrices(productId: UUID, forceRefresh: Bool = false)
@@ -40,6 +41,8 @@ nonisolated enum Endpoint {
         switch self {
         case .resolveProduct:
             return "/api/v1/products/resolve"
+        case .resolveFromSearch:
+            return "/api/v1/products/resolve-from-search"
         case .searchProducts:
             return "/api/v1/products/search"
         case .getPrices(let productId, _):
@@ -75,8 +78,8 @@ nonisolated enum Endpoint {
 
     var method: HTTPMethod {
         switch self {
-        case .resolveProduct, .searchProducts, .updateIdentityProfile, .addCard,
-             .setCardCategories, .getAffiliateURL:
+        case .resolveProduct, .resolveFromSearch, .searchProducts, .updateIdentityProfile,
+             .addCard, .setCardCategories, .getAffiliateURL:
             return .post
         case .setPreferredCard:
             return .put
@@ -109,6 +112,15 @@ nonisolated enum Endpoint {
         switch self {
         case .resolveProduct(let upc):
             return try? JSONEncoder().encode(["upc": upc])
+        case .resolveFromSearch(let deviceName, let brand, let model):
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            struct Body: Encodable {
+                let deviceName: String
+                let brand: String?
+                let model: String?
+            }
+            return try? encoder.encode(Body(deviceName: deviceName, brand: brand, model: model))
         case .searchProducts(let query, let maxResults):
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase

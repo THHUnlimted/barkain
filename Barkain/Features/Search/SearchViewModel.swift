@@ -74,6 +74,13 @@ final class SearchViewModel {
         error = nil
         searchTask?.cancel()
 
+        // If a previous tap left a PriceComparisonView on screen, dismiss it
+        // as soon as the user edits the search bar — otherwise the results
+        // list is hidden behind the comparison view and typing feels dead.
+        if presentedProductViewModel != nil {
+            presentedProductViewModel = nil
+        }
+
         let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             results = []
@@ -151,13 +158,25 @@ final class SearchViewModel {
             await presentProduct(product)
 
         case .gemini:
-            guard let upc = result.primaryUpc, !upc.isEmpty else {
-                resolveFailureMessage = "Couldn't confirm this product — try scanning the barcode."
-                return
-            }
+            isLoading = true
+            defer { isLoading = false }
             do {
-                let product = try await apiClient.resolveProduct(upc: upc)
+                let product: Product
+                if let upc = result.primaryUpc, !upc.isEmpty {
+                    product = try await apiClient.resolveProduct(upc: upc)
+                } else {
+                    // Gemini returned this row without a UPC — run the tap-time
+                    // device→UPC lookup via /resolve-from-search so older /
+                    // discontinued SKUs still resolve to a persisted Product.
+                    product = try await apiClient.resolveProductFromSearch(
+                        deviceName: result.deviceName,
+                        brand: result.brand,
+                        model: result.model
+                    )
+                }
                 await presentProduct(product)
+            } catch APIError.notFound {
+                resolveFailureMessage = "Couldn't find a barcode for this product — try scanning it instead."
             } catch let apiError as APIError {
                 error = apiError
             } catch {
@@ -198,6 +217,7 @@ final class SearchViewModel {
 
     func selectRecentSearch(_ text: String) {
         query = text
+        presentedProductViewModel = nil
         searchTask?.cancel()
         searchTask = Task { [weak self] in
             guard let self else { return }

@@ -84,12 +84,14 @@ async def _seed_product_with_price(
     price: float,
     *,
     name: str = "Test Product",
+    brand: str | None = None,
+    category: str | None = None,
 ) -> Product:
     product = Product(
         name=name,
-        brand="Test",
+        brand=brand,
         upc="000000000000",
-        category="test",
+        category=category,
         source="test",
     )
     db_session.add(product)
@@ -314,7 +316,11 @@ async def test_eligible_discounts_percentage_savings(db_session):
     await _seed_user(db_session)
     await _seed_retailer(db_session, "samsung_direct")
     await _seed_retailer(db_session, "walmart_test")
-    product = await _seed_product_with_price(db_session, "walmart_test", 1500.00)
+    # Brand + category required so the relevance gate doesn't prune
+    # samsung_direct (BRAND_SPECIFIC_RETAILERS / RETAILER_CATEGORY_KEYWORDS).
+    product = await _seed_product_with_price(
+        db_session, "walmart_test", 1500.00, brand="Samsung", category="electronics"
+    )
     await _seed_program(
         db_session, "samsung_direct", "Samsung Offer Program", "military", discount_value=30
     )
@@ -361,7 +367,9 @@ async def test_eligible_discounts_fixed_amount(db_session):
     await _seed_user(db_session)
     await _seed_retailer(db_session, "samsung_direct")
     await _seed_retailer(db_session, "walmart_test")
-    product = await _seed_product_with_price(db_session, "walmart_test", 1500.00)
+    product = await _seed_product_with_price(
+        db_session, "walmart_test", 1500.00, brand="Samsung", category="electronics"
+    )
     await _seed_program(
         db_session,
         "samsung_direct",
@@ -399,12 +407,106 @@ async def test_eligible_discounts_no_product_id_no_savings(db_session):
     assert resp.eligible_discounts[0].estimated_savings is None
 
 
+async def test_eligible_discounts_filters_brand_mismatched_retailer(db_session):
+    """Apple phone → Samsung.com discount is hidden (brand gate)."""
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "samsung_direct")
+    await _seed_retailer(db_session, "apple_direct")
+    await _seed_retailer(db_session, "walmart_test")
+    product = await _seed_product_with_price(
+        db_session,
+        "walmart_test",
+        999.00,
+        name="Apple iPhone 17 Pro",
+        brand="Apple",
+        category="Electronics > Communications > Telephony > Mobile Phones",
+    )
+    await _seed_program(
+        db_session, "samsung_direct", "Samsung Offer Program", "veteran", discount_value=30
+    )
+    await _seed_program(
+        db_session, "apple_direct", "Apple Military", "veteran", discount_value=10
+    )
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_veteran=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=product.id)
+
+    retailer_ids = {d.retailer_id for d in resp.eligible_discounts}
+    assert "apple_direct" in retailer_ids
+    assert "samsung_direct" not in retailer_ids
+
+
+async def test_eligible_discounts_filters_category_mismatched_retailer(db_session):
+    """Phone product → Lowe's discount is hidden (category gate via name fallback)."""
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "lowes")
+    await _seed_retailer(db_session, "amazon")
+    await _seed_retailer(db_session, "walmart_test")
+    # No category on purpose — tests that the name fallback drives the gate.
+    product = await _seed_product_with_price(
+        db_session,
+        "walmart_test",
+        999.00,
+        name="Apple iPhone 17 Pro 256GB",
+        brand="Apple",
+    )
+    await _seed_program(
+        db_session, "lowes", "Lowe's Military", "veteran", discount_value=10
+    )
+    await _seed_program(
+        db_session, "amazon", "Amazon Prime Military", "veteran", discount_value=5
+    )
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_veteran=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=product.id)
+
+    retailer_ids = {d.retailer_id for d in resp.eligible_discounts}
+    assert "amazon" in retailer_ids
+    assert "lowes" not in retailer_ids
+
+
+async def test_eligible_discounts_no_product_id_skips_relevance_filter(db_session):
+    """Browse view (product_id=None) returns ALL user-eligible discounts."""
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "samsung_direct")
+    await _seed_retailer(db_session, "lowes")
+    await _seed_program(
+        db_session, "samsung_direct", "Samsung Offer Program", "veteran", discount_value=30
+    )
+    await _seed_program(
+        db_session, "lowes", "Lowe's Military", "veteran", discount_value=10
+    )
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_veteran=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=None)
+
+    retailer_ids = {d.retailer_id for d in resp.eligible_discounts}
+    assert "samsung_direct" in retailer_ids
+    assert "lowes" in retailer_ids
+
+
 async def test_eligible_discounts_no_prices_no_savings(db_session):
     """If product exists but has no prices yet, estimated_savings is null."""
     await _seed_user(db_session)
     await _seed_retailer(db_session, "samsung_direct")
     product = Product(
-        name="Unpriced Product", upc="111111111111", source="test"
+        name="Unpriced Product",
+        brand="Samsung",
+        category="electronics",
+        upc="111111111111",
+        source="test",
     )
     db_session.add(product)
     await db_session.flush()
