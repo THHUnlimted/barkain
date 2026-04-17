@@ -8,6 +8,9 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     // MARK: - Configurable Results
 
     var resolveProductResult: Result<Product, APIError> = .success(TestFixtures.sampleProduct)
+    var searchProductsResult: Result<ProductSearchResponse, APIError> = .success(
+        ProductSearchResponse(query: "", results: [], totalResults: 0, cached: false)
+    )
     var getPricesResult: Result<PriceComparison, APIError> = .success(TestFixtures.samplePriceComparison)
     var getIdentityProfileResult: Result<IdentityProfile, APIError> = .success(TestFixtures.sampleIdentityProfile)
     var updateIdentityProfileResult: Result<IdentityProfile, APIError> = .success(TestFixtures.sampleIdentityProfile)
@@ -19,6 +22,10 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
 
     var resolveProductCallCount = 0
     var resolveProductLastUPC: String?
+    var searchProductsCallCount = 0
+    var searchProductsLastQuery: String?
+    var searchProductsLastMaxResults: Int?
+    var searchProductsDelay: TimeInterval = 0
     var getPricesCallCount = 0
     var getPricesLastProductId: UUID?
     var getPricesLastForceRefresh: Bool?
@@ -107,6 +114,16 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
             try await Task.sleep(for: .seconds(resolveProductDelay))
         }
         return try resolveProductResult.get()
+    }
+
+    func searchProducts(query: String, maxResults: Int) async throws -> ProductSearchResponse {
+        searchProductsCallCount += 1
+        searchProductsLastQuery = query
+        searchProductsLastMaxResults = maxResults
+        if searchProductsDelay > 0 {
+            try await Task.sleep(for: .seconds(searchProductsDelay))
+        }
+        return try searchProductsResult.get()
     }
 
     func getPrices(productId: UUID, forceRefresh: Bool) async throws -> PriceComparison {

@@ -126,6 +126,55 @@ POST /extract
 
 ## Query Flow: Scan to Recommendation
 
+### Step 3a — Text Search Entry Point (LIVE since Step 3a, 2026-04-16)
+
+The Search tab is now the third discovery surface alongside barcode scan and manual UPC entry. `POST /api/v1/products/search` accepts a normalized free-text query and returns a ranked list of products that the user taps to enter the standard price-comparison flow.
+
+Flow:
+```
+User types query in Search tab (iOS SearchView, 300 ms debounce)
+         │
+         ▼
+┌─────────────────────────────────────────────────┐
+│  POST /api/v1/products/search                    │
+│  ───────────────────────────────                 │
+│  1. Normalize (lowercase, collapse whitespace,   │
+│     strip surrounding punctuation)               │
+│  2. Check Redis: search:query:{sha256[:16]}:{n}  │
+│     (24h TTL — shared across users)              │
+│  3. DB fuzzy match via pg_trgm similarity on     │
+│     products.name (threshold 0.3, backed by      │
+│     idx_products_name_trgm GIN index from        │
+│     migration 0007)                              │
+│  4. If <3 DB rows OR top similarity <0.5 →       │
+│     call Gemini with Google Search grounding     │
+│     (system instruction in                       │
+│      ai/prompts/product_search.py — DO NOT       │
+│      CONDENSE marker). Retry once on null.       │
+│  5. Dedupe Gemini vs DB on lowercased            │
+│     (brand, name) tuple — DB results win ties.   │
+│  6. Cache the merged response. Gemini rows are   │
+│     NOT persisted to products.                   │
+└─────────────────────────────────────────────────┘
+         │
+         ▼
+User taps a result
+         │
+         ├── source == "db"  → reuse Product row (no extra request)
+         └── source == "gemini" + primary_upc set → POST /products/resolve
+                                                    (standard Gemini + UPCitemdb
+                                                    cross-validation path)
+         │
+         ▼
+   ┌───────────────┐
+   │   Step 0      │  (existing barcode flow continues from here)
+   └───────────────┘
+```
+
+Indexing scope: the DB leg matches against whatever is already in `products`. Barkain does not index a full retailer catalog — `products` grows organically as users scan/resolve UPCs. For cold brand + category queries the DB leg will miss and Gemini's grounded search fills the gap. Redis caching ensures the second user asking the same question in 24h avoids both legs entirely.
+
+---
+
 ```
 USER ACTION (barcode scan / image scan / text search)
          │

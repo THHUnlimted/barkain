@@ -8,7 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db, get_rate_limiter, get_redis
 from app.errors import raise_http_error
-from modules.m1_product.schemas import ProductResolveRequest, ProductResponse
+from modules.m1_product.schemas import (
+    ProductResolveRequest,
+    ProductResponse,
+    ProductSearchRequest,
+    ProductSearchResponse,
+)
+from modules.m1_product.search_service import ProductSearchService
 from modules.m1_product.service import (
     ProductNotFoundError,
     ProductResolutionService,
@@ -42,3 +48,30 @@ async def resolve_product(
         return ProductResponse.model_validate(product)
     except ProductNotFoundError:
         raise_http_error(404, "PRODUCT_NOT_FOUND", f"No product found for UPC {body.upc}", {"upc": body.upc})
+
+
+@router.post(
+    "/search",
+    response_model=ProductSearchResponse,
+    status_code=200,
+    responses={
+        422: {"description": "Invalid query (length <3 or >200) or invalid max_results"},
+        429: {"description": "Rate limit exceeded"},
+    },
+)
+async def search_products(
+    body: ProductSearchRequest,
+    user: dict = Depends(get_current_user),
+    _rate: None = Depends(get_rate_limiter("general")),
+    db: AsyncSession = Depends(get_db),
+    redis_client: aioredis.Redis = Depends(get_redis),
+) -> ProductSearchResponse:
+    """Text search for products. Returns a ranked list.
+
+    DB fuzzy match (pg_trgm) first; Gemini fills in when DB results are
+    sparse or low-confidence. Tapping a result on the iOS side triggers the
+    standard ``/products/resolve`` path to create/reuse a Product row —
+    search itself never persists speculative Gemini results.
+    """
+    service = ProductSearchService(db=db, redis=redis_client)
+    return await service.search(body.query, body.max_results)
