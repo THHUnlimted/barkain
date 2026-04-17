@@ -48,14 +48,15 @@ async def _ensure_schema(engine):
     if _schema_ready:
         return
 
-    # Drift marker: chk_subscription_tier from migration 0006.
+    # Drift marker: idx_products_name_trgm from migration 0007.
     # Update this query when adding new migrations that introduce
-    # constraints or columns to existing tables.
+    # constraints, columns, or indexes to existing tables.
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE"))
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         marker = await conn.execute(
             text(
-                "SELECT 1 FROM pg_constraint WHERE conname = 'chk_subscription_tier'"
+                "SELECT 1 FROM pg_indexes WHERE indexname = 'idx_products_name_trgm'"
             )
         )
         schema_current = marker.scalar() is not None
@@ -66,6 +67,7 @@ async def _ensure_schema(engine):
             await conn.execute(
                 text("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE")
             )
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         await conn.run_sync(Base.metadata.create_all)
 
     _schema_ready = True

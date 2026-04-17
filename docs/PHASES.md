@@ -177,7 +177,7 @@
 
 | Step | Scope | Status |
 |------|-------|--------|
-| 3a | AI abstraction layer: `backend/ai/`, model routing (Opus for Watchdog, Sonnet for tasks, Qwen/ERNIE for parsing, GPT fallback), Instructor for structured output parsing | ⬜ |
+| 3a | M1 Product Text Search: `POST /products/search` with pg_trgm fuzzy match + Gemini grounding fallback; iOS SearchView with 300 ms debounce and recent-searches; migration 0007 | ✅ |
 | 3b | M6 Recommendation Engine: synthesize all layers (prices + identity + cards + portals + secondary market + wait signal) into single recommendation via Claude Sonnet. Progressive updates as data streams in | ⬜ |
 | 3c | Card reward matching: query-time algorithm (pure SQL, < 50ms), purchase interstitial overlay UI ("Use your Chase Freedom Flex for 5% back"), portal instruction, activation reminder | ⬜ |
 | 3d | Portal bonus integration: portal stacking with card recommendations, "Open Rakuten first" guidance, portal vs. direct tracking for analytics | ⬜ |
@@ -188,10 +188,13 @@
 | 3i | Coupon discovery + validation: agent-browser batch scraping of coupon sites, on-demand validation, confidence scoring | ⬜ |
 | 3j | Hardening: AI integration tests with mock responses, tag v0.3.0 | ⬜ |
 
+> **Note on renumbering:** the original PHASES stub named 3a "AI abstraction layer" — that infrastructure already shipped in Phase 1 at `backend/ai/abstraction.py` (Gemini + Anthropic async clients with retry, grounding, JSON parsing). 3a was reassigned to Product Text Search; subsequent steps keep their original letter assignments.
+
 ### Phase 3 API Endpoints (tagged for this phase)
 
 | Method | Path | Module | Description |
 |--------|------|--------|-------------|
+| POST | /api/v1/products/search | M1 | Text query → ranked product list (pg_trgm + Gemini grounding) |
 | POST | /api/v1/products/identify | M1 | Image → product (vision AI) |
 | POST | /api/v1/recommend | M6 | Full-stack recommendation |
 | POST | /api/v1/receipts/scan | M8+M10 | Receipt text → savings calc |

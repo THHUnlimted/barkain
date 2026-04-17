@@ -288,6 +288,7 @@ All AI calls request JSON output. Use Instructor library for Pydantic model vali
 |---|---|---|---|---|
 | GET | /api/v1/health | core | Health check (DB + Redis connectivity) | Exempt |
 | POST | /api/v1/products/resolve | M1 | UPC/barcode → product (Gemini API, UPCitemdb backup) | 60/min |
+| POST | /api/v1/products/search | M1 | **Step 3a** — Text query → ranked product list. Normalizes the query, probes a 24h Redis cache (`search:query:{sha256[:16]}:{n}`), runs `pg_trgm` fuzzy match against `products.name` (similarity ≥ 0.3, backed by `idx_products_name_trgm`), and falls back to Gemini with Google Search grounding when DB returns <3 rows OR top similarity <0.5. Gemini results are NOT persisted — on tap, iOS calls `/products/resolve` with the `primary_upc` to create/reuse a Product row. Returns `ProductSearchResponse { query, results[], total_results, cached }`. | 60/min |
 | GET | /api/v1/prices/{product_id} | M2 | Batch price comparison across all 11 retailers (blocks until every retailer completes) | 60/min |
 | GET | /api/v1/prices/{product_id}/stream | M2 | **Step 2c** — SSE stream of per-retailer results using `asyncio.as_completed`. Each retailer yields a `retailer_result` event the moment it finishes (walmart ~12s, amazon ~30s, best_buy ~91s), terminated by a `done` event. Cache hit replays all events instantly. Fallback surface if the stream fails: the batch endpoint above. `?force_refresh=true` bypasses cache. | 60/min |
 

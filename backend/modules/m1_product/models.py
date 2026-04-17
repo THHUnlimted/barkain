@@ -53,4 +53,12 @@ class Product(Base):
             "category",
             postgresql_where=text("category IS NOT NULL"),
         ),
+        # Mirrors migration 0007 — pg_trgm GIN index on name for text search
+        # (Step 3a). Uses gin_trgm_ops opclass; the extension itself is
+        # created by the migration, not here.
+        Index(
+            "idx_products_name_trgm",
+            text("name gin_trgm_ops"),
+            postgresql_using="gin",
+        ),
     )

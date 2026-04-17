@@ -23,7 +23,7 @@ struct ContentView: View {
             }
 
             NavigationStack {
-                SearchPlaceholderView()
+                SearchView()
             }
             .tabItem {
                 Label("Search", systemImage: "magnifyingglass")

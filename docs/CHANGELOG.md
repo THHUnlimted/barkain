@@ -1251,3 +1251,128 @@ docs/DATA_MODEL.md                                            # Note on migratio
 | `ProgressiveLoadingView` removed from scanner flow | `ScannerView.scannerContent` now shows `PriceComparisonView` whenever `priceComparison` is non-nil (swapped branch order with `isPriceLoading`). `priceLoadingView()` and `loadingRetailerItems` deleted. `ProgressiveLoadingView.swift` file kept in place (may be reused later) but no longer referenced | `PriceComparisonView` already renders the growing retailer list as `retailerResults` fills in — the user sees retailers appear one-by-one naturally. A separate cosmetic loader on top would have created a two-stage transition (loader → comparison) with duplicated information. Deleting the loader usage gives us single-source-of-truth progressive UI. A minimal `LoadingState("Sniffing out deals...")` still shows in the brief window before the first event seeds the comparison. Step 2c (2026-04-13) | Apr 2026 |
 | fd-3 stdout backfill for remaining 9 retailers (PF-1) | All 9 extract.sh files that were missing the `exec 3>&1; exec 1>&2` + `>&3` pattern (target, home_depot, lowes, ebay_new, ebay_used, sams_club, backmarket, fb_marketplace, walmart) now follow the convention introduced by SP-1 and applied to amazon + best_buy in scan-to-prices. All 11 retailer extract.sh files are now consistent | Chose inline copy-paste over extracting to a shared `containers/base/extract_helpers.sh` helper. Inline is 3 small edits per file; a shared helper would need a new file + `COPY` line in 9 Dockerfiles + `source` line in 9 extract.sh files — strictly more surface area. Walmart/extract.sh is currently dead code (WALMART_ADAPTER=firecrawl) but fixed anyway for consistency and to prevent the bug from reappearing if the env var is flipped. Step 2c (2026-04-13) | Apr 2026 |
 | `pytestmark = pytest.mark.asyncio` removed (PF-2) | Deleted line 18 of `backend/tests/modules/test_m2_prices.py`. `pyproject.toml` already has `asyncio_mode = "auto"` which auto-detects async tests | The redundant `pytestmark` was generating 33 `PytestWarning: The test is marked with '@pytest.mark.asyncio' but it is not an async function` warnings on every run (the sync parametrize tests like `test_classify_error_status_all_unavailable_codes` inherited the mark). Silencing these cleans up the CI log output. Zero test behavior changes. Step 2c (2026-04-13) | Apr 2026 |
+
+---
+
+## Step 3a — M1 Product Text Search (2026-04-16)
+
+Phase 3 opens with the Search tab. Users can now type a free-text product query ("Sony WH-1000XM5", "airpods pro 2", "wireless earbuds"), see a ranked list, and tap a result to enter the same SSE price-comparison flow the Scanner drives. The original PHASES.md stub had named 3a "AI abstraction layer" — that infrastructure already shipped in Phase 1 at `backend/ai/abstraction.py`, so 3a was reassigned to Product Text Search and the rest of Phase 3 keeps its original letter assignments.
+
+### Scope
+
+- `POST /api/v1/products/search` with Pydantic-validated body (`query: 3–200 chars`, `max_results: 1–20`)
+- `ProductSearchService` — Redis cache → pg_trgm DB fuzzy match → Gemini Google-grounded fallback → dedupe → 24h cache write
+- Migration 0007: `CREATE EXTENSION pg_trgm` + `idx_products_name_trgm` GIN index on `products.name`
+- `Product.__table_args__` mirror of the index so `Base.metadata.create_all` (test DB) matches alembic
+- conftest drift marker updated from `chk_subscription_tier` (0006) → `idx_products_name_trgm` (0007); test DB now also creates `pg_trgm` alongside `timescaledb`
+- Gemini system instruction (`backend/ai/prompts/product_search.py`) with `# DO NOT CONDENSE OR SHORTEN — COPY VERBATIM` header, matching the `upc_lookup.py` pattern
+- iOS `SearchView` + `SearchViewModel` + `SearchResultRow` replace the placeholder; Scan tab untouched
+- `APIClient.searchProducts(query:maxResults:)` + `Endpoint.searchProducts` case
+- 4 `PreviewAPIClient` stubs + `MockAPIClient` extended with `searchProducts` for protocol conformance
+- 1 XCUITest end-to-end (`SearchFlowUITests.testTextSearchToAffiliateSheet`)
+
+### File Inventory
+
+**New — backend**
+- `backend/ai/prompts/product_search.py` — system instruction + `build_product_search_prompt` + `build_product_search_retry_prompt`
+- `backend/modules/m1_product/search_service.py` — `ProductSearchService` class, `_normalize`, `_dedup_key`, `_extract_gemini_list`
+- `infrastructure/migrations/versions/0007_product_name_search.py`
+- `backend/tests/modules/test_product_search.py` (10 tests)
+
+**New — iOS**
+- `Barkain/Features/Search/SearchView.swift`
+- `Barkain/Features/Search/SearchViewModel.swift`
+- `Barkain/Features/Search/SearchResultRow.swift`
+- `Barkain/Features/Shared/Models/ProductSearchResult.swift`
+- `BarkainTests/Features/Search/SearchViewModelTests.swift` (6 tests)
+- `BarkainUITests/SearchFlowUITests.swift` (1 test)
+
+**Modified — backend**
+- `backend/modules/m1_product/router.py` — new `@router.post("/search")` endpoint, DI order `body → user → _rate → db → redis` mirroring `/resolve`
+- `backend/modules/m1_product/schemas.py` — `ProductSearchRequest`, `ProductSearchResult`, `ProductSearchResponse`, `ProductSearchSource`-via-`Literal`
+- `backend/modules/m1_product/models.py` — `Product.__table_args__` gains the `idx_products_name_trgm` `Index` entry (`postgresql_using="gin"`, `text("name gin_trgm_ops")`)
+- `backend/tests/conftest.py::_ensure_schema` — drift marker swap + `pg_trgm` extension creation in both the probe branch and the drop-recreate branch
+
+**Modified — iOS**
+- `Barkain/Services/Networking/APIClient.swift` — protocol + impl method
+- `Barkain/Services/Networking/Endpoints.swift` — case + path + method + body
+- `Barkain/ContentView.swift` — `SearchPlaceholderView()` → `SearchView()`
+- `BarkainTests/Helpers/MockAPIClient.swift` — `searchProductsResult/CallCount/LastQuery/LastMaxResults/Delay`
+- `Barkain/Features/Recommendation/PriceComparisonView.swift` — `PreviewAPIClient.searchProducts` stub
+- `Barkain/Features/Profile/CardSelectionView.swift` — `PreviewCardAPIClient.searchProducts` stub
+- `Barkain/Features/Profile/IdentityOnboardingView.swift` — `PreviewOnboardingAPIClient.searchProducts` stub
+- `Barkain/Features/Profile/ProfileView.swift` — `PreviewProfileAPIClient.searchProducts` stub
+
+**Modified — docs (FINAL)**
+- `CLAUDE.md` (compressed 2i-d row + new Phase 3 row; 27,995 chars — under the 28,000 budget)
+- `docs/CHANGELOG.md` (this entry)
+- `docs/PHASES.md` — 3a rewritten + note on letter reassignment + new `POST /products/search` endpoint row
+- `docs/TESTING.md` — Step 3a row with full 17-test breakdown
+- `docs/ARCHITECTURE.md` — new `/products/search` row in the endpoint inventory
+- `docs/DATA_MODEL.md` — new 0007 migration row
+- `docs/SEARCH_STRATEGY.md` — new "Step 3a — Text Search Entry Point" section prepended to the Query Flow chart
+
+### Decisions
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| D1 | PHASES.md: replace 3a, renumber none (3b–3j unchanged) | The old 3a "AI abstraction layer" is already live. Dropping the stale row and reassigning 3a is cleaner than inserting a new row and bumping everything. |
+| D2 | Include XCUITest `SearchFlowUITests.swift` | 2i-d proved the project.pbxproj synchronized-root-group pattern picks up new UI test files automatically (no pbxproj edit required on Xcode 16+). E2E coverage of the new discovery surface is worth +1 UI test. |
+| D3 | `ProductSearchService(db, redis)` — no `ai` injection | Mirrors existing `ProductResolutionService`; Gemini is called as the free function `gemini_generate_json`, so tests mock at the service import boundary. No new `get_ai` dependency needed. |
+| D4 | Pre-flight: `git stash -u` → `git checkout main && git pull` → branch | Uncommitted state on main (Phase 2 consolidation cleanup + ebay_used staging) was unrelated to 3a and stayed stashed. |
+| D5 | Persist Gemini results **on tap only** — NOT at search time | Avoids DB bloat from speculative / ambiguous searches. Matches the prompt package's Decision #11 recommendation. `products` grows only when a user actually wants prices for a specific row. |
+| D6 | Null-UPC Gemini results surface a toast, not a fallback endpoint | Building `/resolve-from-search` this step was out of scope. Gemini returns `primary_upc` for most flagship products (it's grounded on retailer pages), so the fallback UX — "Couldn't confirm this product — try scanning the barcode" — is rare and discoverable. |
+| D7 | Redis key: `search:query:{sha256(normalized_query)[:16]}:{max_results}`, 24h TTL | `search:` prefix collides with nothing (`tier:`, `product:upc:`, `prices:product:`, `revenuecat:processed:` are the other namespaces). `max_results` in the key prevents a `limit=10` request from serving stale `limit=20` data. 16-char SHA prefix keeps the key short while giving ample collision resistance for the cache domain. 24h matches the `product:upc:` TTL so operators have one eviction story. |
+| D8 | Query normalization: lowercase → strip leading/trailing `\W_` → collapse internal whitespace; Pydantic `Field(..., min_length=3, max_length=200)` rejects at the schema layer (→ 422) | Normalization is done at cache-key build time; the user-visible `query` field in the response is the raw original string so the iOS label reads naturally. |
+| D9 | DB fuzzy match: pg_trgm similarity ≥ 0.3; call Gemini when `len(db_rows) < 3` OR `top_similarity < 0.5` | 0.3 is a conservative recall threshold so close-but-wrong SKU names still surface for dedup; 0.5 cutoff on the top row triggers Gemini enrichment when the user's query is unlike anything in the cache (new brand, misspelling, category-only). Both constants are single-line tunable at the top of `search_service.py`. |
+| D10 | Dedupe Gemini vs. DB on normalized `(lower(brand or ''), lower(device_name))` | `brand + name` is the stable identity tuple. Most Gemini-only rows lack `primary_upc`, so UPC-based dedup is insufficient. The test `test_search_gemini_dedup` validates case-insensitive dedup: `"Sony WH-1000XM5"` (DB) correctly collapses `"sony wh-1000xm5"` (Gemini). |
+| D11 | Rate limit: reuse `get_rate_limiter("general")` | Same category as `/products/resolve`, `/identity/discounts`, `/cards/recommendations`. One rate-limit bucket means a user running many searches + resolves converges on one fair budget. Introducing a separate "search" bucket would have required a new `RATE_LIMIT_SEARCH` config + new tier multiplier and added ops complexity for no user-visible benefit. |
+
+### Tests
+
+**Backend (10 new)** — `backend/tests/modules/test_product_search.py`:
+
+1. `test_search_rejects_short_query` — 2-char query → 422
+2. `test_search_rejects_empty_query` — empty query → 422
+3. `test_search_pagination_cap` — `max_results=50` → 422 (cap is 20)
+4. `test_search_normalizes_query` — `"  iPhone 16  "` and `"iphone 16"` produce the same cache key; Gemini not called on the second request
+5. `test_search_db_fuzzy_match` — seed 3 iPhones, search "iPhone 16" → all 3 returned with `source="db"`, `product_id` populated
+6. `test_search_cache_hit` — second identical query returns `cached=true`, zero additional Gemini calls
+7. `test_search_gemini_fallback` — empty DB, Gemini mocked with 3 rows → response has 3 `source="gemini"` rows
+8. `test_search_gemini_dedup` — DB=2 + Gemini=3 (1 duplicate by lowercased (brand,name)) → merged list of 4, Gemini duplicate dropped
+9. `test_search_rate_limit` — `settings.RATE_LIMIT_GENERAL=3`, 4th call → 429 with `error.code=RATE_LIMITED`
+10. `test_search_pg_trgm_index_exists` — `pg_indexes` lookup for `idx_products_name_trgm`
+
+Mocking pattern: `patch("modules.m1_product.search_service.gemini_generate_json", new_callable=AsyncMock, return_value=…)` — same service-import-boundary pattern as `test_m1_product.py`.
+
+**iOS unit (6 new)** — `BarkainTests/Features/Search/SearchViewModelTests.swift`:
+
+1. `test_search_debounces_rapid_input` — 5 rapid `queryChanged` calls, `searchTask` cancels previous; only the final call fires. Uses an AsyncStream-gated clock so the test is deterministic without waiting the real 300 ms.
+2. `test_search_populatesResults_onSuccess`
+3. `test_search_setsError_onAPIFailure` (`.network` on URLError)
+4. `test_recentSearches_persistAndCapAt10` — 12 queries added, only the 10 newest retained (newest first); persists across a fresh `SearchViewModel` instance on the same `UserDefaults` suite
+5. `test_handleResultTap_dbSource_navigatesImmediately` — DB-sourced tap does NOT call `/resolve`; price fetch runs on the presented `ScannerViewModel`
+6. `test_handleResultTap_geminiSource_callsResolveWithUPC` — Gemini-sourced tap with `primary_upc` routes through `/resolve`
+
+Each test uses a per-UUID `UserDefaults(suiteName:)` so recent-search state can't leak between tests.
+
+**iOS UI (1 new)** — `BarkainUITests/SearchFlowUITests.swift::testTextSearchToAffiliateSheet`:
+
+Tab-bar Search → type "AirPods 3rd Generation" into `searchTextField` → wait up to 15 s for any `searchResultRow_*` → tap → wait up to 90 s for any `retailerRow_*` (Amazon/Best Buy/Walmart) → tap → OR-of-3-signals affiliate sheet assertion (`app.webViews.firstMatch`, `app.buttons["Done"]`, `!targetRow.isHittable`). Same three-signal trick used in 2i-d because iOS 26's SFSafariViewController chrome is not in the host app's accessibility tree. Requires live backend + retailer tunnels.
+
+**Totals (after 3a):** 312 backend (312 passed / 6 skipped) + 72 iOS unit + 3 iOS UI = **387 tests**.
+
+### Gotchas + micro-decisions
+
+- **`defaultDebounceNanos` had to be `nonisolated`**. `SearchViewModel` is `@MainActor`, and using its own static constant as a default argument expression in `init` fails to compile (`main actor-isolated static property … can not be referenced from a nonisolated context`). Marking the constant `nonisolated` is enough — it's a pure UInt64.
+- **AsyncStream iterator in a test actor.** The debounce test needs to gate the sleep from the main actor, but `AsyncStream.Iterator.next()` is `mutating`. Wrapping it in a tiny `actor SendableIterator` with a local-copy hop (`var local = iterator; _ = await local.next(); iterator = local`) lets the `@Sendable` closure call it without hitting the "cannot call mutating async function on actor-isolated property" error.
+- **`gemini_generate_json` typed `-> dict`, returns `list` for array responses.** Gemini's system instruction tells it to return a bare JSON array. `json.loads` happily parses that into a Python list; the function's annotation lies at runtime. `_extract_gemini_list` defensively accepts both a bare list and a `{"results": [...]}` shape.
+- **Gemini mock without an explicit `return_value` triggers the retry branch.** An `AsyncMock()` returns a `MagicMock` object which our list-extractor treats as empty, and the service then calls the retry prompt. In `test_search_normalizes_query` this inflates the call count — the fix was `return_value=[]` + snapshotting the call count across the two requests instead of asserting on an absolute number.
+- **`project.pbxproj` needed NO edits.** Xcode 16+ uses `PBXFileSystemSynchronizedRootGroup` for the Barkain/, BarkainTests/, and BarkainUITests/ directories — new files added to those folders are picked up automatically. The original plan expected a pbxproj diff; the synchronized group made it unnecessary.
+- **4 separate `PreviewAPIClient` structs needed the `searchProducts` stub.** Each feature (PriceComparisonView, CardSelectionView, IdentityOnboardingView, ProfileView) carries its own private preview client. When the protocol grows, every one of them needs the addition — caught by the build failure, not by SourceKit.
+- **Alembic on the dev DB requires a `DATABASE_URL` env var.** The project's `.env` only sets real service overrides (Clerk, Gemini, Decodo, etc.) — the DB URL comes from `backend/app/config.py` defaults when the backend runs under uvicorn, but `alembic upgrade head` from the CLI doesn't load `Settings`. `DATABASE_URL="postgresql+asyncpg://app:localdev@localhost:5432/barkain" alembic upgrade head` is the canonical invocation.
+
+### Verdict
+
+All 387 tests pass. `ruff check backend/ scripts/` clean. `xcodebuild build` clean. Migration 0007 applied in dev; drift detector will recreate the test DB on the next fresh run and pytest has already exercised the fresh-schema path. CLAUDE.md at 27,995 chars (under the 28,000 budget). Docs sweep covers all 7 guiding docs. PR ready from `phase-3/step-3a` → `main`.
+

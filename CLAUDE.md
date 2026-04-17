@@ -263,12 +263,18 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 | 2i-a | CLAUDE.md compaction + guiding-doc sweep | — | — | #17 |
 | 2i-b | Code quality sweep: `DEMO_MODE` rename, dead branches removed, `_classify_retailer_result` extraction, migration 0006 | +1 | — | #18 |
 | 2i-c | Operational validation: LocalStack workers end-to-end (caught + fixed worker model-registry FK bug), conftest schema-drift auto-recreate, CI `ruff check`, Phase 2 consolidation docs | — | — | #19 |
-| 2i-d | Operational validation: EC2 redeploy (11/11 containers, MD5 clean) + PAT scrub + Watchdog live `--check-all` (caught + fixed `CONTAINERS_ROOT` path bug) + deferred retailer validation (3/4 pass) + BarkainUITests E2E smoke test (manual UPC → SSE → affiliate sheet, `tag=barkain-20` verified in DB) | — | +1 UI | (this step) |
+| 2i-d | EC2 redeploy (11/11 containers, MD5 clean) + PAT scrub + Watchdog live `--check-all` (`CONTAINERS_ROOT` fix) + BarkainUITests E2E smoke | — | +1 UI | — |
 
-**Test totals:** **302 backend** (302 passed / 6 skipped) + **66 iOS unit** + **2 iOS UI** = **370 tests**.
+**Phase 3 — Recommendation Intelligence: IN PROGRESS**
+
+| Step | What | Backend tests | iOS tests | PR |
+|------|------|:-:|:-:|:-:|
+| 3a | M1 Product Text Search: `POST /products/search` + pg_trgm + Gemini fallback + SearchView | +10 | +6 unit/+1 UI | (this PR) |
+
+**Test totals:** **312 backend** (312 passed / 6 skipped) + **72 iOS unit** + **3 iOS UI** = **387 tests**.
 `ruff check` clean. `xcodebuild` clean.
 
-**Migrations:** 0001 (initial schema, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert index + `discount_programs.consecutive_failures`) → 0006 (`chk_subscription_tier` CHECK on `users.subscription_tier`).
+**Migrations:** 0001 (initial, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert + failure counter) → 0006 (`chk_subscription_tier` CHECK) → 0007 (pg_trgm extension + `idx_products_name_trgm` GIN index).
 
 > Per-step file inventories, detailed test breakdowns, and full decision rationale: see `docs/CHANGELOG.md`.
 
