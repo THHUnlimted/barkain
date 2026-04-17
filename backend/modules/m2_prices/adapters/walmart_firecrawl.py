@@ -80,10 +80,25 @@ async def fetch_walmart(
         )
 
     search_url = _SEARCH_URL_TEMPLATE.format(query=quote_plus(query))
+    # blockAds kills Meta Pixel, GA4, GTM, and ad-network subresource fetches
+    # at Firecrawl's headless browser layer. Critical for cost: without it,
+    # every rendered walmart.com page pulls ~70+ tracker hits.
+    # onlyMainContent=False preserves the full document — we parse
+    # __NEXT_DATA__, which sits outside article-extracted "main content".
+    # waitFor=1500ms gives Next.js server-rendered hydration time before
+    # rawHtml is snapshotted.
+    #
+    # DO NOT ADD: "proxy", "proxyServer", or any DECODO_* credential here.
+    # Firecrawl's managed upstream pool handles Walmart; overlaying Decodo
+    # would double-bill bandwidth. Regression-guarded in
+    # test_walmart_firecrawl_adapter.py::test_firecrawl_payload_has_no_decodo_overlay.
     payload = {
         "url": search_url,
         "formats": ["rawHtml"],
         "location": {"country": "US"},
+        "blockAds": True,
+        "onlyMainContent": False,
+        "waitFor": 1500,
     }
     headers = {
         "Authorization": f"Bearer {cfg.FIRECRAWL_API_KEY}",
@@ -100,6 +115,22 @@ async def fetch_walmart(
                 resp = await client.post(_FIRECRAWL_ENDPOINT, json=payload, headers=headers)
 
             elapsed_ms = int((time.perf_counter() - start) * 1000)
+            wire_bytes = len(resp.content or b"")
+
+            # Structured per-request observability. NOTE: wire_bytes here is
+            # the Firecrawl JSON response envelope, which is NOT the same as
+            # the Decodo-upstream bandwidth Firecrawl's own browser consumes
+            # (that's invisible to us). With `WALMART_ADAPTER=firecrawl`, any
+            # bandwidth appearing on the Decodo dashboard MUST come from a
+            # different adapter/container — see §C.11.
+            logger.info(
+                "adapter=walmart_firecrawl target=%s attempt=%d status=%s wire_bytes=%d elapsed_ms=%d",
+                search_url,
+                attempts,
+                resp.status_code,
+                wire_bytes,
+                elapsed_ms,
+            )
 
             if resp.status_code >= 400:
                 logger.warning(
