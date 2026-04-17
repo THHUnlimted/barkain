@@ -95,6 +95,23 @@ class Settings(BaseSettings):
     WALMART_AFFILIATE_ID: str = ""          # Empty until Impact Radius approval
     AFFILIATE_WEBHOOK_SECRET: str = ""      # Bearer token for /conversion (placeholder)
 
+    # eBay Marketplace Account Deletion webhook (GDPR — required for Browse API prod access).
+    # The token is an opaque 32-80 char string we pick and paste into the eBay developer
+    # portal. The endpoint is the fully-qualified public HTTPS URL eBay sends GETs+POSTs to.
+    # Both must match exactly between here and the portal — the challenge hash is
+    # SHA-256(challenge_code + token + endpoint); any drift breaks verification.
+    EBAY_VERIFICATION_TOKEN: str = ""
+    EBAY_ACCOUNT_DELETION_ENDPOINT: str = ""
+
+    # eBay Browse API credentials (App ID + Cert ID from the developer portal
+    # "Production Keyset"). When both are set the ebay_new / ebay_used retailer
+    # legs are served from the Browse API (sub-second, reliable) instead of the
+    # browser-container scraper. When unset, they fall back to the container
+    # path — the same pattern as WALMART_ADAPTER. Tokens are auto-refreshed via
+    # the client_credentials grant, 2 hr TTL, cached in-process.
+    EBAY_APP_ID: str = ""
+    EBAY_CERT_ID: str = ""
+
     # SQS / Background Workers (Step 2h)
     # LocalStack override for dev; empty string in prod so boto3 resolves
     # the real AWS SQS endpoint from the default credential chain.

@@ -1376,3 +1376,64 @@ Tab-bar Search → type "AirPods 3rd Generation" into `searchTextField` → wait
 
 All 387 tests pass. `ruff check backend/ scripts/` clean. `xcodebuild build` clean. Migration 0007 applied in dev; drift detector will recreate the test DB on the next fresh run and pytest has already exercised the fresh-schema path. CLAUDE.md at 27,995 chars (under the 28,000 budget). Docs sweep covers all 7 guiding docs. PR ready from `phase-3/step-3a` → `main`.
 
+---
+
+## Step 3b — eBay Browse API + Marketplace Account Deletion Webhook (2026-04-17)
+
+The scraper fleet's two eBay legs (`ebay_new` / `ebay_used`) were effectively dead — a 70-second Chromium call that returned 0 listings most runs because eBay's DOM had drifted out from under the saved selectors (known issue 2i-d-L3). Rather than chase selector maintenance, 3b swaps the eBay legs to the public Browse API (sub-second, no browser fleet, free-tier 5k calls/day). Prerequisite for that is eBay's mandatory Marketplace Account Deletion webhook (GDPR) — a public HTTPS endpoint that responds to a SHA-256 handshake and accepts deletion notifications. Both shipped in the same step.
+
+### Scope
+
+**eBay Marketplace Account Deletion webhook**
+- `backend/app/ebay_webhook.py` — new FastAPI router under `/api/v1/webhooks/ebay/account-deletion`. `GET` computes `SHA-256(challenge_code + token + endpoint)` and returns `{"challengeResponse": hex}`; `POST` logs `notificationId` / `userId` / `eoiUserId` and acks 204. Swallows malformed JSON (returns 204 anyway) so eBay doesn't retry.
+- `Settings.EBAY_VERIFICATION_TOKEN` + `Settings.EBAY_ACCOUNT_DELETION_ENDPOINT` — both 503 the GET if missing (fails loud on misconfigured prod)
+- 5 tests in `backend/tests/modules/test_ebay_webhook.py`
+
+**eBay Browse API adapter**
+- `backend/modules/m2_prices/adapters/ebay_browse_api.py` — new adapter mirroring the Walmart pattern. `is_configured()` gate; `_get_app_token()` with asyncio-lock refresh; `fetch_ebay(retailer_id, query, ...)` → `ContainerResponse` matching the existing schema. Supports `ebay_new` (conditionIds 1000/1500/1750) and `ebay_used` (2000/2500/3000/4000/5000/6000).
+- `modules/m2_prices/container_client.py` — `_resolve_ebay_adapter(cfg)` returns the adapter when both `EBAY_APP_ID` + `EBAY_CERT_ID` are set (else None → fall through to container). `_extract_one` routes `ebay_new`/`ebay_used` the same way it routes `walmart` today.
+- `Settings.EBAY_APP_ID` + `Settings.EBAY_CERT_ID`
+- 8 tests in `backend/tests/modules/test_ebay_browse_api.py`: config gate, OAuth token mint+cache, 401 invalidates cache, HTTP 5xx path, invalid retailer_id, happy-path mapping, conditionIds filter uses `|` separator, malformed-item-is-dropped
+- Fixture patch: `tests/modules/test_container_retailers_batch2.py` `_setup_client` now sets `client._cfg = Settings(EBAY_APP_ID="", EBAY_CERT_ID="")` so batch-2 dispatch tests keep routing ebay through the container path
+
+**Production deployment (single-host via EC2 + Caddy)**
+- `ebay-webhook.barkain.app` A record → `54.197.27.219` (the scraper EC2 — same `i-09ce25ed6df7a09b2` that hosts the 11 Chromium containers)
+- SG `sg-0235e0aafe9fa446e` opened on `:80` (LE HTTP-01 + redirect) and `:443` (webhook)
+- Caddy 2.11.2 installed via official apt repo; Caddyfile at `/etc/caddy/Caddyfile` reverse-proxies `:443` → `127.0.0.1:8000`. Let's Encrypt cert obtained in ~3s via TLS-ALPN-01 challenge (port 443 only — the HTTP-01 fallback was never needed).
+- `systemd` unit `/etc/systemd/system/barkain-api.service` runs `uvicorn app.main:app --host 127.0.0.1 --port 8000` as `ubuntu`, reads secrets from `/etc/barkain-api.env` (mode 600). Auto-restart on failure, `WantedBy=multi-user.target`.
+- Backend code lives at `/home/ubuntu/barkain-api/` (rsync'd from the local checkout; `.git/`, tests, `__pycache__/`, `.venv/` excluded). Python venv at `.venv/`; FastAPI 0.136.0 + uvicorn 0.44.0 installed via `pip install -r requirements.txt`.
+
+**Docs**
+- CLAUDE.md — Step 3b row added to Phase 3 table; test totals bumped to 335/72/3 = 410; new **"Production Infra (EC2)"** section gives future sessions copy-paste commands for SSH, container health, backend health, extract probes, redeploy, and cost-stop. Phase 3 decision block added. Phase 2 decision block compressed (detail already in this CHANGELOG) to absorb the budget impact — final size 28,462 chars, ~460 over the 28k soft target but the new content is load-bearing for future ops sessions.
+- `.env.example` — new `EBAY_APP_ID`, `EBAY_CERT_ID`, `EBAY_VERIFICATION_TOKEN`, `EBAY_ACCOUNT_DELETION_ENDPOINT` block with explanatory comments
+
+### Decisions
+
+- **D12 — Adapter gate on presence, not explicit mode.** Unlike `WALMART_ADAPTER` (three-way switch between `container`/`firecrawl`/`decodo_http`), the eBay adapter auto-prefers the API whenever `EBAY_APP_ID` + `EBAY_CERT_ID` are both set. No `EBAY_ADAPTER=api|container` flag. Reason: the container path was already broken; there's no "maybe the scraper is better today" scenario. Keeping the switch would just be configuration surface nobody should ever flip. Tests still cover the container-fallback path because they run with empty creds.
+- **D13 — Webhook lives in `app/`, not `modules/m13_ebay/`.** It's infrastructure/compliance plumbing (one router, two routes, no DB/Redis, no domain model), not a feature module. Creating a `m13_` namespace would imply scope it doesn't have. If the webhook ever grows (e.g., caching eBay user state that needs purging), revisit.
+- **D14 — `client_credentials` not `authorization_code`.** User tokens (96-char reference tokens from the dev portal's "Get a User Token" tool) have narrow scopes the user ticked by hand and expire unpredictably. App tokens from `client_credentials` grant have the default `https://api.ebay.com/oauth/api_scope` which covers Browse API, 2 hr TTL, auto-refreshable from the backend. Production wants the latter; the former is fine for one-off manual curl testing only.
+- **D15 — Token cache in-process, not Redis.** The app token is the same for every request (the App ID is global to Barkain), 2 hr TTL, and regenerating is a single sub-second HTTP call. Process-local dict + asyncio.Lock around the refresh is simpler than cross-process coordination via Redis, and under FastAPI/uvicorn the mint happens on first use per worker — negligible thundering herd.
+- **D16 — Single-host deploy (EC2 + Caddy), not Fargate + ALB.** The webhook endpoint needs public HTTPS, a stable domain, and ~10 bytes/sec of traffic. A new ECS service + ALB would be ~$35/month of idle cost for something the existing EC2 can serve for $0 marginal. When the rest of the backend (product search, SSE stream, identity, billing, affiliate) moves to AWS in Phase 4, Fargate becomes the right choice and this deployment retires.
+- **D17 — eBay filter DSL uses `|`, not `,`.** Discovered via live smoke: `conditionIds:{1000,1500}` silently returned unfiltered results; `conditionIds:{1000|1500}` filters correctly. Same for the text form `conditions:{NEW}` — it silently no-ops, which is why the first manual test from the previous session came back mixed. Always use numeric `conditionIds` with `|`. Pinned in an inline comment in the adapter so it doesn't regress.
+- **D18 — Webhook logs ack (not DB purge)** because Barkain doesn't store per-user eBay data today. If Phase 5 adds wishlists or user-bound eBay listings, extend `_handle_notification` to purge by `userId` / `eoiUserId`. Log-and-ack is GDPR-compliant until then.
+
+### Tests
+
+| # | Test file | Tests | What |
+|---|---|:--:|---|
+| 1 | `test_ebay_webhook.py` | 5 | GET challenge hash correctness, 503 on missing token, 503 on missing endpoint, POST logs + 204, POST on invalid JSON still 204 |
+| 2 | `test_ebay_browse_api.py` | 8 | `is_configured()` requires both ID + Cert; OAuth mints+caches; happy-path mapping; conditionIds filter uses `|`; invalid retailer_id returns INVALID_RETAILER; 401 clears token cache; 5xx returns HTTP_ERROR; malformed items silently dropped |
+| — | `test_container_retailers_batch2.py` | 0 new (fixture patched) | `_setup_client` now sets `client._cfg = Settings(EBAY_APP_ID="", EBAY_CERT_ID="")` so existing batch-dispatch tests keep routing ebay through the container path |
+
++13 backend tests. 335 passed / 6 skipped (up from 322 / 6). `ruff check backend/ scripts/` clean.
+
+### Live verification
+
+- **Webhook handshake:** eBay sent GET from `66.211.183.72` at 05:55:33 UTC; backend returned 200 with correct SHA-256; eBay then sent a dry-run POST from `66.135.202.172`; backend acked 204. Portal flipped the endpoint to Verified.
+- **Browse API AirPods Pro 2 search:** `ebay_new` returned 3 listings in 1,272 ms (conditions: new, open-box 1500); `ebay_used` returned 3 listings in 601 ms (all condition 3000). Direct comparison to the scraper path: container previously took ~70 s and returned 0 listings (selector drift). ~85× faster with real data.
+- **TLS cert:** Let's Encrypt E7 intermediate, subject `CN=ebay-webhook.barkain.app`, issued 2026-04-17, expires 2026-07-16. Caddy auto-renews within 30 days of expiry.
+
+### Verdict
+
+All 335 backend tests pass (410 total including iOS). `ruff check backend/ scripts/` clean. Webhook is production-verified end-to-end against real eBay traffic (GET handshake + POST notification both logged). Browse API adapter live-verified against AirPods Pro 2 and matches the scraper contract 1:1 — drop-in replacement requires only `EBAY_APP_ID` + `EBAY_CERT_ID` in the env. EC2 `/etc/barkain-api.env` already updated and `barkain-api.service` restarted; existing scraper containers unaffected (SG edit only added `:80` / `:443`). CLAUDE.md now carries the EC2 ops cheat-sheet so any future session can reach + monitor the host without re-discovering SSH keys / instance IDs / ports.
+

@@ -178,17 +178,18 @@
 | Step | Scope | Status |
 |------|-------|--------|
 | 3a | M1 Product Text Search: `POST /products/search` with pg_trgm fuzzy match + Gemini grounding fallback; iOS SearchView with 300 ms debounce and recent-searches; migration 0007 | ✅ |
-| 3b | M6 Recommendation Engine: synthesize all layers (prices + identity + cards + portals + secondary market + wait signal) into single recommendation via Claude Sonnet. Progressive updates as data streams in | ⬜ |
-| 3c | Card reward matching: query-time algorithm (pure SQL, < 50ms), purchase interstitial overlay UI ("Use your Chase Freedom Flex for 5% back"), portal instruction, activation reminder | ⬜ |
-| 3d | Portal bonus integration: portal stacking with card recommendations, "Open Rakuten first" guidance, portal vs. direct tracking for analytics | ⬜ |
-| 3e | M8 Image scanning: Claude Vision for product ID from photos (not just barcodes) | ⬜ |
-| 3f | M8+M10 Receipt scanning: on-device OCR (Vision framework) → structured text to backend → item extraction → savings calculation → dashboard | ⬜ |
-| 3g | Identity discount stacking in recommendations: brand-specific stacking rules, identity redirect opportunities (e.g., "Buy at Samsung.com with military discount for $450 less than Best Buy") | ⬜ |
-| 3h | Savings dashboard populated with real receipt data | ⬜ |
-| 3i | Coupon discovery + validation: agent-browser batch scraping of coupon sites, on-demand validation, confidence scoring | ⬜ |
-| 3j | Hardening: AI integration tests with mock responses, tag v0.3.0 | ⬜ |
+| 3b | eBay Browse API adapter replacing `ebay_new` / `ebay_used` scraper legs (sub-second vs 70 s selector-drift timeouts); `client_credentials` token refresh cached in-process; Marketplace Account Deletion webhook (GDPR prerequisite for production API access); backend deployed on scraper EC2 via Caddy + systemd (`ebay-webhook.barkain.app` HTTPS) | ✅ |
+| 3c | M6 Recommendation Engine: synthesize all layers (prices + identity + cards + portals + secondary market + wait signal) into single recommendation via Claude Sonnet. Progressive updates as data streams in | ⬜ |
+| 3d | Card reward matching: query-time algorithm (pure SQL, < 50ms), purchase interstitial overlay UI ("Use your Chase Freedom Flex for 5% back"), portal instruction, activation reminder | ⬜ |
+| 3e | Portal bonus integration: portal stacking with card recommendations, "Open Rakuten first" guidance, portal vs. direct tracking for analytics | ⬜ |
+| 3f | M8 Image scanning: Claude Vision for product ID from photos (not just barcodes) | ⬜ |
+| 3g | M8+M10 Receipt scanning: on-device OCR (Vision framework) → structured text to backend → item extraction → savings calculation → dashboard | ⬜ |
+| 3h | Identity discount stacking in recommendations: brand-specific stacking rules, identity redirect opportunities (e.g., "Buy at Samsung.com with military discount for $450 less than Best Buy") | ⬜ |
+| 3i | Savings dashboard populated with real receipt data | ⬜ |
+| 3j | Coupon discovery + validation: agent-browser batch scraping of coupon sites, on-demand validation, confidence scoring | ⬜ |
+| 3k | Hardening: AI integration tests with mock responses, tag v0.3.0 | ⬜ |
 
-> **Note on renumbering:** the original PHASES stub named 3a "AI abstraction layer" — that infrastructure already shipped in Phase 1 at `backend/ai/abstraction.py` (Gemini + Anthropic async clients with retry, grounding, JSON parsing). 3a was reassigned to Product Text Search; subsequent steps keep their original letter assignments.
+> **Note on renumbering:** the original PHASES stub named 3a "AI abstraction layer" — already shipped in Phase 1 at `backend/ai/abstraction.py`, so 3a was reassigned to Product Text Search. Step 3b (eBay Browse API + deletion webhook) was added mid-phase after live sim testing revealed eBay container legs were unrecoverable (selector drift + Chromium contention); it pushed the original 3b–3j (M6 Recommendation Engine downward) one letter each. Final row is now 3k (hardening + tag).
 
 ### Phase 3 API Endpoints (tagged for this phase)
 
@@ -269,8 +270,8 @@ Each step: ~500-1500 lines new code, 1 clear feature boundary, tests included, c
 Steps that will likely need splitting:
 - 1d (5 retailer containers from tested scripts) — may split into 2-3 batches
 - 1e (6 new retailer containers) — may split into 2-3 batches
-- 3b (recommendation engine) — may split into backend + iOS UI
-- 3c (card matching) — backend algorithm + iOS interstitial UI
+- 3c (recommendation engine) — may split into backend + iOS UI
+- 3d (card matching) — backend algorithm + iOS interstitial UI
 - 4h (App Store submission) — screenshots/metadata + TestFlight
 
 ---

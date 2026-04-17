@@ -7,6 +7,7 @@ from fastapi import Depends, FastAPI
 from app.config import settings
 from app.database import async_engine
 from app.dependencies import get_redis
+from app.ebay_webhook import router as ebay_webhook_router
 from app.middleware import setup_middleware
 from modules.m1_product.router import router as m1_product_router
 from modules.m2_prices.health_router import router as health_router
@@ -31,6 +32,7 @@ app.include_router(m5_identity_router)
 app.include_router(m5_card_router)
 app.include_router(m11_billing_router)
 app.include_router(m12_affiliate_router)
+app.include_router(ebay_webhook_router)
 
 
 @app.get("/api/v1/health")
