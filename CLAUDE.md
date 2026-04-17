@@ -272,7 +272,7 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 | 3a | M1 Product Text Search: `POST /products/search` + pg_trgm + Gemini fallback + SearchView (base + sim-testing follow-ups) | +10 | +6 unit/+1 UI | #22, #23 |
 | 3b | eBay Marketplace Deletion webhook (GDPR) + Browse API adapter replacing `ebay_new`/`ebay_used` scrapers (sub-second, +API) + FastAPI deploy on scraper EC2 (Caddy+LE) | +13 | — | #24 |
 
-**Test totals:** **335 backend** (335 passed / 6 skipped) + **72 iOS unit** + **3 iOS UI** = **410 tests**.
+**Test totals:** **335 + 29 backend** (SP-decodo-scoping hotfix adds 26 shell-flag guards in `test_fb_marketplace_extract_flags.py` + 2 Firecrawl payload guards + 1 walmart_http single-request guard; re-sum after your next full run) + **72 iOS unit** + **3 iOS UI**.
 `ruff check` clean. `xcodebuild` clean.
 
 **Migrations:** 0001 (initial, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert + failure counter) → 0006 (`chk_subscription_tier` CHECK) → 0007 (pg_trgm extension + `idx_products_name_trgm` GIN index).
@@ -294,6 +294,7 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 | 2b-val-L2 | UX | Best Buy leg ~91 s dominates total runtime; SSE masks it but `domcontentloaded` wait strategy remains a win | Phase 3 |
 | v4.0-L2 | MEDIUM | Sub-variants without digits (Galaxy Buds Pro 1st gen) still pass token overlap — needs richer Gemini output | Phase 3 |
 | 2h-ops | LOW | SQS queues have no DLQ wiring; per-portal fan-out deferred (workers are one-shot orchestrators today) | Phase 3 ops |
+| SP-decodo-scoping | RESOLVED | `fb_marketplace` Chromium routed ALL egress through Decodo — observed ~85 MB/billing-window leak, only 1.53 MB actually walmart.com (see CHANGELOG). Fix: Chromium telemetry kill flags + `--proxy-bypass-list` for google/telemetry domains + default image-blocking in `containers/fb_marketplace/extract.sh`; regression guards in `test_fb_marketplace_extract_flags.py`, `test_firecrawl_payload_has_no_decodo_overlay`, and `test_fetch_walmart_makes_exactly_one_request_per_call`. See docs/SCRAPING_AGENT_ARCHITECTURE.md §C.11 | Mike (post-deploy Decodo-dashboard verify + rotate leaked Decodo/Firecrawl creds) |
 
 ---
 
@@ -398,6 +399,7 @@ aws ec2 stop-instances --instance-ids i-09ce25ed6df7a09b2 --region us-east-1
 > - **XCUITest affiliate-sheet assertion uses OR-of-3 signals** (SFSafari visible / Done button / original row non-hittable) because iOS 26 SFSafariVC chrome lives outside the host-app accessibility tree. Authoritative proof is the `affiliate_clicks` DB row (2i-d)
 > - **Deploy via rsync when GitHub auth is broken:** `rsync -az --delete --exclude='.git/'` then run Phase C/D of `scripts/ec2_deploy.sh` inline (skip `git pull`). MD5 still validates against rsync'd host copy (2i-d)
 > - **Facebook Marketplace needs Decodo residential proxy:** datacenter IPs (AS14618) redirect to `/login/`; `containers/fb_marketplace/proxy_relay.py` relays `:18080` → `gate.decodo.com:7000`. Needs `DECODO_PROXY_USER`/`_PASS` (2i-d)
+> - **Decodo proxy must be scoped to Facebook — NOT global Chromium egress** (2026-04-17 hotfix). Chromium with `--proxy-server=...` alone sends ALL requests (component-updater, safe-browsing, optimization-guide, GCM, autofill) through the proxy, burning paid residential bytes. `containers/fb_marketplace/extract.sh` now: (a) disables background-networking / sync / component-update / metrics / etc., (b) sets `--proxy-bypass-list` for google/gvt1/gstatic/doubleclick so telemetry goes out the datacenter IP direct, (c) blocks images via `--blink-settings=imagesEnabled=false` (opt-out: `FB_MARKETPLACE_DISABLE_IMAGES=0`) — extract.js only reads `<img src>` as a string. Regression-guarded by `test_fb_marketplace_extract_flags.py` + `test_firecrawl_payload_has_no_decodo_overlay` + `test_fetch_walmart_makes_exactly_one_request_per_call`. Full rationale: docs/SCRAPING_AGENT_ARCHITECTURE.md §C.11
 
 ### Phase 3
 
