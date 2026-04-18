@@ -38,15 +38,41 @@ DISABLE_IMAGES="${SAMS_CLUB_DISABLE_IMAGES:-1}"
 # background fetch (component updater, autofill, optimization guide,
 # safe-browsing, sync, reporting) burns Decodo residential-proxy
 # bandwidth — same pattern defeated on fb_marketplace in SP-decodo-scoping
-# (2026-04-17). Samsclub + akamai MUST stay on-proxy or the datacenter IP
-# is refused with /are-you-human/. See docs/SCRAPING_AGENT_ARCHITECTURE.md
-# §C.11.
+# (2026-04-17). Samsclub.com + perimeterx (px-cdn.net / px-cloud.net) MUST
+# stay on-proxy — those are the IP-reputation checkpoints. Everything else
+# (image CDNs, fonts, ad verification, session replay) is not IP-gated and
+# can egress the datacenter IP direct for free.
+#
+# What MUST stay on-proxy:
+#  - *.samsclub.com / www.samsclub.com — the site being scraped
+#  - *.px-cdn.net / *.px-cloud.net — PerimeterX fingerprint/telemetry. Moving
+#    this off-proxy would cause PX to see two different IPs (datacenter for
+#    PX + residential for HTML), which almost certainly triggers the gate.
+#
+# What we bypass (measured 2026-04-18, ~720 KB/run of otherwise-paid bytes):
+#  - *.samsclubimages.com — primary image CDN (~700 KB/run — BIGGEST saving)
+#  - *.walmartimages.com — shared image CDN (Sam's Club is a Walmart subsidiary)
+#  - *.typekit.net — Adobe Fonts
+#  - *.doubleverify.com / tpsc-*.doubleverify.com / tps-dn-*.doubleverify.com
+#    — ad viewability (not load-bearing for DOM, not IP-gated)
+#  - *.quantummetric.com — session replay (not IP-gated)
+#  - *.googlesyndication.com / *.adtrafficquality.google / *.safeframe.*
+#    — ad inventory (also suppressed to some extent by Chromium's flags)
+#  - *.crcldu.com / *.wal.co — telemetry beacons
+#  - All google/gvt1/gstatic/doubleclick (same as C.11 for Chromium internals)
 #
 # Chromium's proxy-bypass glob only supports leading `*.` — mid-label
-# wildcards like `clients*.google.com` silently don't match. So we use
-# `*.google.com` as a catch-all for all google.com subdomains (samsclub
-# never legitimately needs google.com traffic for product extraction).
-PROXY_BYPASS_LIST='<-loopback>;*.google.com;*.googleapis.com;*.gvt1.com;*.gstatic.com;*.google-analytics.com;*.googletagmanager.com;*.doubleclick.net;*.googleusercontent.com;*.googlevideo.com;*.ytimg.com;*.youtube.com;*.chrome.google.com;*.chromecast.com;edgedl.me.gvt1.com;redirector.gvt1.com'
+# wildcards like `clients*.google.com` silently don't match.
+# First-party telemetry subdomains: explicit-hostname entries (Chromium's
+# bypass glob doesn't match unrooted subdomains via a parent `*.samsclub.com`
+# without also matching the main site). Measured 2026-04-18: these dump
+# ~1.7 MB/run of analytics beacons / scene7 images / dap tag-manager
+# through Decodo if left unbypassed. Samsclub does NOT fingerprint or
+# IP-gate these subdomains — only *.px-cdn.net and *.px-cloud.net matter.
+# Chromium bypass syntax note: `*.example.com` matches subdomains only
+# (foo.example.com), NOT the bare `example.com` itself. For hosts that
+# serve from both (crcldu.com / wal.co), include both forms.
+PROXY_BYPASS_LIST='<-loopback>;*.google.com;*.googleapis.com;*.gvt1.com;*.gstatic.com;*.google-analytics.com;*.googletagmanager.com;*.doubleclick.net;*.googleusercontent.com;*.googlevideo.com;*.ytimg.com;*.youtube.com;*.chrome.google.com;*.chromecast.com;edgedl.me.gvt1.com;redirector.gvt1.com;*.samsclubimages.com;*.walmartimages.com;*.typekit.net;*.doubleverify.com;*.quantummetric.com;*.googlesyndication.com;*.adtrafficquality.google;*.safeframe.googlesyndication.com;*.crcldu.com;crcldu.com;*.wal.co;wal.co;beacon.samsclub.com;dap.samsclub.com;titan.samsclub.com;scene7.samsclub.com;dapglass.samsclub.com'
 
 # Site-specific URLs
 SITE_HOMEPAGE="https://www.samsclub.com"
@@ -147,12 +173,12 @@ while [ $attempt -lt $RETRY_MAX ]; do
   # from a residential IP. Measured 2026-04-18 in SP-samsclub-decodo.
   jitter 200 400
   ab open "$SITE_HOMEPAGE" || { log "Warm-up failed (attempt $attempt)"; continue; }
-  ab wait --load networkidle 2>/dev/null || true
+  ab wait --load load 2>/dev/null || true
   jitter 500 1000
 
   # Step 4: Navigate to search page
   ab open "$SEARCH_URL" || { log "Navigation failed (attempt $attempt)"; continue; }
-  ab wait --load networkidle 2>/dev/null || true
+  ab wait --load load 2>/dev/null || true
   jitter 500 1000
 
   # Step 5: Bot detection check
