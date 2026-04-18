@@ -13,6 +13,7 @@ RUN chmod +x base-extract.sh
 COPY extract.js .
 COPY config.json .
 COPY test_fixtures.json .
+COPY proxy_relay.py .
 
 EXPOSE 8080
 

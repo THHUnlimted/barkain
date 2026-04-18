@@ -79,6 +79,22 @@ docker images | grep barkain
 echo ""
 echo "[4/4] Starting containers..."
 
+# Decodo residential proxy creds for IP-gated retailers (fb_marketplace, sams_club).
+# Source from /etc/barkain-scrapers.env if it exists; otherwise rely on env
+# already present in the shell. Missing creds → container runs without proxy
+# and logs a warning (fb_marketplace/sams_club will fail at /are-you-human/).
+DECODO_ENV_FLAGS=()
+if [ -f /etc/barkain-scrapers.env ]; then
+    # shellcheck disable=SC1091
+    set -a; . /etc/barkain-scrapers.env; set +a
+fi
+if [ -n "${DECODO_PROXY_USER:-}" ] && [ -n "${DECODO_PROXY_PASS:-}" ]; then
+    DECODO_ENV_FLAGS=(
+        -e "DECODO_PROXY_USER=$DECODO_PROXY_USER"
+        -e "DECODO_PROXY_PASS=$DECODO_PROXY_PASS"
+    )
+fi
+
 for pair in $RETAILERS; do
     retailer="${pair%%:*}"
     port="${pair##*:}"
@@ -87,6 +103,14 @@ for pair in $RETAILERS; do
     # Stop existing container if running
     docker rm -f "$container_name" 2>/dev/null || true
 
+    # Inject Decodo creds for retailers that route through the residential proxy.
+    extra_env=()
+    case "$retailer" in
+        fb_marketplace|sams_club)
+            extra_env=("${DECODO_ENV_FLAGS[@]}")
+            ;;
+    esac
+
     echo "  Starting ${retailer} on port ${port}..."
     docker run -d \
         --name "$container_name" \
@@ -94,6 +118,7 @@ for pair in $RETAILERS; do
         --restart unless-stopped \
         --memory=2g \
         --cpus=1.0 \
+        "${extra_env[@]}" \
         "barkain-${retailer}"
 done
 
