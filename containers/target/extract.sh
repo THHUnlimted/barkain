@@ -65,23 +65,20 @@ while [ $attempt -lt $RETRY_MAX ]; do
     --disable-gpu \
     --no-sandbox \
     "about:blank" &
-  sleep 3
+  sleep 1
 
-  # Step 3: Warm up on Target homepage
-  jitter 800 1500
-  ab open "https://www.target.com" || { log "Warm-up failed (attempt $attempt)"; continue; }
-  # CRITICAL: Use load (NOT networkidle) — analytics pixels fire forever
-  ab wait --load load 2>/dev/null || true
-  jitter 1500 3000
-  ab scroll down $((150 + RANDOM % 250)) 2>/dev/null || true
+  # Step 3: Skip homepage warmup — Target has no PerimeterX/DataDome gate,
+  # direct navigation is safe and saves ~10s. A small jitter preserves
+  # human-ish cadence without the round-trip cost.
+  jitter 200 400
 
-  # Step 4: Navigate to search page
+  # Step 4: Navigate directly to search page
   ab open "$SEARCH_URL" || { log "Navigation failed (attempt $attempt)"; continue; }
-  # CRITICAL: Use load wait, then wait for product grid selector
+  # CRITICAL: Use load wait (NOT networkidle) — analytics pixels fire forever
   ab wait --load load 2>/dev/null || true
   # Wait for product grid to render (with fallback timeout)
-  ab wait "[data-test='product-grid']" 2>/dev/null || sleep 3
-  jitter 1500 2500
+  ab wait "[data-test='product-grid']" 2>/dev/null || sleep 2
+  jitter 500 1000
 
   # Step 5: Bot detection check
   PAGE_TITLE=$(ab get title 2>/dev/null || echo "")
@@ -92,10 +89,10 @@ while [ $attempt -lt $RETRY_MAX ]; do
 
   # Step 6: Handle overlays/modals (Target: none typically needed)
 
-  # Step 7: Scroll to load lazy content
-  for i in 1 2 3 4 5; do
+  # Step 7: Scroll to load lazy content (3 iterations sufficient for max_listings≤10)
+  for i in 1 2 3; do
     ab scroll down $((250 + RANDOM % 400)) 2>/dev/null || true
-    jitter 600 1200
+    jitter 200 400
   done
 
   # Step 8: Extract via DOM eval

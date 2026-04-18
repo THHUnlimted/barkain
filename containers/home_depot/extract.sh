@@ -64,19 +64,22 @@ while [ $attempt -lt $RETRY_MAX ]; do
     --disable-gpu \
     --no-sandbox \
     "about:blank" &
-  sleep 3
+  sleep 1
 
-  # Step 3: Warm up on Home Depot homepage (establish cookies, look human)
-  jitter 800 1500
+  # Step 3: Warm up on Home Depot homepage. NOTE: load-bearing for this
+  # retailer even though it has no PerimeterX/DataDome — direct navigation
+  # to /s/... lands on a location-picker or empty results page without the
+  # session cookies the homepage sets. Measured 2026-04-17: skipping this
+  # warmup dropped listings 3 → 0. Keep it.
+  jitter 200 400
   ab open "https://www.homedepot.com" || { log "Warm-up failed (attempt $attempt)"; continue; }
   ab wait --load networkidle 2>/dev/null || true
-  jitter 1500 3000
-  ab scroll down $((150 + RANDOM % 250)) 2>/dev/null || true
+  jitter 500 1000
 
   # Step 4: Navigate to search page
   ab open "$SEARCH_URL" || { log "Navigation failed (attempt $attempt)"; continue; }
   ab wait --load networkidle 2>/dev/null || true
-  jitter 1500 2500
+  jitter 500 1000
 
   # Step 5: Bot detection check
   PAGE_TITLE=$(ab get title 2>/dev/null || echo "")
@@ -88,12 +91,12 @@ while [ $attempt -lt $RETRY_MAX ]; do
   # Step 6: Handle overlays/modals (Home Depot: location/cookie prompts)
   ab eval 'document.querySelector("[data-testid=\"close-button\"]")?.click()' 2>/dev/null || true
   ab eval 'document.querySelector(".modal-close")?.click()' 2>/dev/null || true
-  jitter 500 1000
+  jitter 200 400
 
-  # Step 7: Scroll to load lazy content
-  for i in 1 2 3 4 5; do
+  # Step 7: Scroll to load lazy content (3 iterations sufficient for max_listings≤10)
+  for i in 1 2 3; do
     ab scroll down $((250 + RANDOM % 400)) 2>/dev/null || true
-    jitter 600 1200
+    jitter 200 400
   done
 
   # Step 8: Extract via DOM eval
