@@ -58,16 +58,17 @@ class Settings(BaseSettings):
     CONTAINER_URL_PATTERN: str = "http://localhost:{port}"
     CONTAINER_TIMEOUT_SECONDS: int = 30
     CONTAINER_RETRY_COUNT: int = 1
+    # 8086 (lowes) retired 2026-04-18 (deterministic ~143 s hang).
+    # 8089 (sams_club) retired 2026-04-18 (~77 s + 1.4 MB Decodo per scan
+    # vs sub-second / KB-class API alternatives — not worth the bandwidth).
     CONTAINER_PORTS: dict = {
         "amazon": 8081,
         "best_buy": 8082,
         "walmart": 8083,
         "target": 8084,
         "home_depot": 8085,
-        "lowes": 8086,
         "ebay_new": 8087,
         "ebay_used": 8088,
-        "sams_club": 8089,
         "backmarket": 8090,
         "fb_marketplace": 8091,
     }
@@ -89,7 +90,12 @@ class Settings(BaseSettings):
     # the bare username from your Decodo dashboard.
     DECODO_PROXY_USER: str = ""
     DECODO_PROXY_PASS: str = ""
-    DECODO_PROXY_HOST: str = "gate.decodo.com:7000"
+    # HOST may be either bare ("gate.decodo.com") or host:port. Containers'
+    # proxy_relay.py reads HOST + PORT separately; walmart_http accepts either
+    # form (see _build_proxy_url). Keep both vars in /etc/barkain-scrapers.env
+    # so both consumers agree.
+    DECODO_PROXY_HOST: str = "gate.decodo.com"
+    DECODO_PROXY_PORT: int = 7000
 
     # Affiliate Programs (Step 2g — M12 Affiliate URL Routing)
     AMAZON_ASSOCIATE_TAG: str = ""          # "barkain-20" in production
@@ -119,6 +125,14 @@ class Settings(BaseSettings):
     # scraper (~80–90 s). Same fallback pattern as EBAY_APP_ID — missing key
     # routes through the container path.
     BESTBUY_API_KEY: str = ""
+
+    # Decodo Scraper API auth header (Basic auth). When set, the amazon
+    # retailer leg is served from Decodo's maintained Amazon parser
+    # (~3 s, structured JSON) instead of the browser-container scraper
+    # (~50 s). Set to the literal header value from the Decodo dashboard,
+    # e.g. "Basic VTAwMDAz...". Same fallback pattern as the other API
+    # adapters — missing value routes through the container path.
+    DECODO_SCRAPER_API_AUTH: str = ""
 
     # SQS / Background Workers (Step 2h)
     # LocalStack override for dev; empty string in prod so boto3 resolves

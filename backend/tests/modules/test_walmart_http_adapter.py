@@ -71,6 +71,27 @@ def test_build_proxy_url_raises_when_credentials_missing():
         _build_proxy_url(cfg)
 
 
+def test_build_proxy_url_appends_port_when_host_is_bare():
+    """Bare hostname must get DECODO_PROXY_PORT appended.
+
+    Without this, httpx defaults to port 80 and silently times out at the
+    full request timeout (Decodo only listens on 7000) — observed live on
+    2026-04-18 when /etc/barkain-scrapers.env used the proxy_relay
+    convention (separate HOST + PORT) instead of the combined form.
+    """
+    cfg = _test_settings(DECODO_PROXY_HOST="proxy.test", DECODO_PROXY_PORT=7000)
+    url = _build_proxy_url(cfg)
+    assert "@proxy.test:7000" in url
+
+
+def test_build_proxy_url_keeps_combined_host_port_intact():
+    cfg = _test_settings(DECODO_PROXY_HOST="proxy.test:7000", DECODO_PROXY_PORT=9999)
+    url = _build_proxy_url(cfg)
+    # Combined form wins; PORT is ignored.
+    assert "@proxy.test:7000" in url
+    assert ":9999" not in url
+
+
 # MARK: - fetch_walmart happy path
 
 

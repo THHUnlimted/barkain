@@ -78,8 +78,8 @@ barkain/
 │   └── requirements-test.txt
 ├── containers/                        # Per-retailer scrapers
 │   ├── base/                          # Shared base image
-│   ├── amazon/  best_buy/  walmart/  target/  home_depot/  lowes/
-│   ├── ebay_new/  ebay_used/  sams_club/  backmarket/  fb_marketplace/
+│   ├── amazon/  best_buy/  walmart/  target/  home_depot/
+│   ├── ebay_new/  ebay_used/  backmarket/  fb_marketplace/
 │   └── template/
 ├── infrastructure/
 │   └── migrations/                    # Alembic
@@ -243,7 +243,7 @@ This project uses a **two-tier AI workflow:**
 ## Current State
 
 **Phase 1 — Foundation: COMPLETE** (tagged `v0.1.0`, 2026-04-08)
-Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price comparison → iOS display. Amazon + Best Buy + Walmart validated on physical iPhone (2026-04-10).
+Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; lowes + sams_club scrapers retired 2026-04-18) → iOS display. Amazon + Best Buy + Walmart validated on physical iPhone (2026-04-10).
 
 **Phase 2 — Intelligence Layer: COMPLETE** (all steps merged, awaiting `v0.2.0` tag via Step 2i)
 
@@ -271,9 +271,10 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 |------|------|:-:|:-:|:-:|
 | 3a | M1 Product Text Search: `POST /products/search` + pg_trgm + Gemini fallback + SearchView (base + sim-testing follow-ups) | +10 | +6 unit/+1 UI | #22, #23 |
 | 3b | eBay Marketplace Deletion webhook (GDPR) + Browse API adapter replacing `ebay_new`/`ebay_used` scrapers (sub-second, +API) + FastAPI deploy on scraper EC2 (Caddy+LE) | +13 | — | #24 |
-| demo-prep | Scraper-side hardening bundle: SP-decodo-scoping + timing opts (target/backmarket/home_depot/lowes) + SP-samsclub-decodo + bandwidth sweep + Best Buy Products API adapter (~150 ms vs ~80 s container) + `BESTBUY_API_KEY` | +29 + 26 + 42 + 10 | — | #26, #27, #28 |
+| demo-prep | Walmart→`decodo_http` default + symmetric CHALLENGE retry (#25) + SP-decodo-scoping (#26) + timing opts (target/backmarket/home_depot/lowes, #27) + SP-samsclub-decodo (#28) + bandwidth sweep + baseline-honesty + Best Buy Products API adapter (~150 ms vs ~80 s container) + `BESTBUY_API_KEY` (#30) | +6 + 29 + 26 + 42 + 10 | — | #25, #26, #27, #28, #30 |
+| post-demo-prep sweep | Live-bench-driven cleanup: walmart bare-host fix (`DECODO_PROXY_PORT` settings split, +2 tests) + drop lowes scraper (143 s hang) + drop sams_club scraper (77 s + 1.4 MB Decodo, weakest cost/benefit) + Decodo Scraper API adapter for Amazon (~3.4 s vs 53 s container) | +2 + 12 = +14 | — | (pending PR) |
 
-**Test totals:** **335 + 29 + 26 + 42 + 10 backend** (SP-decodo-scoping hotfix adds 29 guards; scraper-timing sweep adds 26 `test_scraper_timing_guards.py`; SP-samsclub-decodo adds 42 `test_sams_club_extract_flags.py`; Best Buy API adapter adds 10 `test_best_buy_api.py` — re-sum after your next full run) + **72 iOS unit** + **3 iOS UI**.
+**Test totals:** **335 + 6 + 29 + 26 + 42 + 10 backend** (Walmart adapter retry hardening adds 6 across walmart_http+walmart_firecrawl suites; SP-decodo-scoping hotfix adds 29 guards; scraper-timing sweep adds 26 `test_scraper_timing_guards.py`; SP-samsclub-decodo adds 42 `test_sams_club_extract_flags.py`; Best Buy API adapter adds 10 `test_best_buy_api.py` — re-sum after your next full run) + **72 iOS unit** + **3 iOS UI**.
 `ruff check` clean. `xcodebuild` clean.
 
 **Migrations:** 0001 (initial, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert + failure counter) → 0006 (`chk_subscription_tier` CHECK) → 0007 (pg_trgm extension + `idx_products_name_trgm` GIN index).
@@ -289,14 +290,13 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 | ID | Severity | Issue | Owner |
 |----|----------|-------|-------|
 | SP-L1-b | HIGH | Leaked PAT `gho_UUsp9ML7…` stripped from EC2 `.git/config` in 2i-d, but **not yet revoked** in GitHub Settings → Developer settings. Anyone with the token can still read `molatunji3/barkain` | Mike (GitHub UI only) |
-| 2i-d-L2 | MEDIUM | `lowes` container extract times out (>120 s); classified as `selector_drift` but root cause is hang, not missing selectors. Probably Xvfb / Chromium init issue on the specific container | Phase 3 |
 | 2i-d-L3 | LOW | `ebay_new` / `walmart` still flagged `selector_drift` after live re-run with real Anthropic key. `ebay_used` heal_staged successfully (2399 Opus tokens → `containers/ebay_used/staging/extract.js`). `fb_marketplace` fixed via Decodo proxy (see below) | Phase 3 |
 | 2i-d-L4 | MEDIUM | Watchdog heal prompt passes `page_html=error_details` at `backend/workers/watchdog.py:251` — Opus never sees the real DOM, only the error string from the failed extract, so it cannot usefully repair selectors. Fix requires wiring a browser fetch into the heal path. Not blocking for `v0.2.0` — the `_handle_selector_drift` pipeline itself is now end-to-end verified | Phase 3 |
 | 2b-val-L2 | RESOLVED | Best Buy leg was ~91 s dominating runtime. Fix: `best_buy_api` adapter (Products API, ~150 ms per call) auto-routes when `BESTBUY_API_KEY` is set — same auto-prefer pattern as eBay Browse API. Container leg stays as fallback. Regression-guarded in `test_best_buy_api.py` (10 asserts). Committed in demo-prep bundle | — (Mike adds real key to `/home/ubuntu/barkain/.env` + restart `barkain-api`) |
 | v4.0-L2 | MEDIUM | Sub-variants without digits (Galaxy Buds Pro 1st gen) still pass token overlap — needs richer Gemini output | Phase 3 |
 | 2h-ops | LOW | SQS queues have no DLQ wiring; per-portal fan-out deferred (workers are one-shot orchestrators today) | Phase 3 ops |
 | SP-decodo-scoping | RESOLVED | `fb_marketplace` Chromium routed ALL egress through Decodo — observed ~85 MB/billing-window leak, only 1.53 MB actually walmart.com (see CHANGELOG). Fix: Chromium telemetry kill flags + `--proxy-bypass-list` for google/telemetry domains + default image-blocking in `containers/fb_marketplace/extract.sh`; regression guards in `test_fb_marketplace_extract_flags.py`, `test_firecrawl_payload_has_no_decodo_overlay`, and `test_fetch_walmart_makes_exactly_one_request_per_call`. See docs/SCRAPING_AGENT_ARCHITECTURE.md §C.11 | Mike (post-deploy Decodo-dashboard verify + rotate leaked Decodo/Firecrawl creds) |
-| SP-samsclub-decodo | RESOLVED | `sams_club` was deterministic-failing at ~100 s with 0 listings — Akamai `/are-you-human/` gate fired from AWS datacenter IP (homepage OK, `/s/` search redirects). Fix: same Decodo-scoped pattern as fb_marketplace (proxy relay + 13 telemetry kill flags + proxy bypass list + `SAMS_CLUB_DISABLE_IMAGES=1` default + homepage warmup kept for session cookies). After bandwidth-tuning sweep (bypass image CDNs, fonts, ad-verify, session replay, first-party telemetry subdomains; switch `ab wait` from `networkidle` → `load`): **3/3 listings, ~1,047 KB/run through Decodo — 80% reduction from 5,228 KB base (reproducibly measured on base commit e225d83)**. 93% of remaining bytes are the site itself; 7% is PerimeterX (required for IP-rep). `scripts/ec2_deploy.sh` now sources `/etc/barkain-scrapers.env` and injects `DECODO_PROXY_*` env for both retailers via `case` on retailer name. Regression-guarded in `test_sams_club_extract_flags.py` (42 asserts). See docs/SCRAPING_AGENT_ARCHITECTURE.md §C.12 | — (follow-up: CDP request interception to block analytics XHRs within www.samsclub.com — not worth the complexity at 1 MB/scrape) |
+| SP-samsclub-decodo | RETIRED 2026-04-18 | sams_club scraper dropped post-bench: 77 s + 1.4 MB Decodo/scan was the weakest cost/benefit on the roster (vs 30 s + 17 KB on fb_marketplace, sub-second on API-backed retailers). The Decodo-scoped pattern was proven to work — kept on fb_marketplace and re-usable if a future retailer needs Akamai/PerimeterX bypass. Historical context preserved in this row + the key decision below | — |
 
 ---
 
@@ -304,7 +304,7 @@ Barcode scan → Gemini UPC resolution → 11-retailer agent-browser price compa
 
 1. **Phase 2 CLOSED** — `v0.2.0` tagged (2026-04-16). Outstanding: revoke leaked PAT `gho_UUsp9ML7…` in GitHub UI (SP-L1-b, Mike).
 2. **Phase 3 — Recommendation Intelligence (IN PROGRESS):** 3a ✅ text search (#22, #23). 3b ✅ eBay Browse API + deletion webhook (#24). Next: 3c M6 Recommendation Engine (Claude Sonnet synthesis), 3d card rewards, 3e portal stacking, 3f image scan, 3g receipts, 3h identity stacking, 3i savings dashboard, 3j coupons, 3k hardening + `v0.3.0`.
-3. **Phase 4 — Production Optimization:** ~~Best Buy~~ (done via demo-prep bundle, PR #28), Keepa API adapter, App Store submission, Sentry error tracking
+3. **Phase 4 — Production Optimization:** ~~Best Buy~~ (done via demo-prep bundle, PR #30), Keepa API adapter, App Store submission, Sentry error tracking
 4. **Phase 5 — Growth:** Push notifications (APNs), web dashboard, Android (KMP)
 
 ---
@@ -340,7 +340,7 @@ ssh -i ~/.ssh/barkain-scrapers.pem ubuntu@54.197.27.219 \
 curl -s "https://ebay-webhook.barkain.app/api/v1/webhooks/ebay/account-deletion?challenge_code=test" | jq .
 ```
 
-**Ports:** `amazon:8081 bestbuy:8082 walmart:8083 target:8084 homedepot:8085 lowes:8086 ebaynew:8087 ebayused:8088 samsclub:8089 backmarket:8090 fbmarketplace:8091`. Backend `uvicorn` on `127.0.0.1:8000` behind Caddy on `:443`.
+**Ports:** `amazon:8081 bestbuy:8082 walmart:8083 target:8084 homedepot:8085 ebaynew:8087 ebayused:8088 backmarket:8090 fbmarketplace:8091`. Ports 8086 (lowes) and 8089 (sams_club) retired 2026-04-18. Backend `uvicorn` on `127.0.0.1:8000` behind Caddy on `:443`.
 
 **Redeploy** (backend code change — webhook or Browse API adapter):
 ```bash
@@ -354,7 +354,7 @@ ssh -i ~/.ssh/barkain-scrapers.pem ubuntu@54.197.27.219 'sudo systemctl restart 
 
 **Env file:** `/etc/barkain-api.env` (mode 600). Holds `EBAY_APP_ID`, `EBAY_CERT_ID`, `EBAY_VERIFICATION_TOKEN`, `EBAY_ACCOUNT_DELETION_ENDPOINT`, `DATABASE_URL` (placeholder), `REDIS_URL` (placeholder). DB/Redis are not actually running on this host — backend only serves webhook + Browse API adapter, neither hits PG/Redis.
 
-**Known retailer health** (as of 3b live run): `amazon / bestbuy / walmart / target / homedepot / samsclub / backmarket / fbmarketplace` return listings. `lowes` degrades to 0 under parallel load (resource contention on t3.xlarge). `ebaynew` + `ebayused` no longer served by containers — route through the Browse API adapter in `backend/modules/m2_prices/adapters/ebay_browse_api.py` at 0.5-1.5 s/call.
+**Known retailer health** (as of 2026-04-18 bench, 3 queries × 3 calls each): `target / homedepot / backmarket` return 3/3 listings via container; `fbmarketplace` returns 3/3 via Decodo (~30 s, ~17 KB/run); `walmart` container is PerimeterX-blocked → use the `walmart_http` decodo_http adapter (default; 3.3 s/call when proxy is healthy); `amazon` is now served by the Decodo Scraper API adapter (`amazon_scraper_api.py`, ~3.2 s/call, 5/5 organic — drops from 53 s container) when `DECODO_SCRAPER_API_AUTH` is set; `bestbuy` + `ebaynew` + `ebayused` are served by API adapters (`best_buy_api.py` ~82 ms, `ebay_browse_api.py` ~510–580 ms) when their respective creds are set. Containers 8086 (lowes) and 8089 (sams_club) were retired 2026-04-18 — lowes deterministically hung at ~143 s (was 2i-d-L2); sams_club worked at 3/3 but cost ~77 s + 1.4 MB Decodo per scan, the weakest cost/benefit on the roster.
 
 **Cost-stop if idle:**
 ```bash
@@ -411,3 +411,6 @@ aws ec2 stop-instances --instance-ids i-09ce25ed6df7a09b2 --region us-east-1
 > - **eBay Marketplace Account Deletion webhook is a GDPR prerequisite** for Browse API production access. GET handshake returns `SHA-256(challenge_code + token + endpoint_url)` as hex; POST is log-and-ack-204 since Barkain doesn't store per-user eBay data. Both env vars MUST match the portal exactly or the hash drifts (3b)
 > - **Backend deploys onto the scraper EC2 via Caddy + systemd uvicorn** (not a separate host) — Caddy auto-manages Let's Encrypt via TLS-ALPN-01 challenge, reverse-proxies `:443` to `127.0.0.1:8000`. Single-host was the cheap path for the eBay webhook; full ECS Fargate + ALB when the broader backend ships (3b)
 > - **Best Buy Products API adapter replaces the `best_buy` container leg** when `BESTBUY_API_KEY` is set (else falls through to container, same auto-prefer pattern as eBay). ~150 ms per call vs ~80 s container — resolves 2b-val-L2 bottleneck. Single API key via query param (no OAuth). URL shape: `GET /v1/products(search=<encoded>)?apiKey=...&show=<fields>`. Parentheses are literal; query must be `%20`-encoded (not `+`) inside the predicate — confirmed via live test. Mapping: `salePrice`→`price`, `regularPrice` → `original_price` only when markdown present (same-value pair returns `original_price=None` to avoid false strikethrough), `onlineAvailability`→`is_available`, `condition="new"` (Best Buy only sells new). Regression-guarded in `test_best_buy_api.py` (10 asserts) (demo-prep)
+> - **Two Decodo env conventions in the codebase, must agree** (post-demo-prep, 2026-04-18). `proxy_relay.py` (containers) reads `DECODO_PROXY_HOST` (bare hostname) + `DECODO_PROXY_PORT` (separate); `walmart_http.py` adapter originally read `DECODO_PROXY_HOST` and expected `:7000` already inside it. When `/etc/barkain-scrapers.env` was written using the proxy_relay convention, the adapter built `http://...@gate.decodo.com` (no port → httpx default 80 → 30 s connect-timeout on every call). Fix: `Settings.DECODO_PROXY_PORT: int = 7000`; `_build_proxy_url` appends it when HOST has no `:` (combined form still wins). Both consumers now agree on either convention. Tests in `test_walmart_http_adapter.py` (`_appends_port_when_host_is_bare`, `_keeps_combined_host_port_intact`)
+> - **Decodo Scraper API adapter for Amazon** (post-demo-prep, 2026-04-18). `POST scraper-api.decodo.com/v2/scrape` with `{target:"amazon_search", query, parse:true}` returns structured JSON in ~3 s; container takes ~53 s. Auto-prefer when `DECODO_SCRAPER_API_AUTH` (literal `Authorization: Basic ...` header value) is set, else fall back to container at port 8081. Payload MUST be exactly those three keys — adding `page_from`/`sort_by` triggers Decodo 400. Listings live at `content.results.results.organic[]`; sponsored items filtered. asin → canonical `/dp/{asin}` URL (Decodo sometimes returns relative or affiliate URLs). Same survey ruled out walmart (`walmart_http` already faster), target/home_depot/backmarket (Decodo only ships `universal` + raw HTML for those, no parser, marginal speedup). 12 tests in `test_amazon_scraper_api.py`
+> - **lowes + sams_club scrapers retired** (2026-04-18, post-bench): lowes deterministic ~143 s hang; sams_club worked at 3/3 but ~77 s + 1.4 MB Decodo per scan was the weakest cost/benefit on the roster. Removed from `containers/`, deploy scripts, `CONTAINER_PORTS`, batch tests, fixtures. Kept as `is_active=False` rows in `retailers` table so M5 identity / portal / card-rotating-category FKs that reference these IDs stay valid. `seed_retailers.py` upsert now writes `is_active` (added `EXCLUDED.is_active` to ON CONFLICT). 9 retailers in production, fbmarketplace is the only Decodo-residential consumer left

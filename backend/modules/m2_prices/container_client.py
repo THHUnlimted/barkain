@@ -78,6 +78,21 @@ def _resolve_best_buy_adapter(cfg: Settings) -> AdapterFn | None:
     return fetch_best_buy
 
 
+def _resolve_amazon_adapter(cfg: Settings) -> AdapterFn | None:
+    """Return the Decodo Scraper API adapter for amazon when auth is set.
+
+    Same auto-prefer pattern as the other API-backed adapters — when
+    ``DECODO_SCRAPER_API_AUTH`` is populated the structured Decodo parser
+    wins (~3 s/call), else the agent-browser container at port 8081 handles
+    it (~50 s/call).
+    """
+    from modules.m2_prices.adapters.amazon_scraper_api import is_configured
+    if not is_configured(cfg):
+        return None
+    from modules.m2_prices.adapters.amazon_scraper_api import fetch_amazon
+    return fetch_amazon
+
+
 class ContainerClient:
     """HTTP client for communicating with retailer scraper containers."""
 
@@ -235,6 +250,17 @@ class ContainerClient:
             adapter = _resolve_best_buy_adapter(self._cfg)
             if adapter is not None:
                 logger.debug("routing best_buy via best_buy_api")
+                return await adapter(
+                    query=query,
+                    product_name=product_name,
+                    upc=upc,
+                    max_listings=max_listings,
+                    cfg=self._cfg,
+                )
+        if retailer_id == "amazon":
+            adapter = _resolve_amazon_adapter(self._cfg)
+            if adapter is not None:
+                logger.debug("routing amazon via amazon_scraper_api")
                 return await adapter(
                     query=query,
                     product_name=product_name,

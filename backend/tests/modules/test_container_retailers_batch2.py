@@ -32,11 +32,6 @@ def home_depot_response_data() -> dict:
 
 
 @pytest.fixture
-def lowes_response_data() -> dict:
-    return json.loads((FIXTURES_DIR / "lowes_extract_response.json").read_text())
-
-
-@pytest.fixture
 def ebay_new_response_data() -> dict:
     return json.loads((FIXTURES_DIR / "ebay_new_extract_response.json").read_text())
 
@@ -66,16 +61,18 @@ def _setup_client(client: ContainerClient):
     client.ports = {
         "best_buy": 8082,
         "home_depot": 8085,
-        "lowes": 8086,
         "ebay_new": 8087,
         "ebay_used": 8088,
         "backmarket": 8090,
     }
     client.walmart_adapter_mode = "container"
-    # Empty eBay creds → Browse API adapter not configured → falls through
-    # to container path, keeping these legacy batch-dispatch tests on the
-    # original scraper route.
-    client._cfg = Settings(EBAY_APP_ID="", EBAY_CERT_ID="")
+    # Empty eBay + Best Buy creds → Browse / Products API adapters not
+    # configured → fall through to container path, keeping these legacy
+    # batch-dispatch tests on the original scraper route.
+    client._cfg = Settings(
+        EBAY_APP_ID="", EBAY_CERT_ID="", BESTBUY_API_KEY="",
+        DECODO_SCRAPER_API_AUTH="",
+    )
 
 
 # MARK: - Response Parsing
@@ -101,17 +98,6 @@ def test_parse_home_depot_response(home_depot_response_data: dict):
     assert len(response.listings) == 2
     assert response.listings[0].price == 99.00
     assert "homedepot.com" in response.listings[0].url
-    assert response.error is None
-
-
-def test_parse_lowes_response(lowes_response_data: dict):
-    """Lowe's response parses correctly."""
-    response = ContainerResponse(**lowes_response_data)
-
-    assert response.retailer_id == "lowes"
-    assert len(response.listings) == 2
-    assert response.listings[1].original_price == 229.00
-    assert "lowes.com" in response.listings[0].url
     assert response.error is None
 
 
@@ -154,24 +140,20 @@ def test_parse_backmarket_all_refurbished(backmarket_response_data: dict):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_extract_all_six_batch2_retailers(
+async def test_extract_all_five_batch2_retailers(
     client: ContainerClient,
     best_buy_response_data: dict,
     home_depot_response_data: dict,
-    lowes_response_data: dict,
     ebay_new_response_data: dict,
     ebay_used_response_data: dict,
     backmarket_response_data: dict,
 ):
-    """All 6 batch 2 containers succeed — returns dict with all results."""
+    """All 5 batch 2 containers succeed — returns dict with all results."""
     respx.post("http://localhost:8082/extract").mock(
         return_value=httpx.Response(200, json=best_buy_response_data)
     )
     respx.post("http://localhost:8085/extract").mock(
         return_value=httpx.Response(200, json=home_depot_response_data)
-    )
-    respx.post("http://localhost:8086/extract").mock(
-        return_value=httpx.Response(200, json=lowes_response_data)
     )
     respx.post("http://localhost:8087/extract").mock(
         return_value=httpx.Response(200, json=ebay_new_response_data)
@@ -185,8 +167,8 @@ async def test_extract_all_six_batch2_retailers(
 
     results = await client.extract_all("test query")
 
-    assert len(results) == 6
-    for rid in ["best_buy", "home_depot", "lowes", "ebay_new", "ebay_used", "backmarket"]:
+    assert len(results) == 5
+    for rid in ["best_buy", "home_depot", "ebay_new", "ebay_used", "backmarket"]:
         assert rid in results
         assert results[rid].error is None
 
@@ -198,14 +180,11 @@ async def test_extract_all_batch2_partial_failure(
     best_buy_response_data: dict,
     ebay_new_response_data: dict,
 ):
-    """4 retailers fail, 2 succeed — partial results returned."""
+    """3 retailers fail, 2 succeed — partial results returned."""
     respx.post("http://localhost:8082/extract").mock(
         return_value=httpx.Response(200, json=best_buy_response_data)
     )
     respx.post("http://localhost:8085/extract").mock(
-        side_effect=httpx.ConnectError("connection refused")
-    )
-    respx.post("http://localhost:8086/extract").mock(
         side_effect=httpx.ConnectError("connection refused")
     )
     respx.post("http://localhost:8087/extract").mock(
@@ -220,11 +199,10 @@ async def test_extract_all_batch2_partial_failure(
 
     results = await client.extract_all("test query")
 
-    assert len(results) == 6
+    assert len(results) == 5
     assert results["best_buy"].error is None
     assert results["ebay_new"].error is None
     assert results["home_depot"].error is not None
-    assert results["lowes"].error is not None
     assert results["ebay_used"].error is not None
     assert results["backmarket"].error is not None
 

@@ -13,7 +13,7 @@ PRODUCTS=(
 )
 
 # Detect running containers by checking which ports respond
-PORTS_TO_CHECK="amazon:8081 best_buy:8082 walmart:8083 target:8084 home_depot:8085 lowes:8086 ebay_new:8087 ebay_used:8088 sams_club:8089 backmarket:8090 fb_marketplace:8091"
+PORTS_TO_CHECK="amazon:8081 best_buy:8082 walmart:8083 target:8084 home_depot:8085 ebay_new:8087 ebay_used:8088 backmarket:8090 fb_marketplace:8091"
 
 ACTIVE_RETAILERS=""
 for pair in $PORTS_TO_CHECK; do
