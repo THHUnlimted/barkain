@@ -116,6 +116,92 @@ def test_proxy_bypass_list_includes_known_noise_domain(
     )
 
 
+# MARK: - Sams-Club-specific CDN bypass (bandwidth reduction 2026-04-18)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        # Image CDNs — not IP-gated. Biggest savings: ~700 KB/run measured.
+        "*.samsclubimages.com",
+        "*.walmartimages.com",
+        # Fonts — not IP-gated.
+        "*.typekit.net",
+        # Ad viewability / session replay — not IP-gated, not load-bearing
+        # for DOM extraction.
+        "*.doubleverify.com",
+        "*.quantummetric.com",
+        "*.googlesyndication.com",
+        "*.adtrafficquality.google",
+        # Beacons — telemetry, not load-bearing.
+        "*.crcldu.com",
+        "*.wal.co",
+    ],
+)
+def test_proxy_bypass_list_includes_cdn_domain(
+    extract_sh_text: str, pattern: str
+) -> None:
+    """CDNs that aren't IP-gated must be in the bypass list so their bytes
+    egress the datacenter IP direct instead of burning Decodo residential
+    bandwidth. Verified safe 2026-04-18: the images/fonts/ads are unrelated
+    to PerimeterX fingerprinting, which reads from *.px-cdn.net / px-cloud.net
+    — those MUST stay on-proxy."""
+    assert pattern in extract_sh_text, (
+        f"CDN domain {pattern!r} must be in PROXY_BYPASS_LIST — otherwise "
+        "it burns paid Decodo bytes despite not being IP-gated."
+    )
+
+
+@pytest.mark.parametrize(
+    "hostname",
+    [
+        # First-party subdomains that serve analytics/images but aren't
+        # IP-gated. Chromium's bypass glob requires explicit hostnames here
+        # because a parent `*.samsclub.com` would also match the main site.
+        "beacon.samsclub.com",
+        "dap.samsclub.com",
+        "titan.samsclub.com",
+        "scene7.samsclub.com",
+        "dapglass.samsclub.com",
+    ],
+)
+def test_first_party_telemetry_subdomain_bypassed(
+    extract_sh_text: str, hostname: str
+) -> None:
+    """Sam's Club first-party telemetry/image subdomains are not IP-gated
+    (only px-cdn.net / px-cloud.net are). Bypassing them off Decodo saves
+    ~1.7 MB/run — measured 2026-04-18."""
+    assert hostname in extract_sh_text, (
+        f"First-party telemetry subdomain {hostname!r} must be in "
+        "PROXY_BYPASS_LIST — leaving it on-proxy burns Decodo bytes with "
+        "no IP-reputation benefit."
+    )
+
+
+def test_perimeterx_is_not_bypassed(extract_sh_text: str) -> None:
+    """PerimeterX MUST stay on the Decodo proxy — it's the retailer's
+    IP-reputation check. If px-cdn.net or px-cloud.net were in the bypass
+    list, PX would see a datacenter IP for telemetry while the HTML fetch
+    used a residential IP, and it'd fire the bot gate."""
+    bypass_block = extract_sh_text.split("PROXY_BYPASS_LIST=", 1)[1].split("\n", 1)[0]
+    assert "px-cdn.net" not in bypass_block, (
+        "px-cdn.net MUST stay on-proxy — it's the PerimeterX IP checkpoint"
+    )
+    assert "px-cloud.net" not in bypass_block, (
+        "px-cloud.net MUST stay on-proxy — it's the PerimeterX IP checkpoint"
+    )
+
+
+def test_samsclub_main_site_not_bypassed(extract_sh_text: str) -> None:
+    """The site itself must stay on-proxy — that's the whole point of using
+    Decodo."""
+    bypass_block = extract_sh_text.split("PROXY_BYPASS_LIST=", 1)[1].split("\n", 1)[0]
+    # We bypass *.samsclubimages.com but not the main *.samsclub.com.
+    assert "*.samsclub.com" not in bypass_block, (
+        "*.samsclub.com MUST stay on-proxy — the site is IP-gated"
+    )
+
+
 # MARK: - Image blocking (opt-out default-on)
 
 

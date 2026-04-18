@@ -1833,21 +1833,37 @@ Extrapolated to the observed 85 MB/19 h billing window: 17 scrapes × 19 KB ≈ 
 | Pre-fix | 0 / 0 / 0 | 97,966 / 109,752 / 109,160 | `EXTRACTION_FAILED` (trapped at `/are-you-human/`) |
 | Post-fix | 3 / 3 / 3 | 76,372 / 109,373 / 107,270 | none |
 
-**Bandwidth (post-fix, from `/tmp/proxy_bytes.log` across 3 successful runs, ~850 KB / run average).**
+**Bandwidth progression** (live EC2, 3 consecutive extracts per row; measurements use `docker exec samsclub bash -c "pkill chromium; pkill proxy_relay; >/tmp/proxy_bytes.log"` before each row for a clean state):
+
+| Pass | Change | KB/run | Decodo conns | Notes |
+|---|---|--:|--:|---|
+| Base Decodo-only (PR #28 commit e225d83) | 13 telemetry flags + `*.google*` bypass only | **5,228** | 249 | 2/3 successful — flaky under back-to-back runs |
+| +CDN bypass | `*.samsclubimages.com`, `*.walmartimages.com`, `*.typekit.net`, `*.doubleverify.com`, `*.quantummetric.com`, `*.googlesyndication.com`, `*.adtrafficquality.google`, `*.crcldu.com`, `*.wal.co` | 1,513 | — | 3/3 |
+| +first-party telemetry bypass | `beacon.samsclub.com`, `dap.samsclub.com`, `titan.samsclub.com`, `scene7.samsclub.com`, `dapglass.samsclub.com` | 1,572 | — | 2/3 (flake) |
+| +`ab wait --load load` (was `networkidle`) | Stop waiting after body onload; skip post-render telemetry phase | 1,070 | — | 3/3 |
+| +bare-domain forms (`crcldu.com`, `wal.co`) | Chromium's `*.foo` glob doesn't match bare `foo` | **1,047** | ~15 | 3/3 |
+
+> **Measurement honesty note.** An earlier run of the base version logged 856 KB/run with only 20 Decodo connections — that was non-reproducible. On re-measurement (same commit, same method), the base version consistently logs 5,228 KB/run across 249 connections. The 856 KB outlier likely had incomplete relay accounting or aggressive Chromium memory-cache hits between back-to-back runs. The 5,228 KB number is what actually reproduces.
+
+**Final breakdown (post all fixes, 3 successful runs, ~1,047 KB/run average).**
 
 | Target host | Category | Bytes across 3 runs |
 |---|---|--:|
-| `i5.samsclubimages.com` | Image CDN | 2,156,436 |
-| `www.samsclub.com` | Main site HTML/JS | 319,318 |
-| `use.typekit.net` | Adobe Fonts | 47,026 |
-| `i5.walmartimages.com` | Shared image CDN | 33,184 |
-| `b.wal.co` | Beacon | 26,533 |
-| `beacon.samsclub.com` | First-party telemetry | 17,174 |
-| `b.px-cdn.net` | PerimeterX (must stay on-proxy) | 13,057 |
-| `collector-pxslc3j22k.px-cloud.net` | PerimeterX | 10,664 |
-| **Per-run total** | | **~850 KB** |
+| `www.samsclub.com` | Main site HTML/JS + search API | 2,917,060 |
+| `client.px-cloud.net` | PerimeterX (required — IP check) | 147,505 |
+| `collector-pxslc3j22k.px-cloud.net` | PerimeterX | 98,312 |
+| `tzm.px-cloud.net` | PerimeterX | 32,494 |
+| `b.px-cdn.net` | PerimeterX | 12,981 |
+| `fst-ec.perimeterx.net` | PerimeterX | 8,415 |
+| **Per-run total** | | **~1,047 KB** |
 
-**Known follow-up:** `--blink-settings=imagesEnabled=false` is honored but Sam's Club's product-grid still causes ~700 KB/extract of `i5.samsclubimages.com` traffic (fetched via some non-blink path — possibly `fetch()` in their SPA bundle). Candidate mitigations: add `*.samsclubimages.com` + `*.walmartimages.com` to the bypass list (serve images direct over datacenter IP instead of through Decodo — safe because the image CDNs are not IP-gated). Deferred — current 850 KB/extract is acceptable given the retailer was at 100% failure before.
+**Net: 80% reduction (5,228 KB base → 1,047 KB per scrape, measured on equivalent-state runs). 93% of remaining bytes are the site itself (non-negotiable without CDP request interception). 7% is PerimeterX (required for IP-reputation validation — must stay on-proxy or the gate fires).**
+
+**Critical invariants (regression-guarded):**
+- `*.samsclub.com` (wildcard) MUST NOT be in the bypass list — that'd also bypass the main site, defeating the whole proxy. Explicit subdomains only.
+- `*.px-cdn.net` / `*.px-cloud.net` MUST stay on-proxy — PerimeterX sees the Decodo residential IP for HTML fetches; if PX telemetry saw a different (datacenter) IP, it'd flag the session.
+
+**Known follow-up:** Further reduction would require CDP request interception to block specific URL patterns within `www.samsclub.com` (analytics XHRs, recommendation-engine payloads, speculative prefetches). Not worth the complexity at 1 MB/scrape.
 
 **Gotcha captured (DPS-equivalent learning).** When copying Decodo creds across containers via shell, use `cut -d= -f2-` (NOT `cut -d= -f2`). The Decodo password is base64-terminated with a trailing `=`, and `-f2` silently strips it. Symptom on first deploy: CONNECT tunnel failed response 407 from the upstream proxy; relay was up but auth was bad because the password was off by one char.
 
