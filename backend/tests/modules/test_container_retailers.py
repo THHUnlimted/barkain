@@ -37,11 +37,6 @@ def target_response_data() -> dict:
 
 
 @pytest.fixture
-def sams_club_response_data() -> dict:
-    return json.loads((FIXTURES_DIR / "sams_club_extract_response.json").read_text())
-
-
-@pytest.fixture
 def fb_marketplace_response_data() -> dict:
     return json.loads((FIXTURES_DIR / "fb_marketplace_extract_response.json").read_text())
 
@@ -62,13 +57,21 @@ def _setup_client(client: ContainerClient):
         "amazon": 8081,
         "walmart": 8083,
         "target": 8084,
-        "sams_club": 8089,
         "fb_marketplace": 8091,
     }
     # Route walmart through the legacy container path so these tests exercise
     # the same dispatch as they did before adapter routing was introduced.
     client.walmart_adapter_mode = "container"
-    client._cfg = None
+    # Empty Scraper API + ebay/best_buy creds → API adapters not configured →
+    # amazon dispatch falls through to the container path the way these
+    # batch-1 tests originally exercised.
+    from app.config import Settings
+    client._cfg = Settings(
+        EBAY_APP_ID="",
+        EBAY_CERT_ID="",
+        BESTBUY_API_KEY="",
+        DECODO_SCRAPER_API_AUTH="",
+    )
 
 
 # MARK: - Response Parsing
@@ -117,17 +120,6 @@ def test_parse_target_response_sale_price(target_response_data: dict):
     assert regular_item.original_price is None
 
 
-def test_parse_sams_club_response(sams_club_response_data: dict):
-    """Sam's Club response parses correctly — fewer listings typical for club store."""
-    response = ContainerResponse(**sams_club_response_data)
-
-    assert response.retailer_id == "sams_club"
-    assert len(response.listings) == 2
-    assert response.listings[0].price == 679.00
-    assert "samsclub.com" in response.listings[0].url
-    assert response.error is None
-
-
 def test_parse_fb_marketplace_all_used(fb_marketplace_response_data: dict):
     """Facebook Marketplace — ALL listings have condition 'used'."""
     response = ContainerResponse(**fb_marketplace_response_data)
@@ -143,15 +135,14 @@ def test_parse_fb_marketplace_all_used(fb_marketplace_response_data: dict):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_extract_all_five_retailers(
+async def test_extract_all_four_retailers(
     client: ContainerClient,
     amazon_response_data: dict,
     walmart_response_data: dict,
     target_response_data: dict,
-    sams_club_response_data: dict,
     fb_marketplace_response_data: dict,
 ):
-    """All 5 batch 1 containers succeed — returns dict with all results."""
+    """All 4 batch 1 containers succeed — returns dict with all results."""
     respx.post("http://localhost:8081/extract").mock(
         return_value=httpx.Response(200, json=amazon_response_data)
     )
@@ -161,17 +152,14 @@ async def test_extract_all_five_retailers(
     respx.post("http://localhost:8084/extract").mock(
         return_value=httpx.Response(200, json=target_response_data)
     )
-    respx.post("http://localhost:8089/extract").mock(
-        return_value=httpx.Response(200, json=sams_club_response_data)
-    )
     respx.post("http://localhost:8091/extract").mock(
         return_value=httpx.Response(200, json=fb_marketplace_response_data)
     )
 
     results = await client.extract_all("Samsung TV")
 
-    assert len(results) == 5
-    for rid in ["amazon", "walmart", "target", "sams_club", "fb_marketplace"]:
+    assert len(results) == 4
+    for rid in ["amazon", "walmart", "target", "fb_marketplace"]:
         assert rid in results
         assert results[rid].error is None
 
@@ -184,7 +172,7 @@ async def test_extract_all_mixed_success_failure(
     walmart_response_data: dict,
     target_response_data: dict,
 ):
-    """3 retailers succeed, 2 fail — partial results returned."""
+    """3 retailers succeed, 1 fails — partial results returned."""
     respx.post("http://localhost:8081/extract").mock(
         return_value=httpx.Response(200, json=amazon_response_data)
     )
@@ -194,20 +182,16 @@ async def test_extract_all_mixed_success_failure(
     respx.post("http://localhost:8084/extract").mock(
         return_value=httpx.Response(200, json=target_response_data)
     )
-    respx.post("http://localhost:8089/extract").mock(
-        side_effect=httpx.ConnectError("connection refused")
-    )
     respx.post("http://localhost:8091/extract").mock(
         side_effect=httpx.ConnectError("connection refused")
     )
 
     results = await client.extract_all("Samsung TV")
 
-    assert len(results) == 5
+    assert len(results) == 4
     assert results["amazon"].error is None
     assert results["walmart"].error is None
     assert results["target"].error is None
-    assert results["sams_club"].error is not None
     assert results["fb_marketplace"].error is not None
 
 

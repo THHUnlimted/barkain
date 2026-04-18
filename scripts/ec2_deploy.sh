@@ -58,8 +58,13 @@ echo "  Base image size: $(docker images barkain-base:latest --format '{{.Size}}
 
 # Define retailers to build
 if [ "${1:-}" = "--all" ]; then
-    RETAILERS="amazon:8081 best_buy:8082 walmart:8083 target:8084 home_depot:8085 lowes:8086 ebay_new:8087 ebay_used:8088 sams_club:8089 backmarket:8090 fb_marketplace:8091"
-    echo "  Building ALL 11 retailer containers..."
+    # 8086 (lowes) dropped 2026-04-18 — container deterministically hung at ~143 s
+    # with 0 listings (was 2i-d-L2).
+    # 8089 (sams_club) dropped 2026-04-18 — ~77 s + 1.4 MB Decodo per scan was
+    # the weakest cost/benefit on the roster (vs 30 s + 17 KB on fb_marketplace,
+    # sub-second on API-backed retailers).
+    RETAILERS="amazon:8081 best_buy:8082 walmart:8083 target:8084 home_depot:8085 ebay_new:8087 ebay_used:8088 backmarket:8090 fb_marketplace:8091"
+    echo "  Building ALL 9 retailer containers..."
 else
     RETAILERS="amazon:8081 best_buy:8082 walmart:8083"
     echo "  Building 3 priority retailers (Amazon, Best Buy, Walmart)..."
@@ -79,10 +84,11 @@ docker images | grep barkain
 echo ""
 echo "[4/4] Starting containers..."
 
-# Decodo residential proxy creds for IP-gated retailers (fb_marketplace, sams_club).
+# Decodo residential proxy creds for IP-gated retailers (fb_marketplace).
+# sams_club previously used the same path; retired 2026-04-18.
 # Source from /etc/barkain-scrapers.env if it exists; otherwise rely on env
 # already present in the shell. Missing creds → container runs without proxy
-# and logs a warning (fb_marketplace/sams_club will fail at /are-you-human/).
+# and logs a warning (fb_marketplace will fail with /login/ redirect).
 DECODO_ENV_FLAGS=()
 if [ -f /etc/barkain-scrapers.env ]; then
     # shellcheck disable=SC1091
@@ -106,7 +112,7 @@ for pair in $RETAILERS; do
     # Inject Decodo creds for retailers that route through the residential proxy.
     extra_env=()
     case "$retailer" in
-        fb_marketplace|sams_club)
+        fb_marketplace)
             extra_env=("${DECODO_ENV_FLAGS[@]}")
             ;;
     esac

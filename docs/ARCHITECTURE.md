@@ -132,22 +132,22 @@ Backend sends `POST /extract` to container → container runs extraction → ret
 
 | Retailer | Port | Directory | Key Deviations |
 |----------|------|-----------|----------------|
-| Amazon | 8081 | `containers/amazon/` | Title fallback chain (3 selectors), sponsored noise stripping |
+| Amazon | 8081 | `containers/amazon/` | **Legacy — superseded by `amazon_scraper_api` (Decodo Scraper API, ~3.4 s vs container ~53 s).** Container falls back when `DECODO_SCRAPER_API_AUTH` unset. |
 | Walmart | 8083 | `containers/walmart/` | **Legacy — superseded by HTTP adapter.** Container is still in repo as `WALMART_ADAPTER=container` fallback but does not work from any cloud. See "Walmart Adapter Routing" below. |
 | Target | 8084 | `containers/target/` | **Wait strategy:** `load` not `networkidle` (analytics pixels hang); wait for `[data-test='product-grid']` |
-| Sam's Club | 8089 | `containers/sams_club/` | Best-guess selectors; needs live validation |
-| Facebook Marketplace | 8091 | `containers/fb_marketplace/` | Login modal hidden with CSS `display:none` (never `.remove()`); all items condition "used" |
+| Facebook Marketplace | 8091 | `containers/fb_marketplace/` | Login modal hidden with CSS `display:none` (never `.remove()`); all items condition "used"; routes through Decodo residential proxy |
 
 #### Batch 2 Containers (Step 1e)
 
 | Retailer | Port | Directory | Key Notes |
 |----------|------|-----------|-----------|
-| Best Buy | 8082 | `containers/best_buy/` | `.sku-item` anchor, standard networkidle flow |
+| Best Buy | 8082 | `containers/best_buy/` | **Legacy — superseded by `best_buy_api` (Products API, ~82 ms vs container ~79 s).** Container falls back when `BESTBUY_API_KEY` unset. |
 | Home Depot | 8085 | `containers/home_depot/` | `[data-testid="product-pod"]` anchor, needs live validation |
-| Lowe's | 8086 | `containers/lowes/` | Multi-fallback selectors, needs live validation |
 | eBay (new) | 8087 | `containers/ebay_new/` | **Step 3b — deprecated in favor of Browse API adapter.** Container leg falls back if `EBAY_APP_ID`/`EBAY_CERT_ID` unset |
 | eBay (used/refurb) | 8088 | `containers/ebay_used/` | **Step 3b — deprecated in favor of Browse API adapter.** Same credential-gated fallback as ebay_new |
 | BackMarket | 8090 | `containers/backmarket/` | All items condition "refurbished", seller extraction |
+
+> **Retired 2026-04-18 (port 8086 lowes, port 8089 sams_club):** lowes deterministically hung at ~143 s with 0 listings (Xvfb / Chromium init issue). sams_club worked (3/3 listings via Decodo) but cost ~77 s + ~1.4 MB Decodo per scan, the weakest cost/benefit on the roster. Both removed from `containers/`, deploy scripts, and `CONTAINER_PORTS`. Retained as `is_active=False` rows in the `retailers` table so M5 identity / portal / card-rotating-category FKs that reference them stay valid.
 
 ### Walmart Adapter Routing (post-Step-2a paradigm shift)
 
@@ -289,7 +289,7 @@ All AI calls request JSON output. Use Instructor library for Pydantic model vali
 | GET | /api/v1/health | core | Health check (DB + Redis connectivity) | Exempt |
 | POST | /api/v1/products/resolve | M1 | UPC/barcode → product (Gemini API, UPCitemdb backup) | 60/min |
 | POST | /api/v1/products/search | M1 | **Step 3a** — Text query → ranked product list. Normalizes the query, probes a 24h Redis cache (`search:query:{sha256[:16]}:{n}`), runs `pg_trgm` fuzzy match against `products.name` (similarity ≥ 0.3, backed by `idx_products_name_trgm`), and falls back to Gemini with Google Search grounding when DB returns <3 rows OR top similarity <0.5. Gemini results are NOT persisted — on tap, iOS calls `/products/resolve` with the `primary_upc` to create/reuse a Product row. Returns `ProductSearchResponse { query, results[], total_results, cached }`. | 60/min |
-| GET | /api/v1/prices/{product_id} | M2 | Batch price comparison across all 11 retailers (blocks until every retailer completes) | 60/min |
+| GET | /api/v1/prices/{product_id} | M2 | Batch price comparison across all 9 active retailers (blocks until every retailer completes; retired lowes + sams_club no longer dispatched) | 60/min |
 | GET | /api/v1/prices/{product_id}/stream | M2 | **Step 2c** — SSE stream of per-retailer results using `asyncio.as_completed`. Each retailer yields a `retailer_result` event the moment it finishes (walmart ~12s, amazon ~30s, best_buy ~91s), terminated by a `done` event. Cache hit replays all events instantly. Fallback surface if the stream fails: the batch endpoint above. `?force_refresh=true` bypasses cache. | 60/min |
 
 ### Phase 2 Endpoints
@@ -373,7 +373,8 @@ Designed so 90%+ of queries resolve before hitting expensive LLM calls.
 | Tier | Source | Latency | Cost | When |
 |------|--------|---------|------|------|
 | 1. Internal DB | PostgreSQL cache | <50ms | $0 | Always (cache hit) |
-| 2. agent-browser containers | All 11 retailers (demo) | 3-8s | ~$0.0075 (proxy at scale) | Cache miss, Phase 1+ |
-| 3. Free APIs (production) | Best Buy, eBay Browse | 200-800ms | $0 | Phase 4+ (speed optimization) |
-| 4. Paid APIs (production) | Keepa (Amazon) | 500-1500ms | $0.01-0.02 | Phase 4+ (speed optimization) |
+| 2a. API adapters (production, auto-prefer) | Best Buy Products API (~82 ms), eBay Browse API (~520 ms), Decodo Scraper API for Amazon (~3.4 s), `walmart_http` via Decodo residential (~3.3 s) | 80 ms – 3.5 s | API + proxy bandwidth | Cache miss; live since 2026-04-18 |
+| 2b. agent-browser containers | 4 retailers (target / homedepot / backmarket / fbmarketplace) + fallback for the API-backed retailers | 30 – 50 s | ~$0.0075 (proxy at scale) | Cache miss; container fallback when adapter creds unset |
+| 3. Free APIs (legacy planning) | Best Buy, eBay Browse — see 2a (now production) | 200-800ms | $0 | Realised in tier 2a |
+| 4. Paid APIs (production) | Keepa (Amazon — alternative to Decodo Scraper API) | 500-1500ms | $0.01-0.02 | Phase 4+ option |
 | 5. AI reasoning | Claude Sonnet recommendation | 1-2s | $0.01-0.03 (YC credits) | Every query, Phase 3+ |

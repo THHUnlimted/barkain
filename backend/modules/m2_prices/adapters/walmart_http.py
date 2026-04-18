@@ -95,7 +95,14 @@ def _build_proxy_url(cfg: Settings) -> str:
     # httpx accepts raw user:pass in the URL; quote_plus on the password so
     # characters like '=', '@', or ':' don't break URL parsing.
     encoded_pass = quote_plus(cfg.DECODO_PROXY_PASS)
-    return f"http://{user}:{encoded_pass}@{cfg.DECODO_PROXY_HOST}"
+
+    # HOST may already include the port ("gate.decodo.com:7000"); if not,
+    # append DECODO_PROXY_PORT. Without an explicit port httpx defaults to
+    # 80, which silently times out (Decodo only listens on 7000).
+    host = cfg.DECODO_PROXY_HOST
+    if ":" not in host:
+        host = f"{host}:{cfg.DECODO_PROXY_PORT}"
+    return f"http://{user}:{encoded_pass}@{host}"
 
 
 async def fetch_walmart(

@@ -58,6 +58,11 @@ RETAILERS = [
         "supports_portals": True,
     },
     {
+        # Scraper deprecated 2026-04-18: lowes container deterministically hung
+        # at ~143 s with 0 listings (Xvfb / Chromium init issue, 2i-d-L2). Kept
+        # as inactive retailer so M5 identity discounts, card-rotating-category
+        # rows, and portal-bonus rows that reference retailer_id="lowes" stay
+        # FK-valid. Re-enable + redeploy if the container is ever fixed.
         "id": "lowes",
         "display_name": "Lowe's",
         "base_url": "https://www.lowes.com",
@@ -65,6 +70,7 @@ RETAILERS = [
         "supports_coupons": True,
         "supports_identity": True,
         "supports_portals": True,
+        "is_active": False,
     },
     {
         "id": "ebay_new",
@@ -85,6 +91,11 @@ RETAILERS = [
         "supports_portals": True,
     },
     {
+        # Scraper retired 2026-04-18: ~77 s + 1.4 MB Decodo per scan was the
+        # weakest cost/benefit on the roster (other Decodo retailer
+        # fb_marketplace runs at 30 s + 17 KB; API-backed retailers run
+        # sub-second). Kept as inactive retailer so M5 portal/coupon rows
+        # that reference retailer_id="sams_club" stay FK-valid.
         "id": "sams_club",
         "display_name": "Sam's Club",
         "base_url": "https://www.samsclub.com",
@@ -92,6 +103,7 @@ RETAILERS = [
         "supports_coupons": True,
         "supports_identity": False,
         "supports_portals": True,
+        "is_active": False,
     },
     {
         "id": "backmarket",
@@ -118,13 +130,14 @@ async def seed_retailers(session: AsyncSession) -> int:
     """Insert or update all Phase 1 retailers. Returns count of upserted rows."""
     count = 0
     for r in RETAILERS:
+        params = {**r, "is_active": r.get("is_active", True)}
         await session.execute(
             text(
                 """
                 INSERT INTO retailers (id, display_name, base_url, extraction_method,
-                    supports_coupons, supports_identity, supports_portals)
+                    supports_coupons, supports_identity, supports_portals, is_active)
                 VALUES (:id, :display_name, :base_url, :extraction_method,
-                    :supports_coupons, :supports_identity, :supports_portals)
+                    :supports_coupons, :supports_identity, :supports_portals, :is_active)
                 ON CONFLICT (id) DO UPDATE SET
                     display_name = EXCLUDED.display_name,
                     base_url = EXCLUDED.base_url,
@@ -132,10 +145,11 @@ async def seed_retailers(session: AsyncSession) -> int:
                     supports_coupons = EXCLUDED.supports_coupons,
                     supports_identity = EXCLUDED.supports_identity,
                     supports_portals = EXCLUDED.supports_portals,
+                    is_active = EXCLUDED.is_active,
                     updated_at = NOW()
                 """
             ),
-            r,
+            params,
         )
         count += 1
     return count

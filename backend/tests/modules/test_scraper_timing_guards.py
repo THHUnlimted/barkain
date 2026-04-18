@@ -1,6 +1,6 @@
 """Regression guards on extract.sh timing optimizations.
 
-These containers (target, home_depot, backmarket, lowes) don't have
+These containers (target, home_depot, backmarket) don't have
 PerimeterX/DataDome/Akamai-class bot protection, so the homepage warmup +
 heavy jitter values that ship with the template scraper are pure latency
 waste. This test locks in the timing optimizations from the 2026-04-17
@@ -9,8 +9,12 @@ demo-prep-3 branch so the wins don't accidentally regress in a future
 
 Does NOT guard target's `load` (not `networkidle`) wait strategy — that's
 tested implicitly via extraction correctness and is a stable invariant.
-Does NOT guard the samsclub/amazon/bestbuy/walmart scripts — those have
-real anti-bot requirements that need the warmup + jitter noise.
+Does NOT guard the amazon/bestbuy/walmart scripts — those have real
+anti-bot requirements that need the warmup + jitter noise.
+
+Note: lowes was originally part of this set; the container was retired
+2026-04-18 (deterministic ~143 s hang, 2i-d-L2). Re-add to
+WARMUP_REQUIRED_RETAILERS if the container is ever fixed.
 """
 
 from __future__ import annotations
@@ -23,11 +27,11 @@ CONTAINERS_DIR = Path(__file__).resolve().parents[3] / "containers"
 
 # Homepage warmup is safe to remove on target + backmarket — they don't
 # depend on session cookies for search to render product grids.
-# home_depot + lowes DO depend on warmup — measured 2026-04-17 that
-# skipping it drops listings 3 → 0 (location-picker / empty-results
-# fallback without homepage-set cookies). Keep warmup on those.
+# home_depot DOES depend on warmup — measured 2026-04-17 that skipping it
+# drops listings 3 → 0 (location-picker / empty-results fallback without
+# homepage-set cookies). Keep warmup on it.
 WARMUP_REMOVED_RETAILERS = ["target", "backmarket"]
-WARMUP_REQUIRED_RETAILERS = ["home_depot", "lowes"]
+WARMUP_REQUIRED_RETAILERS = ["home_depot"]
 OPTIMIZED_RETAILERS = WARMUP_REMOVED_RETAILERS + WARMUP_REQUIRED_RETAILERS
 
 
