@@ -1809,6 +1809,55 @@ Extrapolated to the observed 85 MB/19 h billing window: 17 scrapes × 19 KB ≈ 
 - `backend/tests/modules/test_walmart_http_adapter.py` — `test_fetch_walmart_makes_exactly_one_request_per_call`.
 - `backend/tests/modules/test_fb_marketplace_extract_flags.py` — 26 parametrized asserts on the shell script.
 
+### C.12 Sams Club — Same Decodo-Scoped Pattern (2026-04-18, SP-samsclub-decodo)
+
+**Motivation.** After the timing-optimization work in PR #27 (trimmed warmup + scroll for 4 retailers), sams_club was timing out at 96–110 s with 0 listings and `EXTRACTION_FAILED`. Three consecutive runs confirmed it was deterministic, not flaky. Reading the full container stderr showed the retailer title changing from `Sam's Club - Wholesale Prices on Top Brands` (homepage OK) to `Let us know you're not a robot - Sam's Club` on `/s/...` navigation — i.e. an Akamai-style `/are-you-human?url=...&uuid=...&vid=...&g=b` gate fired by the AWS datacenter IP.
+
+**Diagnosis.** Same class of failure as fb_marketplace before C.11: IP-reputation-based bot detection. The base-extract.sh comment `# Similar to Walmart patterns but without PerimeterX issues` was stale — Sam's Club *does* gate on IP reputation; it just wasn't tripping until the container host had been identified often enough.
+
+**Fix.** Replicate the C.11 architecture for sams_club:
+
+1. Copy `proxy_relay.py` verbatim from `fb_marketplace/` to `sams_club/` — same Decodo credentials injection, same per-connection `proxy_bytes` accounting to `/tmp/proxy_bytes.log`.
+2. Rewrite `containers/sams_club/extract.sh` with:
+   - The same 13 Chromium telemetry kill flags from C.11.
+   - The same `PROXY_BYPASS_LIST` (fifteen `*.google*`/`*.doubleclick.net`/`*.gvt1.com` entries so Chromium-internal fetches egress the datacenter IP, not Decodo).
+   - `SAMS_CLUB_DISABLE_IMAGES=1` default → `--blink-settings=imagesEnabled=false` (opt-out via env).
+   - `"are you human"` added to the bot-detection title regex.
+3. Keep the homepage warmup (`$SITE_HOMEPAGE` before `$SEARCH_URL`). Measured that even through Decodo, direct `/s/` navigation without homepage cookies still trips the gate intermittently.
+4. Update `scripts/ec2_deploy.sh` to source Decodo creds from `/etc/barkain-scrapers.env` and `case retailer in fb_marketplace|sams_club` inject `-e DECODO_PROXY_USER -e DECODO_PROXY_PASS` at `docker run` time.
+
+**Measured (live EC2, 3 consecutive POST /extract, query = "Apple AirPods Pro 2", max_listings=3).**
+
+| Phase | listings/run | time_ms | error |
+|---|---|---|---|
+| Pre-fix | 0 / 0 / 0 | 97,966 / 109,752 / 109,160 | `EXTRACTION_FAILED` (trapped at `/are-you-human/`) |
+| Post-fix | 3 / 3 / 3 | 76,372 / 109,373 / 107,270 | none |
+
+**Bandwidth (post-fix, from `/tmp/proxy_bytes.log` across 3 successful runs, ~850 KB / run average).**
+
+| Target host | Category | Bytes across 3 runs |
+|---|---|--:|
+| `i5.samsclubimages.com` | Image CDN | 2,156,436 |
+| `www.samsclub.com` | Main site HTML/JS | 319,318 |
+| `use.typekit.net` | Adobe Fonts | 47,026 |
+| `i5.walmartimages.com` | Shared image CDN | 33,184 |
+| `b.wal.co` | Beacon | 26,533 |
+| `beacon.samsclub.com` | First-party telemetry | 17,174 |
+| `b.px-cdn.net` | PerimeterX (must stay on-proxy) | 13,057 |
+| `collector-pxslc3j22k.px-cloud.net` | PerimeterX | 10,664 |
+| **Per-run total** | | **~850 KB** |
+
+**Known follow-up:** `--blink-settings=imagesEnabled=false` is honored but Sam's Club's product-grid still causes ~700 KB/extract of `i5.samsclubimages.com` traffic (fetched via some non-blink path — possibly `fetch()` in their SPA bundle). Candidate mitigations: add `*.samsclubimages.com` + `*.walmartimages.com` to the bypass list (serve images direct over datacenter IP instead of through Decodo — safe because the image CDNs are not IP-gated). Deferred — current 850 KB/extract is acceptable given the retailer was at 100% failure before.
+
+**Gotcha captured (DPS-equivalent learning).** When copying Decodo creds across containers via shell, use `cut -d= -f2-` (NOT `cut -d= -f2`). The Decodo password is base64-terminated with a trailing `=`, and `-f2` silently strips it. Symptom on first deploy: CONNECT tunnel failed response 407 from the upstream proxy; relay was up but auth was bad because the password was off by one char.
+
+**Implementation files (2026-04-18):**
+- `containers/sams_club/extract.sh` — full rewrite, Decodo-routed.
+- `containers/sams_club/proxy_relay.py` — copy of fb_marketplace/proxy_relay.py (byte-identical).
+- `containers/sams_club/Dockerfile` — adds `COPY proxy_relay.py .`.
+- `scripts/ec2_deploy.sh` — sources `/etc/barkain-scrapers.env`, injects `DECODO_PROXY_{USER,PASS}` for `fb_marketplace|sams_club`.
+- `backend/tests/modules/test_sams_club_extract_flags.py` — 26 parametrized asserts (telemetry flags, feature disables, bypass-list patterns, image-blocking opt-out, bot regex, warmup present).
+
 
 ## Appendix D — Required extract.sh conventions (2026-04-10, first live run)
 
