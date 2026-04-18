@@ -41,6 +41,7 @@ struct SearchView: View {
 
         VStack(spacing: 0) {
             searchBar(vm: vm)
+            deepSearchHint(vm: vm)
 
             Group {
                 if let presentedVM = vm.presentedProductViewModel,
@@ -92,6 +93,7 @@ struct SearchView: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled(true)
             .submitLabel(.search)
+            .onSubmit { Task { await vm.deepSearch() } }
             .accessibilityIdentifier("searchTextField")
 
             if !vm.query.isEmpty {
@@ -110,6 +112,29 @@ struct SearchView: View {
         .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadiusLarge))
         .padding(.horizontal, Spacing.md)
         .padding(.top, Spacing.sm)
+    }
+
+    // MARK: - Deep search hint
+
+    /// Sub-search-bar banner shown when the typed query doesn't substring-match
+    /// any returned result. Inviting the user to hit return to fetch more.
+    @ViewBuilder
+    private func deepSearchHint(vm: SearchViewModel) -> some View {
+        if vm.showDeepSearchHint {
+            HStack(spacing: Spacing.sm) {
+                Image(systemName: "pawprint.fill")
+                    .foregroundStyle(Color.barkainPrimary)
+                Text("Off the scent? Hit return and we'll fetch it for you.")
+                    .font(.barkainCaption)
+                    .foregroundStyle(Color.barkainOnSurfaceVariant)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.xs)
+            .padding(.horizontal, Spacing.md)
+            .padding(.top, Spacing.xs)
+            .accessibilityIdentifier("deepSearchHint")
+        }
     }
 
     // MARK: - Results list

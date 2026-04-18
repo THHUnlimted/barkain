@@ -76,7 +76,9 @@ async def search_products(
     search itself never persists speculative Gemini results.
     """
     service = ProductSearchService(db=db, redis=redis_client)
-    return await service.search(body.query, body.max_results)
+    return await service.search(
+        body.query, body.max_results, force_gemini=body.force_gemini
+    )
 
 
 @router.post(

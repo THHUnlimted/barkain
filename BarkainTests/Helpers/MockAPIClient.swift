@@ -30,6 +30,7 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     var searchProductsCallCount = 0
     var searchProductsLastQuery: String?
     var searchProductsLastMaxResults: Int?
+    var searchProductsLastForceGemini: Bool?
     var searchProductsDelay: TimeInterval = 0
     var getPricesCallCount = 0
     var getPricesLastProductId: UUID?
@@ -133,10 +134,11 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
         return try resolveFromSearchResult.get()
     }
 
-    func searchProducts(query: String, maxResults: Int) async throws -> ProductSearchResponse {
+    func searchProducts(query: String, maxResults: Int, forceGemini: Bool) async throws -> ProductSearchResponse {
         searchProductsCallCount += 1
         searchProductsLastQuery = query
         searchProductsLastMaxResults = maxResults
+        searchProductsLastForceGemini = forceGemini
         if searchProductsDelay > 0 {
             try await Task.sleep(for: .seconds(searchProductsDelay))
         }
@@ -239,13 +241,17 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
         return try getAffiliateStatsResult.get()
     }
 
+    var streamPricesLastQueryOverride: String?
+
     func streamPrices(
         productId: UUID,
-        forceRefresh: Bool
+        forceRefresh: Bool,
+        queryOverride: String?
     ) -> AsyncThrowingStream<RetailerStreamEvent, Error> {
         streamPricesCallCount += 1
         streamPricesLastProductId = productId
         streamPricesLastForceRefresh = forceRefresh
+        streamPricesLastQueryOverride = queryOverride
 
         let events = streamPricesEvents
         let delay = streamPricesPerEventDelay

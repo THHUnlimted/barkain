@@ -422,6 +422,7 @@ class PriceAggregationService:
         self,
         product_id: uuid.UUID,
         force_refresh: bool = False,
+        query_override: str | None = None,
     ) -> AsyncGenerator[tuple[str, dict], None]:
         """Yield per-retailer SSE events (`retailer_result`, `done`, `error`) as
         results arrive. Uses `asyncio.as_completed` over per-retailer tasks so
@@ -437,6 +438,15 @@ class PriceAggregationService:
         accumulates a dict) — that's why they're not merged.
         """
         product = await self._validate_product(product_id)
+
+        # `query_override` (sent by iOS when the user tapped a generic search
+        # row like "Apple iPhone 16 [Any variant]") replaces both the search
+        # query AND the per-container product_name hint so retailers search
+        # the bare generic string instead of the resolved variant's title.
+        # Skip the cache when an override is in play — cached entries are
+        # keyed by product, not by query, so replaying them would defeat the
+        # whole point. Don't cache the override response either.
+        force_refresh = force_refresh or bool(query_override)
 
         # Cache path — replay stored results and short-circuit.
         if not force_refresh:
@@ -475,19 +485,25 @@ class PriceAggregationService:
                 return
 
         # Live path — dispatch every retailer, yield as each completes.
-        query = self._build_query(product)
+        query = query_override if query_override else self._build_query(product)
+        # When the override is in play, drop the variant-specific name hint
+        # too — otherwise containers might still latch onto the SKU title.
+        product_name_for_containers = (
+            query_override if query_override else product.name
+        )
         ids = list(self.container_client.ports.keys())
         names = await self._load_retailer_names(ids)
         logger.info(
-            "stream_prices dispatching %d retailers for product %s: %s",
+            "stream_prices dispatching %d retailers for product %s: %s%s",
             len(ids),
             product_id,
             query,
+            " (override)" if query_override else "",
         )
 
         async def _fetch_one(rid: str) -> tuple[str, ContainerResponse]:
             resp = await self.container_client._extract_one(
-                rid, query, product.name, product.upc, 10
+                rid, query, product_name_for_containers, product.upc, 10
             )
             return rid, resp
 
@@ -558,7 +574,11 @@ class PriceAggregationService:
             "cached": False,
             "fetched_at": now.isoformat(),
         }
-        await self._cache_to_redis(product_id, final)
+        # Skip the Redis write when running with a query override — caching
+        # would let the next non-override caller see generic-search results
+        # instead of the variant-specific run they actually asked for.
+        if not query_override:
+            await self._cache_to_redis(product_id, final)
 
         yield (
             "done",

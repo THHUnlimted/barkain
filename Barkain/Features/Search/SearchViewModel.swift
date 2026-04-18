@@ -70,6 +70,12 @@ final class SearchViewModel {
     /// search task, sleeps for the debounce interval, and then performs the
     /// search if the task is still live. On empty query, clears results.
     func queryChanged(_ newValue: String) {
+        // Editing the query reopens the "we can fetch more" hint, even if
+        // the user already deep-searched a previous string.
+        if newValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            != (lastDeepSearchedQuery?.lowercased() ?? "") {
+            lastDeepSearchedQuery = nil
+        }
         query = newValue
         error = nil
         searchTask?.cancel()
@@ -108,13 +114,14 @@ final class SearchViewModel {
     }
 
     /// Direct (non-debounced) entry point used by recent-search taps + tests.
-    func performSearch(_ text: String) async {
+    func performSearch(_ text: String, forceGemini: Bool = false) async {
         isLoading = true
         defer { isLoading = false }
         do {
             let response = try await apiClient.searchProducts(
                 query: text,
-                maxResults: Self.defaultMaxResults
+                maxResults: Self.defaultMaxResults,
+                forceGemini: forceGemini
             )
             if Task.isCancelled { return }
             results = response.results
@@ -127,6 +134,39 @@ final class SearchViewModel {
             results = []
         }
     }
+
+    /// Deep search — invoked when the user submits the keyboard (return key)
+    /// after the debounced search returned results that don't substring-match
+    /// what they typed. Forces Gemini to run alongside Tier 2 and bypasses
+    /// the Redis cache so the user always gets a fresh long-tail sweep.
+    func deepSearch() async {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 3 else { return }
+        searchTask?.cancel()
+        await performSearch(trimmed, forceGemini: true)
+        // Mark the query as "deep-searched" so the hint hides until the
+        // user edits the query again (see `queryChanged`).
+        lastDeepSearchedQuery = trimmed
+    }
+
+    /// True as soon as the user has typed 3+ characters AND we haven't
+    /// already run a deep-search for the current query. Once the deep
+    /// search lands the hint disappears — the user already pulled that
+    /// lever and pestering them again would be noise.
+    var showDeepSearchHint: Bool {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 3 else { return false }
+        if let last = lastDeepSearchedQuery,
+           last.lowercased() == trimmed.lowercased() {
+            return false
+        }
+        return true
+    }
+
+    /// Set after a successful deep search; cleared whenever the query
+    /// changes (see `queryChanged`). Used by `showDeepSearchHint` to
+    /// dismiss the affordance once the user has already invoked it.
+    private var lastDeepSearchedQuery: String?
 
     /// Called when the user taps a result row. For DB-sourced rows the
     /// `Product` is constructed from the row fields directly (no extra
@@ -157,7 +197,15 @@ final class SearchViewModel {
             )
             await presentProduct(product)
 
-        case .gemini:
+        case .bestBuy, .upcitemdb, .gemini, .generic:
+            // Best Buy + Gemini rows are ephemeral — neither has a persisted
+            // product_id. Both carry a UPC most of the time (Best Buy almost
+            // always; Gemini sometimes), so prefer the UPC-direct path and
+            // fall back to /resolve-from-search when the UPC is missing.
+            // Generic rows always lack a UPC and additionally pass their
+            // own (stripped) name through to the price stream so retailers
+            // search the bare generic name instead of the resolved variant's
+            // SKU title (works for any device — iPhone, Galaxy, PS5, Moto…).
             isLoading = true
             defer { isLoading = false }
             do {
@@ -165,16 +213,14 @@ final class SearchViewModel {
                 if let upc = result.primaryUpc, !upc.isEmpty {
                     product = try await apiClient.resolveProduct(upc: upc)
                 } else {
-                    // Gemini returned this row without a UPC — run the tap-time
-                    // device→UPC lookup via /resolve-from-search so older /
-                    // discontinued SKUs still resolve to a persisted Product.
                     product = try await apiClient.resolveProductFromSearch(
                         deviceName: result.deviceName,
                         brand: result.brand,
                         model: result.model
                     )
                 }
-                await presentProduct(product)
+                let override: String? = result.source == .generic ? result.deviceName : nil
+                await presentProduct(product, queryOverride: override)
             } catch APIError.notFound {
                 resolveFailureMessage = "Couldn't find a barcode for this product — try scanning it instead."
             } catch let apiError as APIError {
@@ -185,14 +231,17 @@ final class SearchViewModel {
         }
     }
 
-    private func presentProduct(_ product: Product) async {
+    private func presentProduct(_ product: Product, queryOverride: String? = nil) async {
         let vm = ScannerViewModel(apiClient: apiClient, featureGate: featureGate)
         // Inject the already-resolved product so handleBarcodeScan's redundant
         // resolve call is skipped — jump straight to the price stream.
         vm.scannedUPC = product.upc
         vm.product = product
         presentedProductViewModel = vm
-        await vm.fetchPrices()
+        // `queryOverride` (set when the user tapped a generic row) flows
+        // through to retailer container searches so they get the bare
+        // generic string, not the resolved variant's SKU name.
+        await vm.fetchPrices(queryOverride: queryOverride)
     }
 
     // MARK: - Recent searches (@AppStorage-backed via UserDefaults)

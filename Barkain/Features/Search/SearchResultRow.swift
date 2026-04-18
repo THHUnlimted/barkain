@@ -17,11 +17,22 @@ struct SearchResultRow: View {
                 thumbnail
 
                 VStack(alignment: .leading, spacing: Spacing.xxs) {
-                    Text(result.deviceName)
-                        .font(.barkainHeadline)
-                        .foregroundStyle(Color.barkainOnSurface)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
+                    HStack(spacing: Spacing.xs) {
+                        Text(result.deviceName)
+                            .font(.barkainHeadline)
+                            .foregroundStyle(Color.barkainOnSurface)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        if result.source == .generic {
+                            Text("Any variant")
+                                .font(.barkainCaption)
+                                .padding(.horizontal, Spacing.xs)
+                                .padding(.vertical, 2)
+                                .background(Color.barkainPrimaryFixed)
+                                .foregroundStyle(Color.barkainOnSurface)
+                                .clipShape(Capsule())
+                        }
+                    }
 
                     HStack(spacing: Spacing.xs) {
                         if let brand = result.brand, !brand.isEmpty {

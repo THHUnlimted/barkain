@@ -58,6 +58,7 @@ async def get_prices(
 async def stream_prices_endpoint(
     product_id: uuid.UUID,
     force_refresh: bool = False,
+    query: str | None = None,
     user: dict = Depends(get_current_user),
     _rate: None = Depends(get_rate_limiter("general")),
     db: AsyncSession = Depends(get_db),
@@ -87,7 +88,9 @@ async def stream_prices_endpoint(
 
     async def event_stream():
         async for event_type, payload in service.stream_prices(
-            product_id, force_refresh=force_refresh
+            product_id,
+            force_refresh=force_refresh,
+            query_override=query,
         ):
             yield sse_event(event_type, payload)
 

@@ -14,9 +14,9 @@ nonisolated enum HTTPMethod: String {
 nonisolated enum Endpoint {
     case resolveProduct(upc: String)
     case resolveFromSearch(deviceName: String, brand: String?, model: String?)
-    case searchProducts(query: String, maxResults: Int)
+    case searchProducts(query: String, maxResults: Int, forceGemini: Bool)
     case getPrices(productId: UUID, forceRefresh: Bool = false)
-    case streamPrices(productId: UUID, forceRefresh: Bool = false)
+    case streamPrices(productId: UUID, forceRefresh: Bool = false, queryOverride: String? = nil)
     case health
     case getIdentityProfile
     case updateIdentityProfile(IdentityProfileRequest)
@@ -47,7 +47,7 @@ nonisolated enum Endpoint {
             return "/api/v1/products/search"
         case .getPrices(let productId, _):
             return "/api/v1/prices/\(productId.uuidString)"
-        case .streamPrices(let productId, _):
+        case .streamPrices(let productId, _, _):
             return "/api/v1/prices/\(productId.uuidString)/stream"
         case .health:
             return "/api/v1/health"
@@ -94,8 +94,15 @@ nonisolated enum Endpoint {
 
     var queryItems: [URLQueryItem]? {
         switch self {
-        case .getPrices(_, true), .streamPrices(_, true):
+        case .getPrices(_, true):
             return [URLQueryItem(name: "force_refresh", value: "true")]
+        case .streamPrices(_, let force, let override):
+            var items: [URLQueryItem] = []
+            if force { items.append(URLQueryItem(name: "force_refresh", value: "true")) }
+            if let override, !override.isEmpty {
+                items.append(URLQueryItem(name: "query", value: override))
+            }
+            return items.isEmpty ? nil : items
         case .getEligibleDiscounts(let productId):
             if let productId {
                 return [URLQueryItem(name: "product_id", value: productId.uuidString)]
@@ -121,14 +128,15 @@ nonisolated enum Endpoint {
                 let model: String?
             }
             return try? encoder.encode(Body(deviceName: deviceName, brand: brand, model: model))
-        case .searchProducts(let query, let maxResults):
+        case .searchProducts(let query, let maxResults, let forceGemini):
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase
             struct Body: Encodable {
                 let query: String
                 let maxResults: Int
+                let forceGemini: Bool
             }
-            return try? encoder.encode(Body(query: query, maxResults: maxResults))
+            return try? encoder.encode(Body(query: query, maxResults: maxResults, forceGemini: forceGemini))
         case .updateIdentityProfile(let request):
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase

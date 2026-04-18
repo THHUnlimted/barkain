@@ -70,17 +70,25 @@ class AffiliateService:
                 retailer_id=retailer_id,
             )
 
-        # eBay — rover redirect for both new + used listings.
+        # eBay — modern EPN tracking via query params on the item URL itself.
+        # The legacy `rover/1/<rotation>/1?mpre=` pattern returns a 1x1 GIF
+        # impression pixel (content-type: image/gif), not a redirect — so
+        # tapping it lands users on a blank page. The current EPN spec is
+        # to append `mkcid=1&mkrid=<rotation>&campid=<id>&toolid=10001
+        # &mkevt=1` directly to the item URL.
         if retailer_id in EBAY_RETAILERS and settings.EBAY_CAMPAIGN_ID:
-            encoded = urllib.parse.quote(product_url, safe="")
-            rover = (
-                "https://rover.ebay.com/rover/1/711-53200-19255-0/1"
-                f"?mpre={encoded}"
-                f"&campid={settings.EBAY_CAMPAIGN_ID}"
-                "&toolid=10001"
-            )
+            tracking = {
+                "mkcid": "1",
+                "mkrid": "711-53200-19255-0",  # US rotation id
+                "siteid": "0",
+                "campid": settings.EBAY_CAMPAIGN_ID,
+                "toolid": "10001",
+                "mkevt": "1",
+            }
+            separator = "&" if "?" in product_url else "?"
+            tagged = product_url + separator + urllib.parse.urlencode(tracking)
             return AffiliateURLResponse(
-                affiliate_url=rover,
+                affiliate_url=tagged,
                 is_affiliated=True,
                 network=EBAY_NETWORK,
                 retailer_id=retailer_id,

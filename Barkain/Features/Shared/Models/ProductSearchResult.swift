@@ -4,7 +4,10 @@ import Foundation
 
 nonisolated enum ProductSearchSource: String, Codable, Sendable {
     case db
+    case bestBuy = "best_buy"
+    case upcitemdb
     case gemini
+    case generic
 }
 
 // MARK: - ProductSearchResult
@@ -26,7 +29,7 @@ nonisolated struct ProductSearchResult: Codable, Identifiable, Equatable, Sendab
         if let productId {
             return "db-\(productId.uuidString)"
         }
-        return "gemini-\(deviceName)|\(model ?? "")"
+        return "\(source.rawValue)-\(deviceName)|\(model ?? "")"
     }
 }
 

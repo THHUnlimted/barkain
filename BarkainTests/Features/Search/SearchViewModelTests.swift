@@ -128,6 +128,60 @@ final class SearchViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isLoading)
     }
 
+    // MARK: - Deep search hint + force_gemini
+
+    private func makeResult(_ name: String, brand: String? = nil, model: String? = nil) -> ProductSearchResult {
+        ProductSearchResult(
+            deviceName: name,
+            model: model,
+            brand: brand,
+            category: nil,
+            confidence: 0.5,
+            primaryUpc: nil,
+            source: .gemini,
+            productId: nil,
+            imageUrl: nil
+        )
+    }
+
+    func test_showDeepSearchHint_alwaysTrueWhen3PlusChars() async {
+        // Hint is always available past the 3-char threshold — even when the
+        // current results look right, a closer match might be one deep
+        // search away.
+        let result = makeResult("Sony WH-1000XM5", brand: "Sony", model: "WH-1000XM5")
+        mockClient.searchProductsResult = .success(
+            ProductSearchResponse(query: "sony", results: [result], totalResults: 1, cached: false)
+        )
+        viewModel.queryChanged("sony")
+        await viewModel.performSearch("sony")
+        XCTAssertTrue(viewModel.showDeepSearchHint)
+    }
+
+    func test_showDeepSearchHint_falseForEmptyOrShortQuery() async {
+        XCTAssertFalse(viewModel.showDeepSearchHint)  // empty
+        viewModel.queryChanged("ab")
+        XCTAssertFalse(viewModel.showDeepSearchHint)  // <3 chars
+    }
+
+    func test_showDeepSearchHint_trueWhileTyping3PlusCharsBeforeResults() async {
+        // No results yet, query >= 3 chars → hint shown so the "hit return"
+        // affordance is visible from the moment the user has typed enough
+        // for a search to fire.
+        viewModel.queryChanged("widget")
+        XCTAssertTrue(viewModel.showDeepSearchHint)
+    }
+
+    func test_deepSearch_callsAPIWithForceGemini() async {
+        mockClient.searchProductsResult = .success(
+            ProductSearchResponse(query: "obscure", results: [], totalResults: 0, cached: false)
+        )
+        viewModel.queryChanged("obscure thing")
+        await viewModel.deepSearch()
+
+        XCTAssertEqual(mockClient.searchProductsLastQuery, "obscure thing")
+        XCTAssertEqual(mockClient.searchProductsLastForceGemini, true)
+    }
+
     // MARK: - Recent searches persistence + cap
 
     func test_recentSearches_persistAndCapAt10() {

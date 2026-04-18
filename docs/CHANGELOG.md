@@ -1633,4 +1633,129 @@ Decodo bytes per full scan dropped from ~1.42 MB → ~17 KB (sams_club retiremen
 - Container leg for `amazon` and `best_buy` is now strictly a fallback. Once production has been on the API adapters for a few weeks without incident, those container directories can be `git rm`'d in a follow-up cleanup (same pattern as lowes / sams_club).
 - `target`/`homedepot`/`backmarket` are now the slowest retailers (~36 s each). Future optimization: write per-retailer parsers and use Decodo Scraper API's `universal` + `headless:html` (16 s for target, 34 s for home_depot) — only worth it if the parser maintenance cost beats the agent-browser maintenance cost, which currently it doesn't.
 
+---
+
+### Step 3c — Search v2 + Variant Collapse + Deep Search + eBay Affiliate Fix (2026-04-18)
+
+**Branch:** `phase-3/3c-search-tier2-bestbuy`. Live, sim-driven session — every change validated by typing in the Barkain search bar against the local backend (with an SSH tunnel to EC2 for the 5 container-only retailers) and running real searches.
+
+**Problem set entering the session:**
+1. `POST /products/search` was DB → Gemini only. Gemini calls cost ~5 s on every cold long-tail query.
+2. Best Buy catalog returns SKU-level rows, so "iPhone 16" came back as 6 specific color/storage variants (and 4 AppleCare warranties at the top).
+3. Tap on a Gemini search row for products like iPhone 16 returned 404 ("Couldn't find a barcode") because Gemini refuses to commit to a single UPC for multi-carrier/multi-color Apple SKUs.
+4. eBay affiliate URLs landed users on a blank page — turned out the `rover/1/<rotation>/1?mpre=` pattern returns a `content-type: image/gif` tracking pixel, not a redirect.
+
+**What shipped:**
+
+#### A. 3-tier search cascade (parallel Tier 2)
+
+`backend/modules/m1_product/search_service.py` rewritten:
+
+```
+Normalize → Redis cache (24h)
+   ↓ miss
+Tier 1: pg_trgm fuzzy match on products.name (similarity ≥ 0.3)
+   ↓ <3 results OR top_sim < 0.5
+Tier 2: asyncio.gather(
+            best_buy_api search (~150 ms),
+            upcitemdb /search?s=&match_mode=1 (~200 ms)
+        )
+   ↓ both empty
+Tier 3: Gemini grounded fallback (~5 s)
+```
+
+Tier 2 wall time = max(BBY, UPC) ~150-300 ms. Both ephemeral; neither persists.
+
+- Best Buy adapter call uses the same endpoint as the M2 price adapter but tuned for picker output (`show=sku,name,manufacturer,modelNumber,upc,image,categoryPath.name`). Confidence proxy is `0.9 - 0.04 * position` (linear decay).
+- UPCitemdb keyword search added in `upcitemdb.py::search_keyword` — trial endpoint (no key, ~100/day shared IP) and paid endpoint (`UPCITEMDB_API_KEY`, 5k/day). Confidence floor `0.3-0.5` so BBY rows always sort above UPCitemdb on dedup.
+- Merge order: DB > Best Buy > UPCitemdb > Gemini, dedupe by `(brand_lower, name_lower)`. Earlier-tier rows always win the dedup race.
+
+#### B. Brand-only query routing
+
+`_BRAND_ONLY_TERMS` (~40 hardcoded brand names: apple, samsung, sony, lg, dyson, dji, ...). Single-token brand queries skip Tier 2 entirely (BBY/UPC flood with accessories) and go straight to Gemini, which returns the actual flagship product list. Detector is just `normalized_query in _BRAND_ONLY_TERMS` — additive, missing brands fall through to normal Tier 2.
+
+#### C. Deep search via `force_gemini`
+
+New `force_gemini: bool = false` field on `ProductSearchRequest`. When true:
+1. Bypass Redis cache.
+2. Run Gemini regardless of `needs_fallback`.
+3. Stable-partition merged results so Gemini rows come first (`gemini_first=True` in `_merge`).
+
+Wired to iOS `.onSubmit` on the search TextField. `SearchViewModel.deepSearch()` calls `performSearch(forceGemini: true)` and stamps `lastDeepSearchedQuery`. iOS `showDeepSearchHint` shows a paw-print banner ("*Off the scent? Hit return and we'll fetch it for you.*") under the search bar at 3+ chars, dismisses after deep search until the query edits again.
+
+#### D. Variant collapse with synthetic generic row
+
+`_collapse_variants` strips spec tokens the user did NOT type (color list of ~30 names, storage `\b\d+(GB|TB)\b`, screen sizes, carriers, warranties, parens, model codes), groups by `(brand, stripped_title)`. For buckets with 2+ variants:
+- Prepend a synthetic `source="generic"` row with `primary_upc=None` and the stripped name (case-preserved via `_strip_specs_preserve_case`).
+- Append all the variant rows underneath so the user can still pick a specific SKU.
+
+Brand-agnostic — works for iPhone, Galaxy, PS5, Moto, anything the catalogs return SKU-level.
+
+iOS shows an "Any variant" badge on the generic row.
+
+UPC scan path doesn't go through `_collapse_variants` (variant precision matters when the user scanned a physical barcode).
+
+#### E. Container query override on price stream
+
+`GET /prices/{product_id}/stream?query=<override>` (3c addition):
+- Service: `stream_prices(product_id, force_refresh, query_override)` — when override set, skips cache reads + writes (cache is keyed by product, not query — replaying would defeat the override) and replaces both the search query AND the per-container `product_name` hint with the override.
+- iOS: `streamPrices(productId:forceRefresh:queryOverride:)` plumbed end-to-end through `Endpoint.streamPrices(_, _, queryOverride:)`, `APIClient`, `ScannerViewModel.fetchPrices(forceRefresh:queryOverride:)`, `SearchViewModel.presentProduct(_, queryOverride:)`. When user taps a `source=.generic` row, override = `result.deviceName`.
+
+Net effect: tapping "PlayStation 5 [Any variant]" makes retailer containers search for "PlayStation 5", not the resolved variant's "PlayStation 5 1TB Disc Edition" SKU title.
+
+#### F. UPCitemdb fallback in `resolve_from_search`
+
+`backend/modules/m1_product/service.py::resolve_from_search` is now two-stage:
+1. Targeted Gemini device→UPC (existing).
+2. **NEW:** On null, `upcitemdb.search_keyword(device_name)` filtered by brand match + ≥4-char title token overlap. Picks first acceptable hit, continues `resolve(upc)`.
+
+Eliminates the "Couldn't find a barcode for this product" failure mode for products where Gemini refuses to commit. iPhone 16 was the canonical case — Apple SKUs vary by carrier/storage/color and Gemini returns null, but UPCitemdb has plenty of iPhone 16 entries.
+
+#### G. eBay affiliate URL fix — rover impression pixel → modern EPN
+
+`backend/modules/m12_affiliate/service.py::build_affiliate_url`:
+
+**Before:** `https://rover.ebay.com/rover/1/711-53200-19255-0/1?mpre=<encoded>&campid=<id>&toolid=10001`
+**After:** `<original_item_url>?mkcid=1&mkrid=711-53200-19255-0&siteid=0&campid=<EBAY_CAMPAIGN_ID>&toolid=10001&mkevt=1`
+
+Root cause: the `rover/1/<rotation>/1` path returns a 42-byte `content-type: image/gif` tracking pixel — that's the impression-tracking endpoint, not a click-redirect endpoint. Modern EPN spec is to append the tracking params directly to the item URL.
+
+Test pinned in `test_m12_affiliate.py::test_ebay_new_appends_epn_query_params` with `assert "rover.ebay.com" not in result.affiliate_url` so we don't regress.
+
+Live-verified loading the actual eBay item page in the iOS sim (real residential IP). The legacy `rover` URL would also pass an HTTP 200 check from curl — but with `content-type: image/gif`, hence the white page.
+
+#### Test coverage
+
+- `test_product_search.py`: 22 tests total. New cases for Tier 2 BBY-short-circuits-Gemini, BBY-empty-falls-through, BBY-disabled-when-key-unset, UPCitemdb-supplements-BBY, UPCitemdb-only-when-BBY-empty, brand-only-skips-Tier-2, brand+model-still-uses-Tier-2, force_gemini-runs-alongside-Tier-2, force_gemini-bypasses-cache, force_gemini-promotes-Gemini-to-top, variant-collapse-prepends-generic, variant-collapse-keeps-storage-when-typed, variant-collapse-singleton-no-generic.
+- `test_m12_affiliate.py`: rewrote `test_ebay_new_rover_redirect_encodes_url` → `test_ebay_new_appends_epn_query_params`.
+- iOS `SearchViewModelTests.swift`: 5 new tests for `showDeepSearchHint`, `deepSearch`, `lastDeepSearchedQuery` reset on edit.
+
+#### iOS surface changes
+
+- `ProductSearchSource` enum widened: `db | bestBuy | upcitemdb | gemini | generic`.
+- `SearchViewModel`: `performSearch(_, forceGemini:)`, `deepSearch()`, `showDeepSearchHint`, `lastDeepSearchedQuery`. `presentProduct(_, queryOverride:)`. `handleResultTap` collapses `.bestBuy`/`.upcitemdb`/`.gemini`/`.generic` into one branch (UPC if present, resolve-from-search otherwise).
+- `SearchView`: `deepSearchHint(vm:)` banner under the search bar; `.onSubmit { Task { await vm.deepSearch() } }` on the TextField.
+- `SearchResultRow`: "Any variant" capsule badge when `source == .generic`.
+- `APIClient`/`Endpoints`: `searchProducts(_, _, forceGemini:)`, `streamPrices(_, _, queryOverride:)`. URL builder appends `force_refresh=true` and `query=<override>` independently as needed.
+- All 4 preview/preview-stub `APIClientProtocol` impls updated for the new signatures (CardSelectionView, IdentityOnboardingView, ProfileView, PriceComparisonView).
+- `MockAPIClient`: `searchProductsLastForceGemini`, `streamPricesLastQueryOverride` capture the new params.
+
+#### Files touched
+
+`backend/modules/m1_product/{search_service.py, schemas.py, router.py, service.py, upcitemdb.py}`, `backend/modules/m2_prices/{router.py, service.py}`, `backend/modules/m12_affiliate/service.py`, `backend/tests/modules/{test_product_search.py, test_m12_affiliate.py}`, `Barkain/Features/{Search/SearchView.swift, Search/SearchViewModel.swift, Search/SearchResultRow.swift, Scanner/ScannerViewModel.swift, Shared/Models/ProductSearchResult.swift, Profile/{CardSelectionView.swift, IdentityOnboardingView.swift, ProfileView.swift}, Recommendation/PriceComparisonView.swift}`, `Barkain/Services/Networking/{APIClient.swift, Endpoints.swift}`, `BarkainTests/{Features/Search/SearchViewModelTests.swift, Helpers/MockAPIClient.swift}`, `CLAUDE.md`, `docs/ARCHITECTURE.md`, `docs/CHANGELOG.md`.
+
+#### What did NOT change
+
+- UPC scan path. Variant collapse is text-search-only. Scanning a physical barcode keeps full variant precision.
+- DB schema. All changes are additive in code.
+- Migrations. Still at 0007.
+- Per-tier persistence rules. BBY/UPC/Gemini results are still ephemeral — only DB rows have a `product_id`. Persistence happens on tap via `/resolve` or `/resolve-from-search`.
+
+#### Outstanding
+
+- AppleCare+ rows still leak through Best Buy results because each (Post Repair iPhone 16, Post Repair iPhone 16 Pro, etc.) is a distinct "product" in BBY's catalog and stripping doesn't collapse them. Fixable with a brand=AppleCare or category-based filter — defer until users complain.
+- UPCitemdb trial tier rate-limited noticeably during this session ("UPCitemdb search rate-limited for 'iphone 12'"). Pay for `UPCITEMDB_API_KEY` ($20/mo for 5k/day) before this matters in production.
+- Generic-row tap on Apple/Samsung phones still resolves through UPCitemdb to a SPECIFIC variant for the persisted Product (the override only changes container search queries, not the persisted Product.name). For now this is fine — the comparison view shows the variant title in the header but containers searched the generic name. If that mismatch becomes annoying, the fix is either to persist a separate generic Product row (creates UPC dupes — bad) or to pass `display_name_override` through `presentProduct` and override `Product.name` in-memory only.
+- iOS `SourceKit` indexer is consistently behind on this branch (showing "Cannot find type 'ProductSearchResult'" etc. in `SearchViewModel.swift`). Real `xcodebuild` always succeeds; the indexer warnings are noise.
+
 

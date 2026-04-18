@@ -407,13 +407,13 @@ private struct PreviewAPIClient: APIClientProtocol {
         fatalError("Preview only")
     }
     func resolveProductFromSearch(deviceName: String, brand: String?, model: String?) async throws -> Product { fatalError("Preview only") }
-    func searchProducts(query: String, maxResults: Int) async throws -> ProductSearchResponse {
+    func searchProducts(query: String, maxResults: Int, forceGemini: Bool) async throws -> ProductSearchResponse {
         ProductSearchResponse(query: query, results: [], totalResults: 0, cached: false)
     }
     func getPrices(productId: UUID, forceRefresh: Bool) async throws -> PriceComparison {
         fatalError("Preview only")
     }
-    func streamPrices(productId: UUID, forceRefresh: Bool) -> AsyncThrowingStream<RetailerStreamEvent, Error> {
+    func streamPrices(productId: UUID, forceRefresh: Bool, queryOverride: String?) -> AsyncThrowingStream<RetailerStreamEvent, Error> {
         AsyncThrowingStream { $0.finish() }
     }
     func getIdentityProfile() async throws -> IdentityProfile {
