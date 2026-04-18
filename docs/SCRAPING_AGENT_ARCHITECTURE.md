@@ -1833,15 +1833,17 @@ Extrapolated to the observed 85 MB/19 h billing window: 17 scrapes × 19 KB ≈ 
 | Pre-fix | 0 / 0 / 0 | 97,966 / 109,752 / 109,160 | `EXTRACTION_FAILED` (trapped at `/are-you-human/`) |
 | Post-fix | 3 / 3 / 3 | 76,372 / 109,373 / 107,270 | none |
 
-**Bandwidth progression** (live EC2, 3 consecutive successful extracts per row):
+**Bandwidth progression** (live EC2, 3 consecutive extracts per row; measurements use `docker exec samsclub bash -c "pkill chromium; pkill proxy_relay; >/tmp/proxy_bytes.log"` before each row for a clean state):
 
-| Pass | Change | KB/run through Decodo |
-|---|---|--:|
-| Baseline (working) | Decodo on + C.11 telemetry flags | ~7,284 |
-| +CDN bypass | `*.samsclubimages.com`, `*.walmartimages.com`, `*.typekit.net`, `*.doubleverify.com`, `*.quantummetric.com`, `*.googlesyndication.com`, `*.adtrafficquality.google`, `*.crcldu.com`, `*.wal.co` | 1,513 |
-| +first-party telemetry bypass | `beacon.samsclub.com`, `dap.samsclub.com`, `titan.samsclub.com`, `scene7.samsclub.com`, `dapglass.samsclub.com` | 1,572 (page rendered more completely) |
-| +`ab wait --load load` (was `networkidle`) | Stop waiting after body onload; skip post-render telemetry phase | 1,070 |
-| +bare-domain forms (`crcldu.com`, `wal.co`) | Chromium's `*.foo` glob doesn't match bare `foo` | **1,047** |
+| Pass | Change | KB/run | Decodo conns | Notes |
+|---|---|--:|--:|---|
+| Base Decodo-only (PR #28 commit e225d83) | 13 telemetry flags + `*.google*` bypass only | **5,228** | 249 | 2/3 successful — flaky under back-to-back runs |
+| +CDN bypass | `*.samsclubimages.com`, `*.walmartimages.com`, `*.typekit.net`, `*.doubleverify.com`, `*.quantummetric.com`, `*.googlesyndication.com`, `*.adtrafficquality.google`, `*.crcldu.com`, `*.wal.co` | 1,513 | — | 3/3 |
+| +first-party telemetry bypass | `beacon.samsclub.com`, `dap.samsclub.com`, `titan.samsclub.com`, `scene7.samsclub.com`, `dapglass.samsclub.com` | 1,572 | — | 2/3 (flake) |
+| +`ab wait --load load` (was `networkidle`) | Stop waiting after body onload; skip post-render telemetry phase | 1,070 | — | 3/3 |
+| +bare-domain forms (`crcldu.com`, `wal.co`) | Chromium's `*.foo` glob doesn't match bare `foo` | **1,047** | ~15 | 3/3 |
+
+> **Measurement honesty note.** An earlier run of the base version logged 856 KB/run with only 20 Decodo connections — that was non-reproducible. On re-measurement (same commit, same method), the base version consistently logs 5,228 KB/run across 249 connections. The 856 KB outlier likely had incomplete relay accounting or aggressive Chromium memory-cache hits between back-to-back runs. The 5,228 KB number is what actually reproduces.
 
 **Final breakdown (post all fixes, 3 successful runs, ~1,047 KB/run average).**
 
@@ -1855,7 +1857,7 @@ Extrapolated to the observed 85 MB/19 h billing window: 17 scrapes × 19 KB ≈ 
 | `fst-ec.perimeterx.net` | PerimeterX | 8,415 |
 | **Per-run total** | | **~1,047 KB** |
 
-**Net: 86% reduction (7,284 KB → 1,047 KB per scrape). 93% of remaining bytes are the site itself (non-negotiable without CDP request interception). 7% is PerimeterX (required for IP-reputation validation — must stay on-proxy or the gate fires).**
+**Net: 80% reduction (5,228 KB base → 1,047 KB per scrape, measured on equivalent-state runs). 93% of remaining bytes are the site itself (non-negotiable without CDP request interception). 7% is PerimeterX (required for IP-reputation validation — must stay on-proxy or the gate fires).**
 
 **Critical invariants (regression-guarded):**
 - `*.samsclub.com` (wildcard) MUST NOT be in the bypass list — that'd also bypass the main site, defeating the whole proxy. Explicit subdomains only.
