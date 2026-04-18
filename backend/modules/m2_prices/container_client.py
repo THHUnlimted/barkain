@@ -64,6 +64,20 @@ def _resolve_ebay_adapter(cfg: Settings) -> AdapterFn | None:
     return fetch_ebay
 
 
+def _resolve_best_buy_adapter(cfg: Settings) -> AdapterFn | None:
+    """Return the Best Buy Products API adapter when the key is set, else None.
+
+    Same auto-prefer pattern as eBay — when ``BESTBUY_API_KEY`` is populated
+    the API path wins. The container leg is strictly a fallback (browser
+    scraper runs ~80–90 s vs ~150 ms for the API).
+    """
+    from modules.m2_prices.adapters.best_buy_api import is_configured
+    if not is_configured(cfg):
+        return None
+    from modules.m2_prices.adapters.best_buy_api import fetch_best_buy
+    return fetch_best_buy
+
+
 class ContainerClient:
     """HTTP client for communicating with retailer scraper containers."""
 
@@ -211,6 +225,17 @@ class ContainerClient:
                 logger.debug("routing %s via ebay_browse_api", retailer_id)
                 return await adapter(
                     retailer_id=retailer_id,
+                    query=query,
+                    product_name=product_name,
+                    upc=upc,
+                    max_listings=max_listings,
+                    cfg=self._cfg,
+                )
+        if retailer_id == "best_buy":
+            adapter = _resolve_best_buy_adapter(self._cfg)
+            if adapter is not None:
+                logger.debug("routing best_buy via best_buy_api")
+                return await adapter(
                     query=query,
                     product_name=product_name,
                     upc=upc,

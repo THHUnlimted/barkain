@@ -114,6 +114,12 @@ class Settings(BaseSettings):
     EBAY_APP_ID: str = ""
     EBAY_CERT_ID: str = ""
 
+    # Best Buy Products API key. When set, the best_buy retailer leg is served
+    # from the Products API (~150 ms per call) instead of the browser-container
+    # scraper (~80–90 s). Same fallback pattern as EBAY_APP_ID — missing key
+    # routes through the container path.
+    BESTBUY_API_KEY: str = ""
+
     # SQS / Background Workers (Step 2h)
     # LocalStack override for dev; empty string in prod so boto3 resolves
     # the real AWS SQS endpoint from the default credential chain.
