@@ -15,6 +15,9 @@ struct ScannerView: View {
     @State private var manualUPC = ""
     @State private var showOnboardingFromCTA = false
     @State private var showAddCardsFromCTA = false
+    // Owned here so the .sheet survives any inline conditional re-render
+    // in `scannerContent` — same fix as SearchView (2026-04-19).
+    @State private var browserURL: IdentifiableURL?
 
     @AppStorage("hasCompletedIdentityOnboarding")
     private var hasCompletedOnboarding: Bool = false
@@ -75,6 +78,10 @@ struct ScannerView: View {
                     scanner.clearLastScan()
                 }
             )
+        }
+        .sheet(item: $browserURL) { item in
+            InAppBrowserView(url: item.url)
+                .ignoresSafeArea()
         }
         .task {
             let vm = ScannerViewModel(apiClient: apiClient, featureGate: featureGate)
@@ -186,6 +193,7 @@ struct ScannerView: View {
                 product: product,
                 comparison: comparison,
                 viewModel: viewModel,
+                browserURL: $browserURL,
                 onRequestOnboarding: { showOnboardingFromCTA = true },
                 onRequestAddCards: { showAddCardsFromCTA = true },
                 onRequestUpgrade: { viewModel.showPaywall = true }

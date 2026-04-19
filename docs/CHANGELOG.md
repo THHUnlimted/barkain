@@ -1758,3 +1758,98 @@ Live-verified loading the actual eBay item page in the iOS sim (real residential
 - Generic-row tap on Apple/Samsung phones still resolves through UPCitemdb to a SPECIFIC variant for the persisted Product (the override only changes container search queries, not the persisted Product.name). For now this is fine — the comparison view shows the variant title in the header but containers searched the generic name. If that mismatch becomes annoying, the fix is either to persist a separate generic Product row (creates UPC dupes — bad) or to pass `display_name_override` through `presentProduct` and override `Product.name` in-memory only.
 - iOS `SourceKit` indexer is consistently behind on this branch (showing "Cannot find type 'ProductSearchResult'" etc. in `SearchViewModel.swift`). Real `xcodebuild` always succeeds; the indexer warnings are noise.
 
+---
+
+### Step 3c-hardening — Live-test follow-on bundle (2026-04-19)
+
+**Branch:** `phase-3/3c-search-tier2-bestbuy` (continuation; appended to PR #32). Pure user-driven: each fix below was triggered by the user testing the post-3c build in the simulator and reporting concrete symptoms ("switch 2 search returns NBA 2K games", "best buy went unavailable", "Steam Deck retry can't open this result", "any link kicks me back to the home page"). No proactive cleanup — every change has a corresponding live observation.
+
+**What shipped (8 fixes, +26 backend tests):**
+
+#### A. Amazon-only platform-suffix accessory filter
+
+`backend/modules/m2_prices/service.py` — observed live: searching "Switch 2" → top Amazon listing was "NBA 2K25 - Nintendo Switch 2", which passed all existing relevance rules (brand match: Nintendo ✓, model identifier: "Switch 2" ✓, token overlap: 100%). Added `_HARDWARE_INTENT_TOKENS = {bundle, console, system, hardware, edition}` + `_is_platform_suffix_accessory(title, identifiers)` helper. The helper returns True when:
+1. A product identifier appears in the listing title AFTER a separator (`\s[\-–—:|/]\s` or `\s\(`),
+2. The leading text (before the separator) has ≥2 substantive (non-stopword) tokens,
+3. The listing does NOT contain any hardware-intent token (preserves bundles).
+
+Wired into `_pick_best_listing` as a pre-filter ONLY when `response.retailer_id == "amazon"` — observed Walmart, eBay, etc. don't surface this pattern at meaningful rates and a global filter risked false positives. 5 helper tests + 3 service-level tests.
+
+**Coverage:** Works for any console whose name produces a `_MODEL_PATTERNS` identifier (Switch 2, PlayStation 5, Series X). Steam Deck (no digit) → no identifier extracted → filter is a no-op (false-positive-free, but no protection). Acceptable trade-off; named console-keyword whitelist is deferred until a non-digit-named console is genuinely problematic.
+
+#### B. Service / repair / modding listings filter
+
+`backend/modules/m2_prices/service.py` — observed live: searching "Steam Deck" returned "Valve Steam Deck OLED 32GB RAM/VRAM WORLDWIDE Upgrade Service" on eBay (a third-party seller offering a paid mod service that ships nothing). Added `service`, `services`, `repair`, `repairs`, `modding`, `modded`, `refurbishment` to `_ACCESSORY_KEYWORDS`. Deliberately omitted `refurbished` — that's a valid product condition. Cross-retailer (the existing "skip filter when product itself is an accessory" guard still applies). 3 tests in `test_m2_prices.py`.
+
+#### C. Walmart 5× CHALLENGE retry with jittered back-off
+
+`backend/modules/m2_prices/adapters/walmart_http.py` — observed live: "Walmart unavailable" surfacing intermittently even though manual probes succeeded 4/4. Root cause: PerimeterX's residential-IP scoring sometimes returns a JS-challenge page; the existing 3-attempt budget hit "all-flagged" streaks frequently enough to be user-visible. Bumped `CHALLENGE_MAX_ATTEMPTS = 3 → 5`, added `_CHALLENGE_BACKOFF_RANGE_S = (0.2, 0.6)` constant + `await asyncio.sleep(random.uniform(*_CHALLENGE_BACKOFF_RANGE_S))` between attempts (no sleep after the final attempt). Worst-case slowdown on full failure ≈ +6-8s. 22/22 tests pass; new test verifies N-1 sleeps happen for N attempts. Tests monkeypatch the range to `(0, 0)` to stay fast.
+
+#### D. Best Buy API retry on 429/5xx with `Retry-After`
+
+`backend/modules/m2_prices/adapters/best_buy_api.py` — observed live: backend log showed `best_buy.search HTTP 400` AND occasional 429s during demos. Best Buy free tier is 5 calls/sec; concurrent searches trip rate-limit + bounce to "unavailable". Added `BESTBUY_MAX_ATTEMPTS = 2`, `_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})`, `_parse_retry_after()` (caps at 2s, defaults to 0.5s). Other 4xx (403 invalid key) and network errors fail fast. 6 new tests covering retry-then-success, retry-budget-exhausted, no-retry-on-403, and three `_parse_retry_after` helper cases.
+
+#### E. Best Buy query sanitizer
+
+`backend/modules/m2_prices/adapters/best_buy_api.py` — observed live: same backend log line as above showed the 400 was deterministic for queries containing parens / commas / slashes / plus signs. Best Buy's `(search=...)` DSL parser fails even when those chars are URL-encoded. Two real failing queries from today's session:
+
+```
+GET …/v1/products(search=Apple iPhone 14 128GB (Blue, MPVR3LL/A) Apple)?... → 400
+GET …/v1/products(search=AppleCare+ for iPhone 14 (2-Year Plan) AppleCare)?... → 400
+```
+
+Added `_BBY_DSL_BAD_CHARS = re.compile(r"[()\\,+/*:&]")` + `_sanitize_query()` that replaces hostile chars with spaces (NOT removes — preserves token boundaries: "MPVR3LL/A" → "MPVR3LL A"). Hyphens preserved (model numbers like `WH-1000XM5` stay intact). Applied BEFORE `quote()`. **Live confirmation:** the same query that 400'd now returns 3 listings in 291ms. 5 tests including a regression test that asserts neither encoded nor decoded hostile chars appear in the outgoing URL.
+
+#### F. Redis device→UPC cache
+
+`backend/modules/m1_product/service.py` — observed live: Steam Deck OLED retry in the sim hit 404 because UPCitemdb's trial endpoint (`/prod/trial/search`, shared-IP, ~100/day across all trial users) was rate-limited; Gemini's targeted device→UPC also returns null for multi-SKU products like Steam Deck OLED. Both fallbacks bottoming out raises `UPCNotFoundForDescriptionError` → 404 → "Couldn't find a barcode" toast.
+
+Fix: new Redis key `product:devupc:<sha1(normalized name + brand)>` with `DEVUPC_CACHE_TTL = 86400` (24h). `resolve_from_search` now:
+1. Checks the cache first → if hit, skip both Gemini and UPCitemdb,
+2. Otherwise runs the existing two-stage resolution,
+3. On any successful resolve, writes the `(name, brand) → UPC` mapping to cache.
+
+Key normalization (`_devupc_cache_key`): lowercase, whitespace collapsed, sha1 of `f"{name}|{brand}"`. So "Steam Deck OLED" and " steam  DECK  oled " share an entry; different brands hash to different keys. Cache read/write failures are non-fatal (logged, fall through). 4 tests in `test_product_resolve_from_search.py` (cache write on success, cache hit short-circuits Gemini, key normalizes whitespace+case, key disambiguates brand).
+
+#### G. Redis scoped cache for bare-name `query_override` runs
+
+`backend/modules/m2_prices/service.py` — observed live: tapping the "Any variant" generic row twice gave different results each time (different "best price" retailer, different prices). Root cause: previous behavior was `force_refresh = force_refresh or bool(query_override)` — every override tap re-dispatched all 9 retailers fresh, so Decodo IP rotation + retailer-side ranking variance produced different results.
+
+Fix: scoped Redis key `prices:product:{id}:q:<sha1(query)>` with `REDIS_CACHE_TTL_QUERY = 1800` (30min), namespace-disjoint from the bare product key `prices:product:{id}` (6h TTL). Refactored `_check_redis(product_id, query_override=None)` and `_cache_to_redis(product_id, data, query_override=None)` to accept the scope and use new `_cache_key()` helper. Two runs with the same override within 30min replay identically; SKU-resolved runs and override runs cannot pollute or be polluted by each other.
+
+Skipped the DB-freshness short-circuit on the override path because the prices table has no notion of "which query produced this row" — replaying would serve stale SKU data, defeating the whole point. 3 tests in `test_m2_prices_stream.py` (scoped key written, scoped replay on repeat, override does not consume bare cache).
+
+#### H. iOS sheet-anchoring fix — `browserURL` lifted to parent views
+
+`Barkain/Features/Recommendation/PriceComparisonView.swift`, `Barkain/Features/Search/SearchView.swift`, `Barkain/Features/Scanner/ScannerView.swift` — observed live: tapping ANY retailer link (Amazon, Walmart, Facebook Marketplace, eBay) returned the user to the empty/initial search state. App didn't actually crash (PID stayed alive, no `ExcUserFault` written), but the SFSafariViewController sheet presentation silently failed.
+
+**Root cause:** PriceComparisonView is rendered INLINE inside a `Group { if let presentedVM, let product, let comparison ... }` conditional in `SearchView.content(_:)`. The view owned its own `@State private var browserURL: IdentifiableURL?` + `.sheet(item: $browserURL)`. When ANY `@Observable` mutation on the parent ViewModel caused the conditional to re-evaluate (a late SSE event arriving, a downstream identityDiscounts/cardRecommendations fetch updating, etc.), SwiftUI could briefly dismount and remount the inline view. If that frame happened between `browserURL = IdentifiableURL(url: url)` and SFSafariViewController's full presentation, the sheet was orphaned. The fallback view rendered, looking like "kicked back to search."
+
+**Fix:** PriceComparisonView's `@State` → `@Binding var browserURL: IdentifiableURL?`. Both parents (SearchView at the `content(_:)` level, ScannerView at its `body`) own a `@State` and pass it as a binding. The `.sheet(item:)` moved to BOTH parents — anchored to a stable view that never dismounts during normal use. Preview binding is `.constant(nil)`. All 3 call sites updated; build verified clean.
+
+This was the bug behind several "kicked me out" / "any link returns to home" / "Facebook crashes" reports — none were actual crashes, all were silent sheet-presentation failures from the same structural cause.
+
+#### Tests
+
+26 new backend tests across 5 files. All green. `ruff check` clean. `xcodebuild` clean.
+
+```
+test_m2_prices.py:                  +5 platform-suffix helper, +3 platform-suffix integration, +3 service/repair/modding
+test_walmart_http_adapter.py:       +2 (5-attempt budget rename, back-off invocation count)
+test_best_buy_api.py:               +6 (3 retry behaviors + 3 _parse_retry_after helpers + 1 query sanitizer integration + 4 helper)
+test_product_resolve_from_search.py:+4 (cache write, cache hit short-circuits, key normalization, key disambiguates brand)
+test_m2_prices_stream.py:           +3 (scoped key written, scoped replay, override does not consume bare cache)
+```
+
+#### Files changed
+
+`backend/modules/m1_product/service.py`, `backend/modules/m2_prices/service.py`, `backend/modules/m2_prices/adapters/{walmart_http.py, best_buy_api.py}`, `backend/tests/modules/{test_m2_prices.py, test_walmart_http_adapter.py, test_best_buy_api.py, test_product_resolve_from_search.py, test_m2_prices_stream.py}`, `Barkain/Features/{Recommendation/PriceComparisonView.swift, Search/SearchView.swift, Scanner/ScannerView.swift}`, `CLAUDE.md`, `docs/ARCHITECTURE.md`, `docs/CHANGELOG.md`.
+
+#### Outstanding (not in this bundle)
+
+- Best Buy free-tier 5 calls/sec ceiling will still bite under heavy concurrent load even with 1 retry. Move to a paid Best Buy API tier or implement client-side rate limiting if traffic grows.
+- UPCitemdb shared-IP trial tier remains rate-limit-prone; the device→UPC cache only helps on REPEATS. First taps still depend on UPCitemdb being healthy. Pay for `UPCITEMDB_API_KEY` ($20/mo, 5k/day) before scaling.
+- The Amazon platform-suffix filter does not protect non-digit-named consoles (Steam Deck without "OLED", Wii, plain "Nintendo Switch"). If a Steam Deck-class issue shows up, add a small console-keyword whitelist or extend `_MODEL_PATTERNS` to match `Steam Deck` etc.
+- The bare-name query-override 30min cache means tapping "Any variant", waiting 30 min, then tapping again will roll fresh dice. If this becomes a UX papercut, raise the TTL or add an explicit "refresh" affordance.
+- Best Buy query sanitizer is conservative (replaces with space). If the resolved product name contains a critical token like a part number with a hyphen-slash combo, the sanitizer could degrade match quality. Hasn't been observed but worth watching.
+

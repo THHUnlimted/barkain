@@ -13,6 +13,7 @@ Pipeline:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -36,7 +37,15 @@ logger = logging.getLogger("barkain.m2")
 
 REDIS_CACHE_TTL = 21600  # 6 hours — no partial invalidation by design; force_refresh bypasses (D9)
 REDIS_CACHE_TTL_EMPTY = 1800  # 30 minutes for 0-result responses — users re-scanning get fresh attempts sooner
+REDIS_CACHE_TTL_QUERY = 1800  # 30 minutes for bare-name (query_override) results — fresher than the SKU cache
 REDIS_KEY_PREFIX = "prices:product:"
+REDIS_KEY_QUERY_SUFFIX = ":q:"  # appended with sha1 hex digest of the override query
+
+
+def _query_scope_digest(query: str) -> str:
+    """SHA-1 hex digest of a normalized query — short, predictable, redis-safe."""
+    normalized = " ".join(query.lower().split())
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
 DB_FRESHNESS_HOURS = 6
 
 
@@ -172,6 +181,14 @@ _ACCESSORY_KEYWORDS = frozenset({
     "compatible",
     "replacement",
     "accessory", "accessories",
+    # Third-party service / repair / mod listings — surfaced mostly on eBay
+    # where sellers list services as items (e.g. "Steam Deck OLED 32GB RAM
+    # Upgrade Service"). The user wanted the device, not someone offering to
+    # modify it.
+    "service", "services",
+    "repair", "repairs",
+    "modding", "modded",
+    "refurbishment",
 })
 # Pattern for "for iPhone", "fits iPad", "designed for" — prepositional accessory markers.
 _ACCESSORY_PHRASE_RE = re.compile(
@@ -196,6 +213,65 @@ def _is_accessory_listing(listing_title: str, product_tokens: set[str]) -> bool:
     if _ACCESSORY_PHRASE_RE.search(listing_title):
         return True
     return False
+
+
+# Hardware-intent tokens that indicate a listing IS the device (or a bundle that
+# includes the device), not a game/accessory FOR it. If any of these appear in a
+# listing title, the platform-suffix filter (`_is_platform_suffix_accessory`) is
+# skipped — so "Nintendo Switch 2 Bundle with Mario Kart" survives even though
+# the game token is present.
+_HARDWARE_INTENT_TOKENS = frozenset({
+    "bundle", "bundles", "console", "consoles", "system", "systems",
+    "hardware", "edition",
+})
+
+# Separator tokens that introduce a tail descriptor in a listing title.
+# Whitespace-padded "-", "–", "—", ":", "|", "/" or an opening "(".
+_SEPARATOR_BEFORE_IDENT_RE = re.compile(r"\s[\-\u2013\u2014:|/]\s|\s\(")
+
+
+def _is_platform_suffix_accessory(
+    listing_title: str, product_identifiers: list[str]
+) -> bool:
+    """Detect '[Game/Accessory Name] - [Platform]' tail-descriptor pattern.
+
+    Amazon's organic search for console queries (e.g. "Nintendo Switch 2") is
+    flooded with games and peripherals whose titles encode the platform as a
+    tail descriptor: "NBA 2K25 - Nintendo Switch 2", "Mario Kart 9
+    (Nintendo Switch 2)". The token-overlap and brand-match rules in
+    `_score_listing_relevance` accept these because the platform name is
+    fully present in the title.
+
+    Returns True only when ALL of:
+      1. The listing has a hit on one of the product identifiers
+         (e.g. "Switch 2") AFTER a separator (-, (, |, :, /).
+      2. The leading text (before the separator) has >=2 substantive tokens.
+      3. The listing does NOT contain any hardware-intent token
+         (bundle / console / system / edition / hardware) — bundles pass.
+
+    Amazon-scoped: called only from `_pick_best_listing` when
+    `response.retailer_id == "amazon"`. Other retailers don't surface this
+    pattern at meaningful rates in observed data.
+    """
+    if not product_identifiers or len(listing_title) < 12:
+        return False
+
+    title_tokens = _tokenize(listing_title)
+    if title_tokens & _HARDWARE_INTENT_TOKENS:
+        return False
+
+    for ident in product_identifiers:
+        match = _ident_to_regex(ident).search(listing_title)
+        if not match:
+            continue
+        leading = listing_title[: match.start()]
+        if not _SEPARATOR_BEFORE_IDENT_RE.search(leading):
+            continue
+        leading_tokens = _tokenize(leading)
+        if len(leading_tokens) >= 2:
+            return True
+    return False
+
 
 _BRAND_SUFFIXES = re.compile(r'\s*(?:Inc\.?|Corp\.?|LLC|Ltd\.?|Co\.?)$', re.IGNORECASE)
 
@@ -443,20 +519,36 @@ class PriceAggregationService:
         # row like "Apple iPhone 16 [Any variant]") replaces both the search
         # query AND the per-container product_name hint so retailers search
         # the bare generic string instead of the resolved variant's title.
-        # Skip the cache when an override is in play — cached entries are
-        # keyed by product, not by query, so replaying them would defeat the
-        # whole point. Don't cache the override response either.
-        force_refresh = force_refresh or bool(query_override)
+        #
+        # Cache strategy:
+        #   - Bare-name overrides use a SCOPED key (`…:q:<sha1>`) with a
+        #     30-min TTL — separate namespace from the SKU-resolved cache so
+        #     a generic "Steam Deck OLED" search can't pollute a specific
+        #     "Steam Deck OLED 512GB" run, and vice versa. Repeats of the
+        #     same generic query within 30 min replay deterministically.
+        #   - Non-override runs use the bare product key (6h TTL).
+        # `force_refresh=True` still bypasses both.
 
         # Cache path — replay stored results and short-circuit.
         if not force_refresh:
-            cached = await self._check_redis(product_id)
-            if cached is None:
+            cached = await self._check_redis(product_id, query_override)
+            if cached is None and not query_override:
+                # DB freshness short-circuit applies only to SKU-resolved
+                # runs. For a bare-name override the user explicitly asked
+                # for the generic-name interpretation, and the prices table
+                # has no notion of "which query produced this row" — so
+                # falling through to the DB would replay whatever query
+                # was last persisted (might be SKU-specific, might be a
+                # different generic). Safer to just dispatch fresh.
                 cached = await self._check_db_prices(product_id, product.name)
                 if cached is not None:
                     await self._cache_to_redis(product_id, cached)
             if cached is not None:
-                logger.info("stream_prices cache hit for product %s", product_id)
+                logger.info(
+                    "stream_prices cache hit for product %s (override=%s)",
+                    product_id,
+                    bool(query_override),
+                )
                 prices_by_rid = {
                     p["retailer_id"]: p for p in cached.get("prices", [])
                 }
@@ -574,11 +666,12 @@ class PriceAggregationService:
             "cached": False,
             "fetched_at": now.isoformat(),
         }
-        # Skip the Redis write when running with a query override — caching
-        # would let the next non-override caller see generic-search results
-        # instead of the variant-specific run they actually asked for.
-        if not query_override:
-            await self._cache_to_redis(product_id, final)
+        # Bare-name override runs cache to a SCOPED key (30min TTL) so the
+        # next user tapping the same "Any variant" row gets a deterministic
+        # replay; non-override runs cache to the bare product key (6h TTL).
+        # The two namespaces are disjoint, so neither path can pollute the
+        # other.
+        await self._cache_to_redis(product_id, final, query_override)
 
         yield (
             "done",
@@ -605,17 +698,45 @@ class PriceAggregationService:
             raise ProductNotFoundError(str(product_id))
         return product
 
-    async def _check_redis(self, product_id: uuid.UUID) -> dict | None:
-        """Check Redis for cached price comparison result."""
-        cached = await self.redis.get(f"{REDIS_KEY_PREFIX}{product_id}")
+    async def _check_redis(
+        self,
+        product_id: uuid.UUID,
+        query_override: str | None = None,
+    ) -> dict | None:
+        """Check Redis for a cached price comparison result.
+
+        When ``query_override`` is supplied, looks up the scoped key
+        (``…:q:<sha1>``) instead of the bare product key — that's the cache
+        for bare-name "Any variant" generic-row searches, kept separate so it
+        can't pollute or be polluted by SKU-specific runs.
+        """
+        key = self._cache_key(product_id, query_override)
+        cached = await self.redis.get(key)
         if cached is None:
             return None
         try:
             data = cached if isinstance(cached, str) else cached.decode()
             return json.loads(data)
         except (json.JSONDecodeError, UnicodeDecodeError):
-            await self.redis.delete(f"{REDIS_KEY_PREFIX}{product_id}")
+            await self.redis.delete(key)
             return None
+
+    @staticmethod
+    def _cache_key(
+        product_id: uuid.UUID, query_override: str | None
+    ) -> str:
+        """Compose the Redis cache key for a price comparison.
+
+        Bare product key for SKU-resolved runs; scoped key (suffix
+        ``:q:<sha1>``) for bare-name override runs. The two namespaces are
+        intentionally disjoint — one cannot serve the other.
+        """
+        if query_override:
+            return (
+                f"{REDIS_KEY_PREFIX}{product_id}"
+                f"{REDIS_KEY_QUERY_SUFFIX}{_query_scope_digest(query_override)}"
+            )
+        return f"{REDIS_KEY_PREFIX}{product_id}"
 
     async def _check_db_prices(
         self, product_id: uuid.UUID, product_name: str
@@ -703,14 +824,38 @@ class PriceAggregationService:
 
         Filters:
         1. Price > 0 (parse failure guard — SP-7)
-        2. Relevance score >= 0.4 (wrong-product guard — SP-10)
-        3. Availability preference (available > unavailable)
-        4. Cheapest wins among survivors
+        2. Amazon-only: drop platform-suffix games/accessories (e.g. "NBA 2K25 -
+           Nintendo Switch 2") — Amazon's organic ranking surfaces them above
+           the actual console; bundles/console/system listings are kept.
+        3. Relevance score >= 0.4 (wrong-product guard — SP-10)
+        4. Availability preference (available > unavailable)
+        5. Cheapest wins among survivors
         """
         # Filter zero-price parse failures
         valid = [item for item in response.listings if item.price and item.price > 0]
         if not valid:
             return None, 0.0
+
+        # Amazon-only platform-suffix filter (e.g. drops "NBA 2K25 - Nintendo
+        # Switch 2" when looking for the Switch 2 console). Other retailers
+        # don't show this pattern at meaningful rates.
+        if response.retailer_id == "amazon":
+            product_identifiers = _extract_model_identifiers(
+                _clean_product_name(product.name)
+            )
+            if product.source_raw and isinstance(product.source_raw, dict):
+                gemini_model = product.source_raw.get("gemini_model")
+                if gemini_model:
+                    product_identifiers = product_identifiers + _extract_model_identifiers(
+                        _clean_product_name(gemini_model)
+                    )
+            if product_identifiers:
+                valid = [
+                    item for item in valid
+                    if not _is_platform_suffix_accessory(item.title, product_identifiers)
+                ]
+                if not valid:
+                    return None, 0.0
 
         # Score and filter by relevance
         scored = []
@@ -890,14 +1035,27 @@ class PriceAggregationService:
         return {r.id: r.display_name for r in retailers}
 
     async def _cache_to_redis(
-        self, product_id: uuid.UUID, data: dict
+        self,
+        product_id: uuid.UUID,
+        data: dict,
+        query_override: str | None = None,
     ) -> None:
         """Cache the price comparison result to Redis.
 
-        Uses shorter TTL (30min) when no prices were found so users
-        re-scanning get fresh container attempts sooner.
+        - Bare product key (``query_override`` None): 6h TTL when there are
+          prices, 30min when empty (so users re-scanning get fresh attempts
+          sooner).
+        - Scoped query key (``query_override`` set): 30min TTL regardless,
+          since bare-name runs are inherently fuzzier and we want to refresh
+          them sooner; still uses the empty-result TTL when there are no
+          prices to ensure the same fast retry semantics.
         """
-        key = f"{REDIS_KEY_PREFIX}{product_id}"
+        key = self._cache_key(product_id, query_override)
         serialized = json.dumps(data, default=_json_serializer)
-        ttl = REDIS_CACHE_TTL_EMPTY if not data.get("prices") else REDIS_CACHE_TTL
+        if query_override:
+            ttl = REDIS_CACHE_TTL_QUERY
+        elif not data.get("prices"):
+            ttl = REDIS_CACHE_TTL_EMPTY
+        else:
+            ttl = REDIS_CACHE_TTL
         await self.redis.set(key, serialized, ex=ttl)

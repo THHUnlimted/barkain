@@ -18,7 +18,9 @@ at Decodo's $3.75/GB (3 GB tier). ~2.7× cheaper per scrape than Firecrawl.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 import time
 from urllib.parse import quote_plus
 
@@ -38,10 +40,19 @@ logger = logging.getLogger("barkain.m2.walmart_http")
 _SEARCH_URL_TEMPLATE = "https://www.walmart.com/search?q={query}"
 _REQUEST_TIMEOUT = 30  # seconds
 
-# PerimeterX retry budget — initial attempt + 2 retries on CHALLENGE only.
+# PerimeterX retry budget — initial attempt + 4 retries on CHALLENGE only.
 # Retries rotate the Decodo residential IP, so a different egress often gets
-# through. Never retries on other failure modes.
-CHALLENGE_MAX_ATTEMPTS = 3
+# through. Never retries on other failure modes. Bumped from 3 → 5 (2026-04-19)
+# after observing that 3 attempts was hitting "unavailable" on streaks of
+# flagged residential IPs while a 5-attempt budget consistently lands a clean
+# IP in observed traffic. Worst-case slowdown on full failure ≈ +6-8s.
+CHALLENGE_MAX_ATTEMPTS = 5
+
+# Jittered sleep between CHALLENGE retries — gives Decodo a moment to rotate
+# to a fresh residential IP and avoids bursting the same flagged pool. Range
+# is min/max in seconds; the per-attempt sleep is `random.uniform(*range)`.
+# Tests monkeypatch this to (0, 0) to avoid sleeping in the suite.
+_CHALLENGE_BACKOFF_RANGE_S = (0.2, 0.6)
 
 # Chrome 132 header set — matches the fingerprint that passed in our AWS
 # residential-proxy probe (docs/SCRAPING_AGENT_ARCHITECTURE.md Appendix C.1).
@@ -189,6 +200,11 @@ async def fetch_walmart(
                     CHALLENGE_MAX_ATTEMPTS,
                     wire_bytes,
                 )
+                # Back off before next attempt (skip after the final attempt).
+                if attempts < CHALLENGE_MAX_ATTEMPTS:
+                    await asyncio.sleep(
+                        random.uniform(*_CHALLENGE_BACKOFF_RANGE_S)
+                    )
                 continue  # retry — rotating residential IP may succeed next time
 
             try:

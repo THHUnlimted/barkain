@@ -32,7 +32,9 @@ route to it without special-casing. All failures are captured in
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import time
 from datetime import UTC, datetime
 from urllib.parse import quote
@@ -61,6 +63,20 @@ _SHOW_FIELDS = "sku,name,salePrice,regularPrice,url,image,onlineAvailability"
 # re-ranks by model/variant match, so sort order matters less than coverage.
 _SORT = "bestSellingRank.asc"
 _REQUEST_TIMEOUT = 15
+
+# Retry budget for transient upstream failures. Initial attempt + 1 retry on
+# rate-limit (429) or server-side error (5xx). Other 4xx (e.g. 403 invalid key)
+# and network errors fail fast — they don't recover within a useful window.
+# Bumped from 1 → 2 (2026-04-19) after observing intermittent "unavailable"
+# in the UI for Best Buy when the free tier (5 calls/sec) was momentarily
+# exhausted by concurrent searches.
+BESTBUY_MAX_ATTEMPTS = 2
+_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+# Back-off used between retries when no `Retry-After` header is present.
+# Capped to keep the worst-case failure path fast.
+_RETRY_DEFAULT_DELAY_S = 0.5
+_RETRY_MAX_DELAY_S = 2.0
 
 
 class BestBuyNotConfiguredError(RuntimeError):
@@ -113,6 +129,47 @@ def _map_product_to_listing(product: dict) -> ContainerListing | None:
     )
 
 
+# Characters that break Best Buy's `(search=...)` DSL even after URL-encoding.
+# `(` and `)` are predicate delimiters; `,` is an in-predicate list separator;
+# `+`, `/`, `*`, `:`, `&`, `\` are operators or URL-significant. Observed live
+# 400 in 2026-04-19 logs on resolved product names like
+# "Apple iPhone 14 128GB (Blue, MPVR3LL/A)" and "AppleCare+ for iPhone 14
+# (2-Year Plan)" — the parens + slash + plus combination produced
+# `400 Couldn't understand …`. Hyphens are preserved (model numbers like
+# `WH-1000XM5`).
+_BBY_DSL_BAD_CHARS = re.compile(r"[()\\,+/*:&]")
+
+
+def _sanitize_query(query: str) -> str:
+    """Strip Best Buy DSL-hostile characters and collapse whitespace.
+
+    Replaces each bad char with a space (rather than removing it) so multi-word
+    titles like "(Blue, MPVR3LL/A)" become "Blue MPVR3LL A" instead of
+    "BlueMPVR3LLA" — the search engine can still match on the surviving tokens.
+    """
+    cleaned = _BBY_DSL_BAD_CHARS.sub(" ", query)
+    return " ".join(cleaned.split())
+
+
+def _parse_retry_after(header_value: str | None) -> float:
+    """Parse the value of an HTTP ``Retry-After`` header into seconds.
+
+    Best Buy returns the integer-seconds form; the HTTP-date form is rare in
+    practice but we accept it defensively. Falls back to the default delay
+    when the header is missing or unparseable. The result is clamped to
+    ``_RETRY_MAX_DELAY_S`` so a hostile/buggy upstream can't stall us.
+    """
+    if not header_value:
+        return _RETRY_DEFAULT_DELAY_S
+    try:
+        return min(max(float(header_value), 0.0), _RETRY_MAX_DELAY_S)
+    except ValueError:
+        # HTTP-date form (e.g. "Wed, 21 Oct 2015 07:28:00 GMT"). Don't bother
+        # parsing — fall back to the default delay rather than implement the
+        # whole RFC 7231 §7.1.3 grammar for a path Best Buy doesn't actually use.
+        return _RETRY_DEFAULT_DELAY_S
+
+
 # MARK: - Public entrypoint
 
 
@@ -146,10 +203,15 @@ async def fetch_best_buy(
             metadata=ContainerMetadata(extracted_at=extracted_at),
         )
 
-    # Quote the query for inclusion inside the `(search=...)` predicate.
-    # `quote` (not `quote_plus`) — Best Buy expects `%20` not `+` inside
-    # the parentheses, confirmed via live test.
-    search_url = _SEARCH_URL_TEMPLATE.format(query=quote(query, safe=""))
+    # Sanitize then quote. Sanitization strips DSL-breaking chars BEFORE URL
+    # encoding because Best Buy's parser interprets `(`, `)`, `,`, `+`, `/`
+    # as DSL syntax even when percent-encoded (verified live 2026-04-19).
+    # `quote` (not `quote_plus`) — Best Buy expects `%20` not `+` inside the
+    # parentheses, confirmed via live test.
+    sanitized_query = _sanitize_query(query)
+    search_url = _SEARCH_URL_TEMPLATE.format(
+        query=quote(sanitized_query, safe="")
+    )
     params = {
         "apiKey": c.BESTBUY_API_KEY,
         "format": "json",
@@ -159,25 +221,55 @@ async def fetch_best_buy(
     }
 
     t0 = time.monotonic()
-    try:
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
-            resp = await client.get(search_url, params=params)
-    except httpx.HTTPError as e:
-        logger.warning("best_buy.search request failed: %s", e)
-        return ContainerResponse(
-            retailer_id="best_buy",
-            query=query,
-            extraction_time_ms=int((time.monotonic() - t0) * 1000),
-            error=ContainerError(code="REQUEST_FAILED", message=str(e)),
-            metadata=ContainerMetadata(extracted_at=extracted_at),
-        )
+    resp: httpx.Response | None = None
+    attempts = 0
 
+    # Retry loop: only triggers on `_RETRYABLE_STATUSES` (429 / 5xx). Other
+    # 4xx and network errors fail fast — see the comment on
+    # `BESTBUY_MAX_ATTEMPTS` for rationale.
+    async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+        while attempts < BESTBUY_MAX_ATTEMPTS:
+            attempts += 1
+            try:
+                resp = await client.get(search_url, params=params)
+            except httpx.HTTPError as e:
+                logger.warning(
+                    "best_buy.search request failed (attempt %d/%d): %s",
+                    attempts, BESTBUY_MAX_ATTEMPTS, e,
+                )
+                return ContainerResponse(
+                    retailer_id="best_buy",
+                    query=query,
+                    extraction_time_ms=int((time.monotonic() - t0) * 1000),
+                    error=ContainerError(
+                        code="REQUEST_FAILED",
+                        message=str(e),
+                        details={"attempt": attempts},
+                    ),
+                    metadata=ContainerMetadata(extracted_at=extracted_at),
+                )
+
+            if (
+                resp.status_code in _RETRYABLE_STATUSES
+                and attempts < BESTBUY_MAX_ATTEMPTS
+            ):
+                delay = _parse_retry_after(resp.headers.get("Retry-After"))
+                logger.warning(
+                    "best_buy.search HTTP %d on attempt %d/%d — sleeping %.2fs before retry",
+                    resp.status_code, attempts, BESTBUY_MAX_ATTEMPTS, delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            break
+
+    assert resp is not None  # loop guarantees one assignment before break/return.
     elapsed_ms = int((time.monotonic() - t0) * 1000)
 
     if resp.status_code >= 400:
         logger.warning(
-            "best_buy.search HTTP %d body=%s",
-            resp.status_code, resp.text[:200],
+            "best_buy.search HTTP %d body=%s (attempts=%d)",
+            resp.status_code, resp.text[:200], attempts,
         )
         return ContainerResponse(
             retailer_id="best_buy",
@@ -186,7 +278,11 @@ async def fetch_best_buy(
             error=ContainerError(
                 code="HTTP_ERROR",
                 message=f"Products API returned HTTP {resp.status_code}",
-                details={"status_code": resp.status_code, "body": resp.text[:500]},
+                details={
+                    "status_code": resp.status_code,
+                    "body": resp.text[:500],
+                    "attempts": attempts,
+                },
             ),
             metadata=ContainerMetadata(
                 url=str(resp.request.url),
