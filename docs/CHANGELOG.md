@@ -1758,4 +1758,3 @@ Live-verified loading the actual eBay item page in the iOS sim (real residential
 - Generic-row tap on Apple/Samsung phones still resolves through UPCitemdb to a SPECIFIC variant for the persisted Product (the override only changes container search queries, not the persisted Product.name). For now this is fine — the comparison view shows the variant title in the header but containers searched the generic name. If that mismatch becomes annoying, the fix is either to persist a separate generic Product row (creates UPC dupes — bad) or to pass `display_name_override` through `presentProduct` and override `Product.name` in-memory only.
 - iOS `SourceKit` indexer is consistently behind on this branch (showing "Cannot find type 'ProductSearchResult'" etc. in `SearchViewModel.swift`). Real `xcodebuild` always succeeds; the indexer warnings are noise.
 
-
