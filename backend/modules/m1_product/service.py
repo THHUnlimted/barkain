@@ -13,6 +13,7 @@ Cross-validation (Step 2b):
 - Confidence: 1.0 (agree), 0.7 (Gemini only), 0.5 (override), 0.3 (UPCitemdb only).
 """
 
+import hashlib
 import logging
 import re
 import uuid
@@ -40,6 +41,13 @@ logger = logging.getLogger("barkain.m1")
 
 REDIS_CACHE_TTL = 86400  # 24 hours
 REDIS_KEY_PREFIX = "product:upc:"
+
+# Cache for `resolve_from_search` device-name → UPC lookups. Keyed by a
+# normalized name+brand digest so that "Steam Deck OLED" and "  steam DECK
+# oled  " hit the same entry. Spares the UPCitemdb trial endpoint (shared-IP
+# rate limit) on retry, and skips the Gemini round-trip entirely on cache hits.
+DEVUPC_CACHE_KEY_PREFIX = "product:devupc:"
+DEVUPC_CACHE_TTL = 86400  # 24 hours
 
 
 _UPC_RE = re.compile(r"^\d{12,13}$")
@@ -83,7 +91,9 @@ class ProductResolutionService:
     ) -> Product:
         """Resolve a Gemini-sourced search result (no UPC yet) to a canonical Product.
 
-        Two-stage UPC resolution:
+        Resolution order:
+        0. Redis device→UPC cache (24h TTL) — short-circuits both network calls
+           on retries of the same name+brand pair.
         1. Targeted Gemini ``device → UPC`` lookup (fast, opinionated).
         2. UPCitemdb keyword search filtered by brand match (broader catalog;
            catches products like "iPhone 12" where Gemini refuses to commit
@@ -96,12 +106,55 @@ class ProductResolutionService:
             UPCNotFoundForDescriptionError: neither stage produced a UPC.
             ProductNotFoundError: UPC was derived but no source identified a product.
         """
+        cache_key = self._devupc_cache_key(device_name, brand)
+        cached_upc = await self._get_cached_devupc(cache_key)
+        if cached_upc:
+            logger.info(
+                "device→UPC cache hit: %r (brand=%s) → %s", device_name, brand, cached_upc
+            )
+            return await self.resolve(cached_upc)
+
         upc = await self._lookup_upc_from_description(device_name, brand, model)
         if not upc:
             upc = await self._lookup_upc_from_upcitemdb(device_name, brand)
         if not upc:
             raise UPCNotFoundForDescriptionError(device_name)
+
+        await self._cache_devupc(cache_key, upc)
         return await self.resolve(upc)
+
+    @staticmethod
+    def _devupc_cache_key(device_name: str, brand: str | None) -> str:
+        """Build a stable Redis key from a (device_name, brand) pair.
+
+        Normalizes whitespace + casing so trivially different inputs
+        ("Steam Deck OLED" vs " steam  deck  oled ") share an entry. SHA-1
+        keeps the key short, predictable, and free of redis-special chars.
+        """
+        normalized = " ".join((device_name or "").lower().split())
+        brand_norm = " ".join((brand or "").lower().split())
+        digest = hashlib.sha1(
+            f"{normalized}|{brand_norm}".encode("utf-8")
+        ).hexdigest()
+        return f"{DEVUPC_CACHE_KEY_PREFIX}{digest}"
+
+    async def _get_cached_devupc(self, cache_key: str) -> str | None:
+        """Fetch a cached UPC for a normalized device-name key, or None on miss."""
+        try:
+            cached = await self.redis.get(cache_key)
+        except Exception:
+            logger.warning("device→UPC cache read failed for %s", cache_key, exc_info=True)
+            return None
+        if not cached:
+            return None
+        return cached if isinstance(cached, str) else cached.decode()
+
+    async def _cache_devupc(self, cache_key: str, upc: str) -> None:
+        """Store a successful device→UPC mapping with the standard TTL."""
+        try:
+            await self.redis.set(cache_key, upc, ex=DEVUPC_CACHE_TTL)
+        except Exception:
+            logger.warning("device→UPC cache write failed for %s", cache_key, exc_info=True)
 
     async def _lookup_upc_from_upcitemdb(
         self, device_name: str, brand: str | None

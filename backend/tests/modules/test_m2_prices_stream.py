@@ -352,6 +352,96 @@ async def test_stream_force_refresh_bypasses_cache(db_session, fake_redis):
     assert done["cached"] is False
 
 
+# MARK: - query_override scoped cache (2026-04-19)
+
+
+async def test_stream_query_override_writes_to_scoped_cache_key(db_session, fake_redis):
+    """Bare-name override runs cache to `prices:product:{id}:q:<sha1>`, not the bare key."""
+    from modules.m2_prices.service import (
+        PriceAggregationService,
+        REDIS_KEY_PREFIX,
+        REDIS_KEY_QUERY_SUFFIX,
+        _query_scope_digest,
+    )
+
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon"])
+
+    fake = _FakeContainerClient(responses={"amazon": _success_response("amazon")})
+    service = PriceAggregationService(db=db_session, redis=fake_redis, container_client=fake)
+
+    override = "Steam Deck OLED"
+    async for _ in service.stream_prices(product.id, query_override=override):
+        pass
+
+    bare_key = f"{REDIS_KEY_PREFIX}{product.id}"
+    scoped_key = (
+        f"{REDIS_KEY_PREFIX}{product.id}"
+        f"{REDIS_KEY_QUERY_SUFFIX}{_query_scope_digest(override)}"
+    )
+
+    # Scoped key was populated; bare-product key was NOT polluted by the override.
+    assert await fake_redis.get(scoped_key) is not None
+    assert await fake_redis.get(bare_key) is None
+
+
+async def test_stream_query_override_replays_scoped_cache(db_session, fake_redis):
+    """Second call with same override hits scoped cache and skips containers."""
+    from modules.m2_prices.service import PriceAggregationService
+
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon"])
+
+    fake = _FakeContainerClient(responses={"amazon": _success_response("amazon")})
+    service = PriceAggregationService(db=db_session, redis=fake_redis, container_client=fake)
+
+    override = "Steam Deck OLED"
+    async for _ in service.stream_prices(product.id, query_override=override):
+        pass
+    first_calls = list(fake.extract_one_calls)
+
+    async for _ in service.stream_prices(product.id, query_override=override):
+        pass
+    second_calls = fake.extract_one_calls[len(first_calls):]
+
+    assert first_calls == ["amazon"]  # initial run dispatched
+    assert second_calls == []          # second run was a cache replay
+
+
+async def test_stream_query_override_does_not_serve_bare_cache(db_session, fake_redis):
+    """A pre-populated BARE product cache must NOT be served to an override request."""
+    from modules.m2_prices.service import PriceAggregationService, REDIS_KEY_PREFIX
+
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon"])
+
+    bare_cached = {
+        "product_id": str(product.id),
+        "product_name": product.name,
+        "prices": [{"retailer_id": "amazon", "retailer_name": "Amazon", "price": 1.0}],
+        "retailer_results": [],
+        "total_retailers": 1,
+        "retailers_succeeded": 1,
+        "retailers_failed": 0,
+        "cached": True,
+        "fetched_at": "2026-04-19T00:00:00+00:00",
+    }
+    await fake_redis.set(f"{REDIS_KEY_PREFIX}{product.id}", json.dumps(bare_cached))
+
+    fake = _FakeContainerClient(responses={"amazon": _success_response("amazon", 99.0)})
+    service = PriceAggregationService(db=db_session, redis=fake_redis, container_client=fake)
+
+    events = []
+    async for evt in service.stream_prices(product.id, query_override="Different Query"):
+        events.append(evt)
+
+    # The override run must dispatch fresh (not replay the bare-product cache).
+    assert fake.extract_one_calls == ["amazon"]
+    done = next(p for t, p in events if t == "done")
+    # And the price the user sees is from the fresh run, not the planted cache.
+    assert done["retailers_succeeded"] == 1
+
+
 # MARK: - Endpoint-level tests (HTTP SSE)
 
 
