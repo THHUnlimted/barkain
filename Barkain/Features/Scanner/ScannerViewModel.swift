@@ -97,7 +97,7 @@ final class ScannerViewModel {
         }
     }
 
-    func fetchPrices(forceRefresh: Bool = false) async {
+    func fetchPrices(forceRefresh: Bool = false, queryOverride: String? = nil) async {
         guard let product else { return }
         priceComparison = nil
         priceError = nil
@@ -106,13 +106,14 @@ final class ScannerViewModel {
         // Step 2c: consume the SSE stream. Each retailer_result event mutates
         // `priceComparison` in place (lazy-seeded on first event). On stream
         // failure, fall back to the batch endpoint.
-        sseLog.info("fetchPrices: starting stream for product \(product.name, privacy: .public) forceRefresh=\(forceRefresh, privacy: .public)")
+        sseLog.info("fetchPrices: starting stream for product \(product.name, privacy: .public) forceRefresh=\(forceRefresh, privacy: .public) queryOverride=\(queryOverride ?? "<none>", privacy: .public)")
         var sawDone = false
         var sawAnyEvent = false
         do {
             for try await event in apiClient.streamPrices(
                 productId: product.id,
-                forceRefresh: forceRefresh
+                forceRefresh: forceRefresh,
+                queryOverride: queryOverride
             ) {
                 sawAnyEvent = true
                 sseLog.info("fetchPrices: received event \(String(describing: event), privacy: .public)")

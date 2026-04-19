@@ -89,7 +89,7 @@ def test_amazon_untagged_when_env_empty(monkeypatch):
     assert result.affiliate_url == "https://www.amazon.com/dp/B0B2FCT81R"
 
 
-def test_ebay_new_rover_redirect_encodes_url(monkeypatch):
+def test_ebay_new_appends_epn_query_params(monkeypatch):
     monkeypatch.setattr(settings, "EBAY_CAMPAIGN_ID", "5339148665")
 
     source_url = "https://www.ebay.com/itm/12345?var=99"
@@ -97,16 +97,15 @@ def test_ebay_new_rover_redirect_encodes_url(monkeypatch):
 
     assert result.is_affiliated is True
     assert result.network == EBAY_NETWORK
-    # Rover skeleton is present.
-    assert result.affiliate_url.startswith(
-        "https://rover.ebay.com/rover/1/711-53200-19255-0/1?mpre="
-    )
+    # Modern EPN tagging — query params appended to the item URL itself.
+    assert result.affiliate_url.startswith("https://www.ebay.com/itm/12345?var=99&")
+    assert "mkcid=1" in result.affiliate_url
+    assert "mkrid=711-53200-19255-0" in result.affiliate_url
     assert "campid=5339148665" in result.affiliate_url
     assert "toolid=10001" in result.affiliate_url
-    # Source URL is percent-encoded inside the mpre= parameter.
-    assert "mpre=https%3A%2F%2Fwww.ebay.com%2Fitm%2F12345%3Fvar%3D99" in (
-        result.affiliate_url
-    )
+    assert "mkevt=1" in result.affiliate_url
+    # Must NOT use the legacy rover impression-pixel pattern.
+    assert "rover.ebay.com" not in result.affiliate_url
 
 
 def test_ebay_used_uses_same_network(monkeypatch):

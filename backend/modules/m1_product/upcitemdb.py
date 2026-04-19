@@ -14,6 +14,8 @@ logger = logging.getLogger("barkain.m1")
 
 UPCITEMDB_TRIAL_URL = "https://api.upcitemdb.com/prod/trial/lookup"
 UPCITEMDB_PAID_URL = "https://api.upcitemdb.com/prod/v1/lookup"
+UPCITEMDB_TRIAL_SEARCH_URL = "https://api.upcitemdb.com/prod/trial/search"
+UPCITEMDB_PAID_SEARCH_URL = "https://api.upcitemdb.com/prod/v1/search"
 TIMEOUT_SECONDS = 10
 
 
@@ -63,3 +65,60 @@ async def lookup_upc(upc: str) -> dict[str, Any] | None:
     except Exception:
         logger.warning("UPCitemdb lookup failed for UPC %s", upc, exc_info=True)
         return None
+
+
+async def search_keyword(query: str, max_results: int = 10) -> list[dict[str, Any]]:
+    """Keyword search via UPCitemdb `/search` endpoint.
+
+    Trial endpoint allows no key but is rate-capped (~100/day shared IP);
+    paid endpoint via `UPCITEMDB_API_KEY` is 5k/day. Returns a list of dicts
+    shaped for `ProductSearchService._merge` (device_name/brand/category
+    /primary_upc/image_url/confidence). Empty list on any failure — caller
+    treats absence and error identically.
+
+    `match_mode=1` (exact word match) cuts the worst accessory noise vs
+    `match_mode=0`'s loose contains-match. Result ordering is by relevance
+    inside the API.
+    """
+    if settings.UPCITEMDB_API_KEY:
+        url = UPCITEMDB_PAID_SEARCH_URL
+        headers = {"user_key": settings.UPCITEMDB_API_KEY}
+    else:
+        url = UPCITEMDB_TRIAL_SEARCH_URL
+        headers = {}
+
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+            resp = await client.get(
+                url,
+                params={"s": query, "match_mode": 1},
+                headers=headers,
+            )
+        if resp.status_code == 429:
+            logger.warning("UPCitemdb search rate-limited for %r", query)
+            return []
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        logger.warning("UPCitemdb search failed for %r", query, exc_info=True)
+        return []
+
+    items = data.get("items") or []
+    rows: list[dict[str, Any]] = []
+    for item in items[:max_results]:
+        title = (item.get("title") or "").strip()
+        if not title:
+            continue
+        images = item.get("images") or []
+        rows.append({
+            "device_name": title,
+            "brand": (item.get("brand") or "").strip() or None,
+            "category": (item.get("category") or "").strip() or None,
+            "primary_upc": item.get("upc"),
+            "image_url": images[0] if images else None,
+            "model": (item.get("model") or "").strip() or None,
+            # Cap UPCitemdb confidence below Best Buy's floor (0.5) so they
+            # sort beneath BBY rows when both make it past dedup.
+            "confidence": max(0.3, 0.5 - 0.02 * len(rows)),
+        })
+    return rows

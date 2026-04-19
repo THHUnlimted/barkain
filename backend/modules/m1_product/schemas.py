@@ -57,6 +57,10 @@ class ProductSearchRequest(BaseModel):
 
     query: str = Field(..., min_length=3, max_length=200)
     max_results: int = Field(10, ge=1, le=20)
+    # When true: bypass Redis cache, always run Gemini (in addition to DB/Tier 2),
+    # and merge Gemini results in. Wired to the iOS "deep search" hint when the
+    # debounced result set didn't substring-match the typed query.
+    force_gemini: bool = False
 
 
 class ResolveFromSearchRequest(BaseModel):
@@ -89,7 +93,7 @@ class ProductSearchResult(BaseModel):
     category: str | None = None
     confidence: float = 0.0
     primary_upc: str | None = None
-    source: Literal["db", "gemini"]
+    source: Literal["db", "best_buy", "upcitemdb", "gemini", "generic"]
     product_id: uuid.UUID | None = None  # populated only for source="db"
     image_url: str | None = None
 

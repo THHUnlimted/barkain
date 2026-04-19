@@ -83,18 +83,63 @@ class ProductResolutionService:
     ) -> Product:
         """Resolve a Gemini-sourced search result (no UPC yet) to a canonical Product.
 
-        Runs a targeted Gemini ``device → UPC`` lookup, then delegates to
-        :meth:`resolve` so the existing Gemini + UPCitemdb cross-validation
-        and Redis caching paths handle persistence.
+        Two-stage UPC resolution:
+        1. Targeted Gemini ``device → UPC`` lookup (fast, opinionated).
+        2. UPCitemdb keyword search filtered by brand match (broader catalog;
+           catches products like "iPhone 12" where Gemini refuses to commit
+           to a single UPC because Apple SKUs vary by carrier/storage/color).
+
+        Then delegates to :meth:`resolve` for the standard Gemini + UPCitemdb
+        cross-validation and Redis caching paths.
 
         Raises:
-            UPCNotFoundForDescriptionError: Gemini could not derive a UPC.
+            UPCNotFoundForDescriptionError: neither stage produced a UPC.
             ProductNotFoundError: UPC was derived but no source identified a product.
         """
         upc = await self._lookup_upc_from_description(device_name, brand, model)
         if not upc:
+            upc = await self._lookup_upc_from_upcitemdb(device_name, brand)
+        if not upc:
             raise UPCNotFoundForDescriptionError(device_name)
         return await self.resolve(upc)
+
+    async def _lookup_upc_from_upcitemdb(
+        self, device_name: str, brand: str | None
+    ) -> str | None:
+        """Brand-filtered UPCitemdb keyword fallback.
+
+        Picks the first row whose brand matches (case-insensitive) AND whose
+        title contains the device name's distinctive tokens. Returns None on
+        rate-limit / network error / no acceptable match — the caller treats
+        absence and failure identically.
+        """
+        from modules.m1_product import upcitemdb  # local: avoid circular import
+
+        try:
+            rows = await upcitemdb.search_keyword(device_name, max_results=15)
+        except Exception:
+            logger.warning("UPCitemdb fallback failed for %r", device_name, exc_info=True)
+            return None
+        if not rows:
+            return None
+        target_brand = (brand or "").strip().lower()
+        # Pull longest non-trivial token from device name to gate accessory noise.
+        tokens = [t for t in device_name.lower().split() if len(t) >= 4]
+        for row in rows:
+            row_brand = (row.get("brand") or "").strip().lower()
+            row_title = (row.get("device_name") or "").lower()
+            if target_brand and row_brand != target_brand:
+                continue
+            if tokens and not any(t in row_title for t in tokens):
+                continue
+            upc = row.get("primary_upc")
+            if upc:
+                logger.info(
+                    "UPCitemdb resolved device→UPC: %r (brand=%s) → %s",
+                    device_name, brand, upc,
+                )
+                return upc
+        return None
 
     async def _lookup_upc_from_description(
         self,
