@@ -13,8 +13,15 @@ import pytest
 import respx
 
 from app.config import Settings
-from modules.m2_prices.adapters import _walmart_parser
+from modules.m2_prices.adapters import _walmart_parser, walmart_http
 from modules.m2_prices.adapters.walmart_http import _build_proxy_url, fetch_walmart
+
+
+@pytest.fixture(autouse=True)
+def _no_backoff_sleep(monkeypatch):
+    """Disable the CHALLENGE retry back-off so tests don't actually sleep."""
+    monkeypatch.setattr(walmart_http, "_CHALLENGE_BACKOFF_RANGE_S", (0, 0))
+
 
 # MARK: - Fixtures
 
@@ -144,8 +151,8 @@ async def test_fetch_walmart_max_listings_caps_results():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_fetch_walmart_challenge_three_attempts_then_surfaces_error():
-    """Challenge on all three attempts → returns CHALLENGE error after 3 tries."""
+async def test_fetch_walmart_challenge_all_attempts_then_surfaces_error():
+    """Challenge on all attempts → returns CHALLENGE error after the full budget."""
     cfg = _test_settings()
     route = respx.get("https://www.walmart.com/search").mock(
         return_value=httpx.Response(200, text=CHALLENGE_SAMPLE)
@@ -157,8 +164,33 @@ async def test_fetch_walmart_challenge_three_attempts_then_surfaces_error():
     assert result.error.code == "CHALLENGE"
     assert result.metadata.bot_detected is True
     assert len(result.listings) == 0
-    # Initial + 2 retries, challenge-only retry budget exhausted
-    assert route.call_count == 3
+    # Initial + 4 retries — challenge-only retry budget exhausted (5 total).
+    assert route.call_count == walmart_http.CHALLENGE_MAX_ATTEMPTS == 5
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_walmart_challenge_backoff_runs_between_retries(monkeypatch):
+    """Back-off sleeps once per retry interval — N-1 sleeps for N attempts."""
+    cfg = _test_settings()
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(walmart_http.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(walmart_http, "_CHALLENGE_BACKOFF_RANGE_S", (0.5, 0.5))
+
+    respx.get("https://www.walmart.com/search").mock(
+        return_value=httpx.Response(200, text=CHALLENGE_SAMPLE)
+    )
+
+    result = await fetch_walmart(query="test", cfg=cfg)
+
+    assert result.error is not None and result.error.code == "CHALLENGE"
+    # 5 attempts → 4 sleeps between them, none after the final attempt.
+    assert len(sleep_calls) == walmart_http.CHALLENGE_MAX_ATTEMPTS - 1
+    assert all(s == 0.5 for s in sleep_calls)
 
 
 @pytest.mark.asyncio

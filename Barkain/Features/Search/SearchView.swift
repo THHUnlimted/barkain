@@ -12,6 +12,10 @@ struct SearchView: View {
     // MARK: - State
 
     @State private var viewModel: SearchViewModel?
+    // Owned here (not in PriceComparisonView) so the .sheet's presentation
+    // context survives any inline conditional re-render in `content(_:)`.
+    // Without this, tapping a retailer link could orphan the sheet mid-present.
+    @State private var browserURL: IdentifiableURL?
 
     // MARK: - Body
 
@@ -50,7 +54,8 @@ struct SearchView: View {
                     PriceComparisonView(
                         product: product,
                         comparison: comparison,
-                        viewModel: presentedVM
+                        viewModel: presentedVM,
+                        browserURL: $browserURL
                     )
                 } else if vm.presentedProductViewModel?.isPriceLoading == true,
                           let product = vm.presentedProductViewModel?.product {
@@ -78,6 +83,10 @@ struct SearchView: View {
             actions: { Button("OK", role: .cancel) { vm.resolveFailureMessage = nil } },
             message: { Text(vm.resolveFailureMessage ?? "") }
         )
+        .sheet(item: $browserURL) { item in
+            InAppBrowserView(url: item.url)
+                .ignoresSafeArea()
+        }
     }
 
     // MARK: - Search bar

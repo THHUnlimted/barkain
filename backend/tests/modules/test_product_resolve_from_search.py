@@ -184,6 +184,127 @@ async def test_resolve_from_search_404_when_gemini_raises(
 # MARK: - Reuses persisted product on second call
 
 
+# MARK: - Device→UPC Redis cache (skips Gemini + UPCitemdb on retry)
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_writes_devupc_cache_on_success(
+    client, db_session, fake_redis
+):
+    """A successful resolve writes the device→UPC mapping to Redis."""
+    derived_upc = "190198451736"
+
+    async def fake_gemini(prompt, **kwargs):
+        # Mirror the existing happy-path test: dispatch on which prompt the
+        # service passed (the device→UPC system text mentions "device
+        # description"; the UPC→product one does not).
+        system = kwargs.get("system_instruction", "") or ""
+        # DEVICE_TO_UPC opens with "You receive a fully-specified product
+        # description …" — a phrase absent from UPC_LOOKUP, which lets us
+        # dispatch on which prompt the service passed.
+        if "product description" in system:
+            return {"upc": derived_upc, "reasoning": "verified"}
+        return {"device_name": "Apple iPhone 8 64GB", "model": "iPhone 8"}
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            side_effect=fake_gemini,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={
+                "device_name": "Apple iPhone 8 (64GB)",
+                "brand": "Apple",
+                "model": "iPhone 8",
+            },
+        )
+
+    assert response.status_code == 200
+
+    # Verify cache entry exists for the normalized name+brand pair.
+    from modules.m1_product.service import ProductResolutionService
+    cache_key = ProductResolutionService._devupc_cache_key(
+        "Apple iPhone 8 (64GB)", "Apple"
+    )
+    cached = await fake_redis.get(cache_key)
+    cached_str = cached if isinstance(cached, str) else cached.decode()
+    assert cached_str == derived_upc
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_devupc_cache_short_circuits_gemini(
+    client, db_session, fake_redis
+):
+    """A pre-populated cache entry skips both Gemini and UPCitemdb calls."""
+    cached_upc = "888888888888"
+    existing = Product(
+        upc=cached_upc, name="Cached Product", brand="Steam", source="seed"
+    )
+    db_session.add(existing)
+    await db_session.flush()
+
+    from modules.m1_product.service import ProductResolutionService
+    cache_key = ProductResolutionService._devupc_cache_key(
+        "Steam Deck OLED", "Valve"
+    )
+    await fake_redis.set(cache_key, cached_upc)
+
+    gemini_mock = AsyncMock(return_value={"upc": None})
+    upcitem_mock = AsyncMock(return_value=None)
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json", gemini_mock,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup", upcitem_mock,
+        ),
+        patch(
+            "modules.m1_product.upcitemdb.search_keyword",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={"device_name": "Steam Deck OLED", "brand": "Valve"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["upc"] == cached_upc
+    # Cache hit means the device→UPC Gemini call must NOT fire. The downstream
+    # `resolve()` is allowed to skip Gemini too because the product already
+    # exists in DB.
+    assert gemini_mock.call_count == 0
+
+
+def test_devupc_cache_key_normalizes_whitespace_and_case():
+    """Cache key normalizes case + whitespace so trivial variants share an entry."""
+    from modules.m1_product.service import ProductResolutionService
+
+    a = ProductResolutionService._devupc_cache_key("Steam Deck OLED", "Valve")
+    b = ProductResolutionService._devupc_cache_key("  steam   DECK   oled  ", "VALVE")
+    assert a == b
+
+
+def test_devupc_cache_key_distinguishes_brand():
+    """Different brands hash to different keys."""
+    from modules.m1_product.service import ProductResolutionService
+
+    same_name_diff_brand = (
+        ProductResolutionService._devupc_cache_key("Pro Headphones", "Sony"),
+        ProductResolutionService._devupc_cache_key("Pro Headphones", "Bose"),
+    )
+    assert same_name_diff_brand[0] != same_name_diff_brand[1]
+
+
 @pytest.mark.asyncio
 async def test_resolve_from_search_reuses_existing_product(
     client, db_session, fake_redis

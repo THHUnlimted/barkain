@@ -677,6 +677,117 @@ def test_relevance_no_gemini_model_backward_compat():
     assert score >= 0.4
 
 
+# MARK: - Platform-suffix accessory filter (Amazon-only)
+
+
+def test_platform_suffix_helper_rejects_game_with_console_tail():
+    """'NBA 2K25 - Nintendo Switch 2' is detected as a tail-descriptor pattern."""
+    from modules.m2_prices.service import _is_platform_suffix_accessory
+
+    assert _is_platform_suffix_accessory(
+        "NBA 2K25 - Nintendo Switch 2", ["Switch 2"]
+    ) is True
+
+
+def test_platform_suffix_helper_rejects_paren_form():
+    """'Mario Kart 9 (Nintendo Switch 2)' is detected via opening-paren separator."""
+    from modules.m2_prices.service import _is_platform_suffix_accessory
+
+    assert _is_platform_suffix_accessory(
+        "Mario Kart 9 (Nintendo Switch 2)", ["Switch 2"]
+    ) is True
+
+
+def test_platform_suffix_helper_keeps_console_at_start():
+    """Listing whose identifier appears at the start (the actual device) is kept."""
+    from modules.m2_prices.service import _is_platform_suffix_accessory
+
+    assert _is_platform_suffix_accessory(
+        "Nintendo Switch 2 - Black Edition Console", ["Switch 2"]
+    ) is False
+
+
+def test_platform_suffix_helper_keeps_bundle():
+    """Bundle keyword preserves the listing even with game tokens present."""
+    from modules.m2_prices.service import _is_platform_suffix_accessory
+
+    assert _is_platform_suffix_accessory(
+        "NBA 2K25 + Nintendo Switch 2 Console Bundle", ["Switch 2"]
+    ) is False
+
+
+def test_platform_suffix_helper_no_separator_no_match():
+    """Without a separator before the identifier, the pattern does not trigger."""
+    from modules.m2_prices.service import _is_platform_suffix_accessory
+
+    assert _is_platform_suffix_accessory(
+        "Nintendo Switch 2 OLED Console", ["Switch 2"]
+    ) is False
+
+
+async def test_pick_best_listing_amazon_drops_platform_suffix_game(db_session):
+    """For Amazon, '2K - Nintendo Switch 2' is dropped so the actual console price wins."""
+    from modules.m2_prices.service import PriceAggregationService
+
+    product = Product(name="Nintendo Switch 2", brand="Nintendo", source="test")
+    response = ContainerResponse(
+        retailer_id="amazon",
+        query="Nintendo Switch 2",
+        listings=[
+            ContainerListing(title="NBA 2K25 - Nintendo Switch 2", price=59.99),
+            ContainerListing(title="Nintendo Switch 2 Console with Joy-Con", price=449.99),
+        ],
+    )
+
+    service = PriceAggregationService.__new__(PriceAggregationService)
+    result, score = service._pick_best_listing(response, product)
+    assert result is not None
+    assert result.price == 449.99
+    assert "NBA" not in result.title
+
+
+async def test_pick_best_listing_amazon_keeps_bundle(db_session):
+    """Bundles with game + console pass the Amazon filter (bundle token present)."""
+    from modules.m2_prices.service import PriceAggregationService
+
+    product = Product(name="Nintendo Switch 2", brand="Nintendo", source="test")
+    response = ContainerResponse(
+        retailer_id="amazon",
+        query="Nintendo Switch 2",
+        listings=[
+            ContainerListing(
+                title="Nintendo Switch 2 + Mario Kart 9 Console Bundle",
+                price=499.99,
+            ),
+        ],
+    )
+
+    service = PriceAggregationService.__new__(PriceAggregationService)
+    result, score = service._pick_best_listing(response, product)
+    assert result is not None
+    assert result.price == 499.99
+
+
+async def test_pick_best_listing_non_amazon_keeps_platform_suffix(db_session):
+    """Filter is Amazon-scoped: Walmart still picks the cheap '2K - Switch 2' listing."""
+    from modules.m2_prices.service import PriceAggregationService
+
+    product = Product(name="Nintendo Switch 2", brand="Nintendo", source="test")
+    response = ContainerResponse(
+        retailer_id="walmart",
+        query="Nintendo Switch 2",
+        listings=[
+            ContainerListing(title="NBA 2K25 - Nintendo Switch 2", price=59.99),
+            ContainerListing(title="Nintendo Switch 2 Console with Joy-Con", price=449.99),
+        ],
+    )
+
+    service = PriceAggregationService.__new__(PriceAggregationService)
+    result, score = service._pick_best_listing(response, product)
+    assert result is not None
+    assert result.price == 59.99  # filter doesn't run for non-amazon
+
+
 # MARK: - Post-2b-val Hardening Unit Tests (Step 2b-final)
 
 
@@ -753,6 +864,45 @@ def test_is_accessory_listing_skipped_when_product_is_case():
             "Rugged Case for iPhone", {"rugged", "case"}
         )
         is False
+    )
+
+
+def test_is_accessory_listing_rejects_third_party_upgrade_service():
+    """eBay 'Steam Deck OLED RAM Upgrade Service' is flagged via 'service' token."""
+    from modules.m2_prices.service import _is_accessory_listing
+
+    assert (
+        _is_accessory_listing(
+            "Valve Steam Deck OLED 32GB RAM/VRAM WORLDWIDE Upgrade Service",
+            {"valve", "steam", "deck"},
+        )
+        is True
+    )
+
+
+def test_is_accessory_listing_rejects_repair_service():
+    """Repair-service listings are flagged."""
+    from modules.m2_prices.service import _is_accessory_listing
+
+    assert (
+        _is_accessory_listing(
+            "PS5 Console Liquid Damage Repair Service",
+            {"ps5", "console"},
+        )
+        is True
+    )
+
+
+def test_is_accessory_listing_rejects_modded_console():
+    """Modded/modding listings are flagged when the product itself isn't a mod."""
+    from modules.m2_prices.service import _is_accessory_listing
+
+    assert (
+        _is_accessory_listing(
+            "Xbox Series X Custom Modded Controller — RGB Edition",
+            {"xbox", "series", "x"},
+        )
+        is True
     )
 
 

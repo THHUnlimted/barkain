@@ -25,6 +25,14 @@ struct PriceComparisonView: View {
     let product: Product
     let comparison: PriceComparison
     let viewModel: ScannerViewModel
+    // Step 2g + 2026-04-19 fix: browser sheet state is OWNED by the parent
+    // (SearchView / ScannerView) and passed in as a binding. PriceComparisonView
+    // is rendered inside a parent's `if let` conditional that re-evaluates on
+    // every `priceComparison` mutation; if the sheet were `@State` here, the
+    // sheet's presentation context could be torn down mid-presentation when the
+    // conditional re-renders, leaving the user "kicked back" to the search list.
+    // Anchoring the sheet on the stable parent fixes that race.
+    @Binding var browserURL: IdentifiableURL?
     var onRequestOnboarding: (() -> Void)? = nil
     var onRequestAddCards: (() -> Void)? = nil
     var onRequestUpgrade: (() -> Void)? = nil
@@ -33,11 +41,6 @@ struct PriceComparisonView: View {
 
     @AppStorage("hasCompletedIdentityOnboarding")
     private var hasCompletedOnboarding: Bool = false
-
-    // Step 2g: in-app browser sheet for retailer + identity discount taps.
-    // Both flows funnel through this single state so only one sheet is
-    // presented at a time.
-    @State private var browserURL: IdentifiableURL?
 
     // MARK: - Body
 
@@ -60,10 +63,6 @@ struct PriceComparisonView: View {
             .padding(Spacing.lg)
             .animation(.easeInOut(duration: 0.3), value: viewModel.identityDiscounts)
             .animation(.easeInOut(duration: 0.3), value: viewModel.cardRecommendations)
-        }
-        .sheet(item: $browserURL) { item in
-            InAppBrowserView(url: item.url)
-                .ignoresSafeArea()
         }
     }
 
@@ -395,7 +394,8 @@ struct PriceComparisonView: View {
         viewModel: {
             let vm = ScannerViewModel(apiClient: PreviewAPIClient())
             return vm
-        }()
+        }(),
+        browserURL: .constant(nil)
     )
     .environment(FeatureGateService(proTierProvider: { false }))
 }
