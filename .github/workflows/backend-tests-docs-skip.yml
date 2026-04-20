@@ -1,0 +1,23 @@
+# Companion to backend-tests.yml that satisfies the required `test` status
+# check for docs-only PRs. The real test workflow is path-filtered to
+# `backend/**` + `containers/**` and never runs on docs-only changes —
+# without this no-op the required check is never reported and branch
+# protection blocks the merge indefinitely.
+#
+# Mirrors the real workflow's job name (`test`) so the same check context
+# satisfies branch protection.
+name: Backend Tests (docs skip)
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'backend/**'
+      - 'containers/**'
+      - '.github/workflows/backend-tests.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Docs-only change — backend tests skipped
+        run: echo "No backend or container files touched; reporting success to satisfy branch protection."
