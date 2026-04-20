@@ -1,0 +1,36 @@
+
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+
+<div style="display: flex; align-items: center; justify-content: center; padding: 3rem 0; background: #f4faff; border-radius: 16px;">
+  <div style="position: relative; width: 160px; height: 160px; display: flex; align-items: center; justify-content: center;">
+    <div class="bk-halo" style="position: absolute; inset: 0; background: radial-gradient(circle, rgba(249,177,45,0.45) 0%, rgba(249,177,45,0) 65%); filter: blur(14px);"></div>
+    <span class="material-symbols-outlined bk-paw-glow" style="position: relative; font-size: 96px; font-variation-settings: 'FILL' 1, 'wght' 400;">pets</span>
+  </div>
+</div>
+
+<style>
+@keyframes bk-sweep {
+  0% { background-position: 100% center; }
+  100% { background-position: 0% center; }
+}
+@keyframes bk-halo {
+  0%, 100% { opacity: 0.35; transform: scale(0.92); }
+  50% { opacity: 0.75; transform: scale(1.08); }
+}
+.bk-paw-glow {
+  display: inline-block;
+  background: linear-gradient(
+    90deg,
+    #7f5600 30%,
+    #ffd98a 50%,
+    #7f5600 70%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: bk-sweep 1.1s ease-in-out infinite alternate;
+}
+.bk-halo { animation: bk-halo 1.1s ease-in-out infinite; transform-origin: center; }
+</style>

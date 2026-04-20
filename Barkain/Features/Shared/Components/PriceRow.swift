@@ -9,6 +9,10 @@ struct PriceRow: View {
     let retailerPrice: RetailerPrice
     /// Step 2e — optional best-card subtitle shown below the price row.
     var cardRecommendation: CardRecommendation? = nil
+    /// Visual emphasis bump for the cheapest row. Drawn with a primary
+    /// container border + a slight lift — matches the HTML's
+    /// "Best Barkain" treatment.
+    var isBest: Bool = false
 
     // MARK: - Body
 
@@ -17,7 +21,7 @@ struct PriceRow: View {
             HStack(spacing: Spacing.md) {
                 retailerIcon
                 retailerInfo
-                Spacer()
+                Spacer(minLength: 0)
                 priceInfo
             }
             if let rec = cardRecommendation {
@@ -25,9 +29,19 @@ struct PriceRow: View {
             }
         }
         .padding(.horizontal, Spacing.md)
-        .padding(.vertical, Spacing.sm)
-        .background(Color.barkainSurfaceContainerLow)
-        .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadius))
+        .padding(.vertical, Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                .fill(isBest ? Color.barkainSurfaceContainerLowest : Color.barkainSurfaceContainerLow)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                .stroke(
+                    isBest ? Color.barkainPrimaryContainer.opacity(0.5) : Color.clear,
+                    lineWidth: 2
+                )
+        )
+        .barkainShadowSoft()
     }
 
     // MARK: - Card recommendation
@@ -47,19 +61,22 @@ struct PriceRow: View {
                 Link(destination: url) {
                     Text("Activate")
                         .font(.barkainLabel)
+                        .tracking(0.8)
+                        .textCase(.uppercase)
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.barkainPrimary)
-                        .clipShape(Capsule())
+                        .padding(.horizontal, Spacing.sm)
+                        .padding(.vertical, Spacing.xxs)
+                        .background(Capsule().fill(Color.barkainPrimaryGradient))
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Spacing.sm)
-        .padding(.vertical, Spacing.xxs)
-        .background(Color.barkainPrimaryFixed.opacity(0.35))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.vertical, Spacing.xs)
+        .background(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadiusSmall, style: .continuous)
+                .fill(Color.barkainPrimaryFixed.opacity(0.35))
+        )
     }
 
     private func cardRecText(_ rec: CardRecommendation) -> String {
@@ -79,17 +96,17 @@ struct PriceRow: View {
         ZStack {
             Circle()
                 .fill(Color.barkainSurfaceContainer)
-            Image(systemName: "bag")
+            Image(systemName: "bag.fill")
                 .font(.body)
                 .foregroundStyle(Color.barkainOnSurfaceVariant)
         }
-        .frame(width: 40, height: 40)
+        .frame(width: 48, height: 48)
     }
 
     private var retailerInfo: some View {
         VStack(alignment: .leading, spacing: Spacing.xxs) {
             Text(retailerPrice.retailerName)
-                .font(.barkainBody)
+                .font(.barkainHeadline)
                 .foregroundStyle(Color.barkainOnSurface)
 
             HStack(spacing: Spacing.xxs) {
@@ -100,11 +117,11 @@ struct PriceRow: View {
                 if retailerPrice.isOnSale {
                     Text("SALE")
                         .font(.barkainLabel)
+                        .tracking(0.8)
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, Spacing.xs)
                         .padding(.vertical, 2)
-                        .background(Color.barkainError)
-                        .clipShape(Capsule())
+                        .background(Capsule().fill(Color.barkainError))
                 }
             }
         }
@@ -113,7 +130,7 @@ struct PriceRow: View {
     private var priceInfo: some View {
         VStack(alignment: .trailing, spacing: Spacing.xxs) {
             Text(formattedPrice(retailerPrice.price))
-                .font(.barkainTitle2)
+                .font(.barkainTitle)
                 .foregroundStyle(Color.barkainPrimary)
 
             if let originalPrice = retailerPrice.originalPrice,
@@ -151,7 +168,7 @@ struct PriceRow: View {
             isAvailable: true,
             isOnSale: true,
             lastChecked: Date()
-        ))
+        ), isBest: true)
         PriceRow(retailerPrice: RetailerPrice(
             retailerId: "best_buy",
             retailerName: "Best Buy",
@@ -166,4 +183,5 @@ struct PriceRow: View {
         ))
     }
     .padding()
+    .background(Color.barkainSurface)
 }

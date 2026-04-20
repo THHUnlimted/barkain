@@ -30,6 +30,7 @@ struct ScannerView: View {
 
             if let viewModel {
                 scannerContent(viewModel)
+                    .animation(.easeInOut(duration: 0.45), value: viewModel.isPriceLoading)
             } else {
                 LoadingState(message: "Preparing scanner...")
             }
@@ -187,8 +188,9 @@ struct ScannerView: View {
         if viewModel.isLoading {
             LoadingState(message: "Resolving product...")
         } else if let comparison = viewModel.priceComparison, let product = viewModel.product {
-            // Step 2c: PriceComparisonView is the progressive UI — the retailer
-            // list fills in as each SSE event arrives. No separate loading view.
+            // PriceComparisonView owns both the loading and loaded states —
+            // it shows the hero above streaming retailer rows while loading,
+            // and fades savings / discounts / cards in when loading closes.
             PriceComparisonView(
                 product: product,
                 comparison: comparison,
@@ -198,15 +200,12 @@ struct ScannerView: View {
                 onRequestAddCards: { showAddCardsFromCTA = true },
                 onRequestUpgrade: { viewModel.showPaywall = true }
             )
+            .transition(.opacity)
         } else if viewModel.isPriceLoading, let product = viewModel.product {
-            // Brief window before the first stream event seeds `priceComparison`.
-            ScrollView {
-                VStack(spacing: Spacing.lg) {
-                    ProductCard(product: product)
-                    LoadingState(message: "Sniffing out deals...")
-                }
-                .padding(Spacing.lg)
-            }
+            // Pre-first-event fallback — brief window before the first SSE
+            // event seeds `priceComparison`.
+            PriceLoadingHero(product: product)
+                .transition(.opacity)
         } else if viewModel.priceError != nil, let product = viewModel.product {
             priceErrorView(product: product, viewModel: viewModel)
         } else if let error = viewModel.error {

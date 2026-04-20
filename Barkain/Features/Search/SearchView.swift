@@ -18,6 +18,10 @@ struct SearchView: View {
     // context survives any inline conditional re-render in `content(_:)`.
     // Without this, tapping a retailer link could orphan the sheet mid-present.
     @State private var browserURL: IdentifiableURL?
+    /// True once the user pulls the comparison list down during streaming,
+    /// which un-hides the nav bar for the rest of the session. Resets on
+    /// the next stream start.
+    @State private var searchRevealed: Bool = false
 
     // MARK: - Body
 
@@ -32,6 +36,19 @@ struct SearchView: View {
             }
         }
         .navigationTitle("Search")
+        // Hide the entire nav bar (search + title) while prices are
+        // streaming — unless the user has pulled the list down once,
+        // which flips `searchRevealed` back on for the rest of the stream.
+        .toolbar(hideNavDuringStream ? .hidden : .automatic, for: .navigationBar)
+        .animation(.easeInOut(duration: 0.3), value: hideNavDuringStream)
+        .onChange(of: viewModel?.presentedProductViewModel?.isPriceLoading) { _, newValue in
+            // On fresh stream start, re-arm the hidden state. When the
+            // stream closes we leave `searchRevealed` alone — the guard
+            // below already shows the bar once `isPriceLoading` is false.
+            if newValue == true {
+                searchRevealed = false
+            }
+        }
         .task {
             if viewModel == nil {
                 viewModel = SearchViewModel(
@@ -42,6 +59,12 @@ struct SearchView: View {
                 )
             }
         }
+    }
+
+    // MARK: - Derived
+
+    private var hideNavDuringStream: Bool {
+        (viewModel?.presentedProductViewModel?.isPriceLoading == true) && !searchRevealed
     }
 
     // MARK: - Content
@@ -57,15 +80,27 @@ struct SearchView: View {
                 if let presentedVM = vm.presentedProductViewModel,
                    let product = presentedVM.product,
                    let comparison = presentedVM.priceComparison {
+                    // PriceComparisonView owns both loading + loaded states.
                     PriceComparisonView(
                         product: product,
                         comparison: comparison,
                         viewModel: presentedVM,
-                        browserURL: $browserURL
+                        browserURL: $browserURL,
+                        onPullDown: {
+                            if !searchRevealed {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    searchRevealed = true
+                                }
+                            }
+                        }
                     )
-                } else if vm.presentedProductViewModel?.isPriceLoading == true,
-                          let product = vm.presentedProductViewModel?.product {
-                    LoadingState(message: "Finding the lowest prices for \(product.name)…")
+                    .transition(.opacity)
+                } else if let presentedVM = vm.presentedProductViewModel,
+                          presentedVM.isPriceLoading,
+                          let product = presentedVM.product {
+                    // Pre-first-event only.
+                    PriceLoadingHero(product: product)
+                        .transition(.opacity)
                 } else if vm.isLoading {
                     LoadingState(message: "Searching…")
                 } else if let error = vm.error {

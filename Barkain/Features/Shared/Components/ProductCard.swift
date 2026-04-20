@@ -14,11 +14,18 @@ struct ProductCard: View {
         HStack(spacing: Spacing.md) {
             productImage
             productInfo
-            Spacer()
+            Spacer(minLength: 0)
         }
         .padding(Spacing.md)
-        .background(Color.barkainSurfaceContainerLowest)
-        .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadius))
+        .background(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                .fill(Color.barkainSurfaceContainerLowest)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                .stroke(Color.barkainOutlineVariant.opacity(0.12), lineWidth: 1)
+        )
+        .barkainShadowSoft()
     }
 
     // MARK: - Subviews
@@ -31,11 +38,12 @@ struct ProductCard: View {
                     case .success(let image):
                         image
                             .resizable()
-                            .aspectRatio(contentMode: .fit)
+                            .aspectRatio(contentMode: .fill)
                     case .failure:
                         imagePlaceholder
                     case .empty:
                         ProgressView()
+                            .tint(.barkainPrimary)
                     @unknown default:
                         imagePlaceholder
                     }
@@ -44,28 +52,26 @@ struct ProductCard: View {
                 imagePlaceholder
             }
         }
-        .frame(width: 80, height: 80)
+        .frame(width: 88, height: 88)
         .background(Color.barkainSurfaceContainerLow)
-        .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadiusSmall))
+        .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadiusSmall, style: .continuous))
     }
 
     private var imagePlaceholder: some View {
         Image(systemName: "photo")
             .font(.title2)
-            .foregroundStyle(Color.barkainOutline)
+            .foregroundStyle(Color.barkainOutlineVariant)
     }
 
     private var productInfo: some View {
         VStack(alignment: .leading, spacing: Spacing.xxs) {
             if let brand = product.brand {
-                Text(brand.uppercased())
-                    .font(.barkainLabel)
-                    .foregroundStyle(Color.barkainPrimary)
-                    .tracking(1)
+                Text(brand)
+                    .barkainEyebrow()
             }
 
             Text(product.name)
-                .font(.barkainHeadline)
+                .font(.barkainTitle2)
                 .foregroundStyle(Color.barkainOnSurface)
                 .lineLimit(2)
 
@@ -92,4 +98,5 @@ struct ProductCard: View {
         source: "gemini_upc"
     ))
     .padding()
+    .background(Color.barkainSurface)
 }

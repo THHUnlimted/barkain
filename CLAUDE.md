@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** 2026-04-19 (v5.4 — recompacted post-3d; full rationale in `docs/CHANGELOG.md`)
+> **Last updated:** 2026-04-20 (v5.5 — ui-refresh-v1 entry + nav-bar-hide trick in iOS conventions)
 
 ---
 
@@ -194,6 +194,7 @@ User scans barcode (iOS)
 - **SSE consumer:** use a manual byte-level splitter over `URLSession.AsyncBytes`, NOT `bytes.lines` — `.lines` buffers aggressively for small payloads (2c-val-L6)
 - **Simulator `API_BASE_URL`:** use `http://127.0.0.1:8000`, NOT `localhost:8000` — skips IPv6 happy-eyeballs fallback
 - **SSE debugging:** `com.barkain.app`/`SSE` os_log category captures every line + parse + decode + fallback. Watch with `xcrun simctl spawn booted log stream --level debug --predicate 'subsystem == "com.barkain.app" AND category == "SSE"'`
+- **Hiding a `.searchable` nav bar:** `.searchable(isPresented:)` with `.navigationBarDrawer(.always)` only toggles focus, **not** visibility. To actually remove the bar, apply `.toolbar(.hidden, for: .navigationBar)` on the root view (SearchView hides its whole nav chrome — title + drawer — during price streaming, then restores on pull-down / stream close) (ui-refresh-v1)
 
 ### Git
 - Branch per step: `phase-N/step-Na`
@@ -277,6 +278,7 @@ Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; 
 | 3c-hardening | Live-test bundle: Amazon platform-suffix accessory filter, service/repair filter, Walmart 5× CHALLENGE retry + back-off, Best Buy 429/5xx retry + query sanitizer, Redis device→UPC cache (24h), Redis scoped cache for `query_override` runs, iOS sheet-anchoring fix | +26 | — | #32 |
 | 3d | Autocomplete: `actor AutocompleteService` (sorted-array binary search over bundled JSON) + `.searchable + .searchSuggestions + .searchCompletion` + `RecentSearches` (UserDefaults, legacy-key migrated) + `scripts/generate_autocomplete_vocab.py` Amazon sweep (4,448 terms / 128 KB). Removed 300 ms auto-debounce-search; submit-driven now | +23 | +34 / +1 UI | #34 |
 | 3d-noise-filter | Search cascade noise filter: `_is_tier2_noise` classifier (category + title denylist) escalates Tier 3 Gemini when only accessories / AppleCare / protection / monitors / games surface; merge drops noise on escalation so flagship hits aren't crowded out at `max_results`. Cost guard preserved (real ASUS RTX 5090 keeps Gemini quiet). 9/9 live probe queries fixed | +4 | — | #36 |
+| ui-refresh-v1 | HTML-style-guide design pass: warm-gold palette (dynamic light/dark), rounded system fonts, shadow/shimmer helpers. Price-loading hero with glowing paw (halo pulse + gradient sweep), rotating puns, "Checking your discounts & cards too" chip. Retailer rows stream in live with spring price-sort as they arrive (Best Barkain tracks current cheapest). Nav bar (search drawer + title) hides while streaming and returns on pull-down past 32pt or stream close. `SearchResultRow` moved to `Features/Shared/Components/` | — | — | TBD |
 
 **Test totals:** ~516 backend + 100 iOS unit + 4 iOS UI. `ruff check` clean. `xcodebuild` clean.
 
@@ -304,7 +306,7 @@ Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; 
 ## What's Next
 
 1. **Phase 2 CLOSED** — `v0.2.0` tagged (2026-04-16). Outstanding: revoke leaked PAT `gho_UUsp9ML7…` in GitHub UI (SP-L1-b, Mike).
-2. **Phase 3:** 3a–3c-hardening ✅, 3d ✅ autocomplete (#34), 3d-noise-filter ✅ Tier 2 noise classifier escalates Gemini (#36). Next: 3e M6 Recommendation Engine (Claude Sonnet), then 3f cards, 3g portals, 3h image, 3i receipts, 3j identity stacking, 3k savings, 3l coupons, 3m hardening + `v0.3.0`. See `docs/CHANGELOG.md` + `docs/PHASES.md`.
+2. **Phase 3:** 3a–3c-hardening ✅, 3d ✅ autocomplete (#34), 3d-noise-filter ✅ Tier 2 noise classifier escalates Gemini (#36), ui-refresh-v1 ✅ glowing-paw loading hero + live price streaming (TBD PR). Next: 3e M6 Recommendation Engine (Claude Sonnet), then 3f cards, 3g portals, 3h image, 3i receipts, 3j identity stacking, 3k savings, 3l coupons, 3m hardening + `v0.3.0`. See `docs/CHANGELOG.md` + `docs/PHASES.md`.
 3. **Phase 4 — Production Optimization:** ~~Best Buy~~ (done via demo-prep bundle, PR #30), Keepa API adapter, App Store submission, Sentry error tracking
 4. **Phase 5 — Growth:** Push notifications (APNs), web dashboard, Android (KMP)
 

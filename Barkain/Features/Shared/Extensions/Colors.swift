@@ -1,76 +1,144 @@
 import SwiftUI
 
 // MARK: - Barkain Color Palette
+//
+// Derived from the Barkain HTML style guide. Hex values are the canonical
+// source of truth — if you change one here, change it in the web guide too.
+//
+// Every token below resolves DIFFERENTLY in light and dark mode. SwiftUI
+// does the swap automatically via `UIColor(dynamicProvider:)` — callers
+// keep using `.barkainSurface`, `.barkainOnSurface`, etc. and get the
+// correct hue for the current interface style.
+//
+// Dark-mode ramp is anchored on a deep brown-black (#0f1519) rather than
+// pure black — it keeps the warm undertone of the brand and stops the
+// gold accents from looking neon.
+
+private extension Color {
+    /// Helper: build a `Color` whose hex changes with `userInterfaceStyle`.
+    static func dynamic(light: UInt32, dark: UInt32) -> Color {
+        #if canImport(UIKit)
+        return Color(UIColor { trait in
+            trait.userInterfaceStyle == .dark
+                ? UIColor(hex: dark)
+                : UIColor(hex: light)
+        })
+        #else
+        return Color(hex: light)
+        #endif
+    }
+
+    init(hex: UInt32) {
+        let r = Double((hex >> 16) & 0xFF) / 255
+        let g = Double((hex >> 8) & 0xFF) / 255
+        let b = Double(hex & 0xFF) / 255
+        self.init(red: r, green: g, blue: b)
+    }
+}
+
+#if canImport(UIKit)
+import UIKit
+private extension UIColor {
+    convenience init(hex: UInt32) {
+        let r = CGFloat((hex >> 16) & 0xFF) / 255
+        let g = CGFloat((hex >> 8) & 0xFF) / 255
+        let b = CGFloat(hex & 0xFF) / 255
+        self.init(red: r, green: g, blue: b, alpha: 1)
+    }
+}
+#endif
 
 extension Color {
 
     // MARK: - Primary
+    //
+    // Primary stays warm in both modes. In dark mode we lift the gold a
+    // touch (#ffc35a vs #f9b12d) so the brand gradient still pops against
+    // the near-black surface.
 
-    /// Warm brown — brand primary (#7f5600)
-    static let barkainPrimary = Color(red: 0x7F / 255, green: 0x56 / 255, blue: 0x00 / 255)
+    /// Warm brown (light) / bright gold (dark) — brand primary.
+    /// Light #7f5600 · Dark #ffba41
+    static let barkainPrimary = Color.dynamic(light: 0x7F5600, dark: 0xFFBA41)
 
-    /// Warm gold — buttons, badges, gradients (#f9b12d)
-    static let barkainPrimaryContainer = Color(red: 0xF9 / 255, green: 0xB1 / 255, blue: 0x2D / 255)
+    /// Primary container — gradient right stop + "Best Barkain" pill fill.
+    /// Light #f9b12d · Dark #ffc35a
+    static let barkainPrimaryContainer = Color.dynamic(light: 0xF9B12D, dark: 0xFFC35A)
 
-    /// Light gold — backgrounds (#ffddaf)
-    static let barkainPrimaryFixed = Color(red: 0xFF / 255, green: 0xDD / 255, blue: 0xAF / 255)
+    /// Soft tonal backgrounds for chips/banners.
+    /// Light #ffddaf · Dark #3a2d15 (warm brown tint on dark surface)
+    static let barkainPrimaryFixed = Color.dynamic(light: 0xFFDDAF, dark: 0x3A2D15)
 
-    /// Bright gold — accent highlights (#ffba41)
-    static let barkainPrimaryFixedDim = Color(red: 0xFF / 255, green: 0xBA / 255, blue: 0x41 / 255)
+    /// Bright gold accent — chart strokes, dark-mode logotype.
+    /// Light #ffba41 · Dark #ffd073
+    static let barkainPrimaryFixedDim = Color.dynamic(light: 0xFFBA41, dark: 0xFFD073)
+
+    /// Deep brown — label text on `primaryContainer`.
+    /// Light #694700 · Dark #f9b12d (so it reads on dark-mode containers)
+    static let barkainOnPrimaryContainer = Color.dynamic(light: 0x694700, dark: 0x2A1C00)
 
     // MARK: - Surface
+    //
+    // Light surfaces are a cool off-white (#f4faff). Dark surfaces are a
+    // warm near-black (#0f1519) stepped up in 5 elevations to match the
+    // Material 3 surface-container ramp.
 
-    /// App background (#f4faff)
-    static let barkainSurface = Color(red: 0xF4 / 255, green: 0xFA / 255, blue: 0xFF / 255)
+    static let barkainSurface = Color.dynamic(light: 0xF4FAFF, dark: 0x0F1519)
 
-    /// Card backgrounds (#e3f0f8)
-    static let barkainSurfaceContainer = Color(red: 0xE3 / 255, green: 0xF0 / 255, blue: 0xF8 / 255)
+    static let barkainSurfaceContainerLowest = Color.dynamic(light: 0xFFFFFF, dark: 0x0A0F13)
 
-    /// Lighter cards (#e9f6fd)
-    static let barkainSurfaceContainerLow = Color(red: 0xE9 / 255, green: 0xF6 / 255, blue: 0xFD / 255)
+    static let barkainSurfaceContainerLow = Color.dynamic(light: 0xE9F6FD, dark: 0x141B21)
 
-    /// Darker cards (#ddeaf2)
-    static let barkainSurfaceContainerHigh = Color(red: 0xDD / 255, green: 0xEA / 255, blue: 0xF2 / 255)
+    static let barkainSurfaceContainer = Color.dynamic(light: 0xE3F0F8, dark: 0x1A2229)
 
-    /// Darkest surface (#d7e4ec)
-    static let barkainSurfaceContainerHighest = Color(red: 0xD7 / 255, green: 0xE4 / 255, blue: 0xEC / 255)
+    static let barkainSurfaceContainerHigh = Color.dynamic(light: 0xDDEAF2, dark: 0x222B32)
 
-    /// White cards (#ffffff)
-    static let barkainSurfaceContainerLowest = Color.white
+    static let barkainSurfaceContainerHighest = Color.dynamic(light: 0xD7E4EC, dark: 0x2A343C)
 
     // MARK: - On Surface
+    //
+    // In dark mode, primary text is an off-white (#e8eef2) — not pure
+    // white, so the brand's warmth carries through.
 
-    /// Primary text (#111d23)
-    static let barkainOnSurface = Color(red: 0x11 / 255, green: 0x1D / 255, blue: 0x23 / 255)
+    static let barkainOnSurface = Color.dynamic(light: 0x111D23, dark: 0xE8EEF2)
 
-    /// Secondary text (#504533)
-    static let barkainOnSurfaceVariant = Color(red: 0x50 / 255, green: 0x45 / 255, blue: 0x33 / 255)
+    static let barkainOnSurfaceVariant = Color.dynamic(light: 0x504533, dark: 0xB8AC96)
 
-    /// Dark surfaces (#263238)
-    static let barkainInverseSurface = Color(red: 0x26 / 255, green: 0x32 / 255, blue: 0x38 / 255)
+    /// Inverted surface — snackbars, tooltips. Flips on dark.
+    static let barkainInverseSurface = Color.dynamic(light: 0x263238, dark: 0xE8EEF2)
 
     // MARK: - Semantic
 
-    /// Error red (#ba1a1a)
-    static let barkainError = Color(red: 0xBA / 255, green: 0x1A / 255, blue: 0x1A / 255)
+    /// Error red. Lifted in dark mode for accessibility.
+    static let barkainError = Color.dynamic(light: 0xBA1A1A, dark: 0xFF6B6B)
 
-    /// Success green (#4caf50)
-    static let barkainSuccess = Color(red: 0x4C / 255, green: 0xAF / 255, blue: 0x50 / 255)
+    /// Success green — retailer-check rows in the loading state.
+    static let barkainSuccess = Color.dynamic(light: 0x4CAF50, dark: 0x6FCF74)
 
     // MARK: - Outline
 
-    /// Borders (#827561)
-    static let barkainOutline = Color(red: 0x82 / 255, green: 0x75 / 255, blue: 0x61 / 255)
+    static let barkainOutline = Color.dynamic(light: 0x827561, dark: 0x8E8168)
 
-    /// Light borders (#d4c4ac)
-    static let barkainOutlineVariant = Color(red: 0xD4 / 255, green: 0xC4 / 255, blue: 0xAC / 255)
+    static let barkainOutlineVariant = Color.dynamic(light: 0xD4C4AC, dark: 0x3D3528)
 
     // MARK: - Gradients
+    //
+    // Gradients are NOT dynamic — they resolve each time the view rebuilds,
+    // picking up whichever `.barkainPrimary` / `.barkainPrimaryContainer`
+    // is current for the environment.
 
-    /// Primary gradient: brown → gold
+    /// Brand gradient: brown → gold (light) or gold → bright-gold (dark).
+    /// Used for primary CTAs and the Kennel points header card.
     static let barkainPrimaryGradient = LinearGradient(
         colors: [.barkainPrimary, .barkainPrimaryContainer],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
+    )
+
+    /// Subtle glow behind search fields — soft gold at low opacity.
+    static let barkainGlowGradient = RadialGradient(
+        colors: [Color.barkainPrimary.opacity(0.12), .clear],
+        center: .center,
+        startRadius: 0,
+        endRadius: 260
     )
 }

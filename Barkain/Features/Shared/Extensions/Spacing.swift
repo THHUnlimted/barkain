@@ -1,6 +1,10 @@
 import Foundation
+import CoreGraphics
 
 // MARK: - Barkain Spacing Constants
+//
+// These match the HTML Tailwind spacing scale + the web style guide's
+// corner-radius tokens (DEFAULT=16, lg=32, xl=48, full=∞).
 
 enum Spacing {
 
@@ -16,8 +20,18 @@ enum Spacing {
 
     // MARK: - Corner Radius
 
-    static let cornerRadius: CGFloat = 16
+    /// 8 — chips, small thumbnails.
     static let cornerRadiusSmall: CGFloat = 8
+
+    /// 16 — default card radius. Matches Tailwind `rounded-DEFAULT`.
+    static let cornerRadius: CGFloat = 16
+
+    /// 32 — hero cards, filled CTAs. Matches Tailwind `rounded-lg`.
     static let cornerRadiusLarge: CGFloat = 32
+
+    /// 48 — marketing-hero radius. Matches Tailwind `rounded-xl`.
+    static let cornerRadiusXLarge: CGFloat = 48
+
+    /// ∞ — pills, chips, avatars.
     static let cornerRadiusFull: CGFloat = 9999
 }

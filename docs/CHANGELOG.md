@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-18 (Post-Demo-Prep Sweep — walmart fix, lowes/sams_club drop, amazon Scraper API)
+> Last updated: 2026-04-20 (Step ui-refresh-v1 — HTML-style-guide UI pass + live-streaming price comparison)
 
 ---
 
@@ -2106,4 +2106,160 @@ search after a deep search benefits from the deeper Gemini answer.
 - Filter applies to all retailers for symmetry, but in practice only BBY
   surfaces these rows currently. UPCitemdb rarely returns matched-category
   noise; if that changes the filter is already wired in.
+
+### Step ui-refresh-v1 — HTML-style-guide UI pass + live-streaming price comparison (2026-04-20)
+
+**Branch:** `phase-3/ui-refresh-v1`. Driven entirely by live sim + iPhone
+testing over a single session. The planner (Mike) supplied a bundled
+design-asset zip derived from the HTML style guide, plus a reference HTML
+file for a glowing-paw logo; the coding agent ported each into SwiftUI and
+iterated the loading flow based on user feedback ("the search animation
+is when it's actually loading", "the lowest price should shuffle toward
+the top as it comes in", "the search bar should completely disappear when
+streaming").
+
+**What landed.**
+
+1. **Design-asset pass** — `Features/Shared/Extensions/Colors.swift` swapped
+   to a dynamic light/dark palette (warm gold/brown surfaces on light;
+   deep #0f1519 with #e8eef2 text on dark, via `UIColor(dynamicProvider:)`).
+   New `Shadows.swift` exposes `barkainShadowSoft / Lift / Glow` view
+   modifiers. Typography reverted to Apple system fonts (rounded design on
+   headlines, default on body) after the Plus Jakarta / Manrope custom
+   lookups weren't bundled; `barkainEyebrow()` + `barkainDisplayTracking()`
+   helpers preserved. Spacing added `cornerRadiusXLarge` (48) +
+   `cornerRadiusFull` (9999). All 5 shared components (EmptyState,
+   ProductCard, PriceRow, SavingsBadge, LoadingState → later re-reverted)
+   picked up the new shadow/radius/continuous-corner treatment and
+   `barkainEyebrow()`.
+
+2. **`GlowingPawLogo`** (new) — port of
+   `prototype/barkain_glowing_paw_logo.html`. 160pt default frame with a
+   gold radial halo (pulse: opacity 0.35→0.75, scale 0.92→1.08, 1.1s
+   ease-in-out) + a `pawprint.fill` base + a light-gold shimmer band
+   (`#ffd98a` at 0.85 opacity) masked to the paw's silhouette and sliding
+   horizontally across it via an offset-animated overlay. `LinearGradient`
+   stops aren't animatable in SwiftUI, so the shimmer uses a plain
+   `Rectangle` fill inside a `.mask { Image("pawprint.fill") }` with an
+   `offset(x:)` that autoreverses between `-pawSize` and `+pawSize`.
+
+3. **Loading hero + live retailer stream (core UX)** — after three
+   iterations the final shape is: while `viewModel.isPriceLoading == true`,
+   `PriceComparisonView` renders
+   `ProductCard → SniffingHeroSection → sectionHeader → retailerList`,
+   hiding `savingsSection`, `identityDiscountsSection`, `cardUpgradeBanner`,
+   `addCardsCTA`, `statusBar`, `actionButtons` until the stream closes.
+   `SniffingHeroSection` owns the 160pt paw, the "Sniffing out deals for
+   {product}" headline, a rotating pun (5 entries, crossfaded via
+   `.id(punIndex) + .transition(.opacity)` every 2.5 s via a `.task {}`
+   loop that self-cancels on disappear), and a
+   `ticket.fill + "Checking your discounts & cards too"` capsule chip.
+
+   Retailer rows stream in from the first SSE event onward and are fully
+   clickable — the user's explicit requirement was "don't hide results
+   behind a loading wall". `allRetailerRows` always price-sorts success
+   rows (cheapest first), so new arrivals shuffle into their correct slot
+   with a spring transition (`.spring(response: 0.45, dampingFraction:
+   0.85)` on `comparison.retailerResults` / `comparison.prices` changes).
+   `isBest: index == 0` and the floating "Best Barkain" badge track
+   whichever row is currently cheapest — accurate even during streaming.
+
+   When `isPriceLoading` flips false, `SniffingHeroSection` fades out and
+   `savingsSection + identityDiscountsSection + card banners + CTAs +
+   status bar + action buttons` fade in together via
+   `.animation(.easeInOut(duration: 0.45), value: viewModel.isPriceLoading)`
+   combined with per-section `.transition(.opacity)`.
+
+4. **`PriceLoadingHero`** (new) — standalone wrapper used only during
+   the pre-first-event window (product resolved, first SSE byte not yet
+   in). Embeds `ProductCard + SniffingHeroSection` in a `ScrollView`.
+   Scanner/Search fall through to this branch when `priceComparison ==
+   nil && isPriceLoading == true`.
+
+5. **Nav-bar hide during streaming** — SearchView's full nav chrome
+   (title "Search" + `.searchable` drawer) disappears while prices are
+   streaming and returns either when the user pulls the comparison list
+   down past 32 pt of rubber-band or when the stream closes. Implemented
+   via `.toolbar(.hidden, for: .navigationBar)` gated on
+   `hideNavDuringStream = (isPriceLoading == true) && !searchRevealed`.
+   `searchRevealed` is a `@State` that resets to `false` on every stream
+   start (via `.onChange(of: viewModel?.presentedProductViewModel?.isPriceLoading)`)
+   and flips to `true` when `PriceComparisonView` fires its new
+   `onPullDown` closure. The pull-down probe is a zero-height `Color.clear`
+   at the top of the ScrollView content with a `GeometryReader`
+   monitoring its `minY` in a named coordinate space (`"barkainScroll"`);
+   any `minY > 32` fires the callback.
+
+6. **`SearchResultRow` relocation** — moved from `Features/Search/` to
+   `Features/Shared/Components/` (no API change). Xcode 16 filesystem-
+   synchronized groups auto-picked it up; no pbxproj edit needed.
+
+7. **Deleted**: `PriceStreamLoader.swift` (intermediate iteration — a
+   gated loader with a hardcoded retailer checklist; replaced by the
+   live-streaming rows inside PriceComparisonView).
+
+**Files changed.** New:
+`Features/Shared/Components/GlowingPawLogo.swift`,
+`SniffingHeroSection.swift`, `PriceLoadingHero.swift`, `ScentTrail.swift`
+(ships `ScentTrail` dotted divider + reusable `BestBarkainBadge` —
+neither wired into a caller yet), `SearchResultRow.swift` (relocation),
+`Shadows.swift`. Modified: `Colors.swift`, `Typography.swift`,
+`Spacing.swift`, `EmptyState.swift`, `ProductCard.swift`, `PriceRow.swift`,
+`SavingsBadge.swift`, `LoadingState.swift`, `PriceComparisonView.swift`,
+`ScannerView.swift`, `SearchView.swift`, `Config/Debug.xcconfig`
+(LAN IP bumped to 192.168.1.208 for physical-device testing). Deleted:
+`Features/Search/SearchResultRow.swift` (moved), `PriceStreamLoader.swift`.
+
+**Tests.** None added — all changes are visual / animation-layer. The
+existing unit + UI test suite (100 iOS unit / 4 UI) remains green;
+`xcodebuild` clean on both sim (iPhone 17 Pro, iOS 26.4) and physical
+iPhone 15.
+
+**Key decisions.**
+
+- **Iteration path, not rip-and-replace.** The final flow is the third
+  shape tried: (a) gated `PriceStreamLoader` blocking results until stream
+  closed → rejected ("results should be clickable as they come in"); (b)
+  live `PriceComparisonView` with newest-arrival on top + final price-sort
+  at stream close → rejected ("lowest price should shuffle toward the top
+  as it comes in, don't wait till the end"); (c) continuous price-sort +
+  hero + non-retailer sections fading in on close. Shipped (c). The
+  prior intermediates live in git history, not in code.
+- **Nav-bar hide, not search-bar-collapse.** `.searchable(isPresented:)`
+  with `.navigationBarDrawer(.always)` only toggles focus; the bar stays
+  drawn. `.toolbar(.hidden, for: .navigationBar)` is the only native API
+  that actually removes the drawer. Hides the "Search" title too, but
+  ProductCard + hero carry enough context during streaming.
+- **Pull-down probe is a zero-height `Color.clear`**, not a gesture or a
+  `.refreshable`. A GeometryReader in a named coordinate space reports
+  the probe's `minY`; the rubber-band region fires it cleanly without
+  interfering with scroll momentum. Firing fires once per stream
+  (`searchRevealed` latches true until the next stream start).
+- **No custom font bundling.** The HTML style guide pairs Plus Jakarta
+  Sans (display) with Manrope (body). iOS couldn't load the custom
+  families without the .ttf files in the target — fell back to system
+  default, looking inconsistent. Reverted to `.system(..., design:
+  .rounded)` for headlines + default for body. The rounded design
+  preserves the brand's warmth.
+- **Shadows are view modifiers, not ShapeStyle presets.**
+  `barkainShadowSoft / Lift / Glow` wrap `self.shadow(color:radius:x:y:)`
+  rather than exposing a shadow config struct — callers stay concise
+  (`.barkainShadowSoft()`), and the brown-anchored shadow color stays
+  inside the helper so light/dark-mode behavior is uniform.
+
+**Outstanding (deferred to future iteration).**
+
+- `ScentTrail` + `BestBarkainBadge` (from the zip) are defined but not
+  wired. Candidates: scent-trail divider after "Scent Tracked" eyebrows
+  on saved-search rows; shared `BestBarkainBadge` to replace the
+  inline overlay in `PriceComparisonView` (currently duplicates the same
+  geometry inline).
+- ScannerView keeps the hero standalone (via `PriceLoadingHero`) for the
+  pre-first-event case but doesn't hide its own nav bar — barcode scan
+  doesn't have a `.searchable`, and there's no nav chrome worth hiding
+  there. If a future flow wants the same hide treatment in the scan
+  path, the `onPullDown` pattern lifts cleanly.
+- No unit tests for the pun rotator or the pull-down probe. Animations
+  and timer-driven UI traditionally aren't unit-tested; the full flow
+  got validated on sim + physical iPhone.
 

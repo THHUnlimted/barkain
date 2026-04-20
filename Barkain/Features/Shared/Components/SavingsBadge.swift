@@ -12,18 +12,26 @@ struct SavingsBadge: View {
     // MARK: - Body
 
     var body: some View {
-        HStack(spacing: Spacing.xxs) {
+        HStack(spacing: Spacing.xs) {
             Image(systemName: "arrow.down.circle.fill")
-                .font(.caption)
+                .font(.system(size: 14, weight: .bold))
             Text("Save \(formattedAmount)" + (percentageOff > 0 ? " (\(percentageOff)%)" : ""))
                 .font(.barkainLabel)
-                .tracking(0.5)
+                .tracking(1.2)
+                .textCase(.uppercase)
         }
-        .foregroundStyle(Color.barkainPrimary)
-        .padding(.horizontal, Spacing.sm)
-        .padding(.vertical, 6)
-        .background(Color.barkainPrimaryFixed.opacity(0.5))
-        .clipShape(Capsule())
+        .foregroundStyle(Color.barkainOnPrimaryContainer)
+        .padding(.horizontal, Spacing.md)
+        .padding(.vertical, Spacing.xs)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.barkainPrimaryFixed)
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.barkainPrimaryContainer.opacity(0.4), lineWidth: 1)
+        )
+        .barkainShadowSoft()
     }
 
     // MARK: - Helpers
@@ -46,4 +54,6 @@ struct SavingsBadge: View {
 
 #Preview {
     SavingsBadge(savedAmount: 51.99, originalPrice: 349.99)
+        .padding()
+        .background(Color.barkainSurface)
 }
