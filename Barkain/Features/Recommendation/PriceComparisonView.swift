@@ -36,6 +36,10 @@ struct PriceComparisonView: View {
     var onRequestOnboarding: (() -> Void)? = nil
     var onRequestAddCards: (() -> Void)? = nil
     var onRequestUpgrade: (() -> Void)? = nil
+    /// Fires once when the user pulls the ScrollView past its top edge.
+    /// SearchView uses this to reveal its hidden `.searchable` bar during
+    /// the streaming phase. ScannerView leaves this nil.
+    var onPullDown: (() -> Void)? = nil
 
     @Environment(FeatureGateService.self) private var featureGate
 
@@ -47,23 +51,56 @@ struct PriceComparisonView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: Spacing.lg) {
-                ProductCard(product: product)
-                savingsSection
+                // Invisible pull-down probe. When content is dragged past
+                // the ScrollView's top edge (rubber-band region), fire
+                // `onPullDown` so SearchView can reveal its search bar.
+                Color.clear
+                    .frame(height: 0)
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear
+                                .onChange(
+                                    of: geo.frame(in: .named("barkainScroll")).minY
+                                ) { _, newValue in
+                                    if newValue > 32 { onPullDown?() }
+                                }
+                        }
+                    )
 
-                identityDiscountsSection
+                ProductCard(product: product)
+
+                // While streaming: the hero replaces savings + identity
+                // discounts so the focus stays on the dog working. Rows
+                // below still stream in and are fully interactive.
+                if viewModel.isPriceLoading {
+                    SniffingHeroSection(productName: product.name)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                } else {
+                    savingsSection
+                    identityDiscountsSection
+                }
 
                 sectionHeader
-                cardUpgradeBanner
+                if !viewModel.isPriceLoading {
+                    cardUpgradeBanner
+                }
                 retailerList
 
-                addCardsCTA
-                statusBar
-                actionButtons
+                if !viewModel.isPriceLoading {
+                    addCardsCTA
+                        .transition(.opacity)
+                    statusBar
+                        .transition(.opacity)
+                    actionButtons
+                        .transition(.opacity)
+                }
             }
             .padding(Spacing.lg)
             .animation(.easeInOut(duration: 0.3), value: viewModel.identityDiscounts)
             .animation(.easeInOut(duration: 0.3), value: viewModel.cardRecommendations)
+            .animation(.easeInOut(duration: 0.45), value: viewModel.isPriceLoading)
         }
+        .coordinateSpace(name: "barkainScroll")
     }
 
     // MARK: - Card upgrade banner (Step 2f)
@@ -192,6 +229,9 @@ struct PriceComparisonView: View {
             }
         }
 
+        // Always price-sort — new arrivals shuffle into the cheapest slot
+        // they belong in as soon as they land. Failures pin to the bottom
+        // so they don't jostle the success rows around.
         successRows.sort { lhs, rhs in
             switch (lhs, rhs) {
             case (.success(let a), .success(let b)): return a.price < b.price
@@ -245,7 +285,10 @@ struct PriceComparisonView: View {
                                 // upgrade nudge on every row.
                                 cardRecommendation: featureGate.canAccess(.cardRecommendations)
                                     ? viewModel.cardRecommendations.first { $0.retailerId == retailerPrice.retailerId }
-                                    : nil
+                                    : nil,
+                                // Top row is always the current cheapest —
+                                // it's accurate during streaming too.
+                                isBest: index == 0
                             )
                         }
                         .buttonStyle(.plain)
@@ -256,6 +299,10 @@ struct PriceComparisonView: View {
                         inactiveRow(name: result.retailerName, label: "Unavailable")
                     }
                 }
+                .transition(.asymmetric(
+                    insertion: .move(edge: .top).combined(with: .opacity),
+                    removal: .opacity
+                ))
                 .overlay(alignment: .topTrailing) {
                     if index == 0, case .success = row {
                         bestBarkainBadge
@@ -264,8 +311,11 @@ struct PriceComparisonView: View {
             }
         }
         // Step 2c: animate row transitions as SSE events arrive.
-        .animation(.default, value: comparison.retailerResults)
-        .animation(.default, value: comparison.prices)
+        // Glide new rows in from the top, then smoothly resort when the
+        // stream closes (isPriceLoading flips → allRetailerRows reorders).
+        .animation(.spring(response: 0.45, dampingFraction: 0.85), value: comparison.retailerResults)
+        .animation(.spring(response: 0.45, dampingFraction: 0.85), value: comparison.prices)
+        .animation(.spring(response: 0.6, dampingFraction: 0.82), value: viewModel.isPriceLoading)
     }
 
     private func inactiveRow(name: String, label: String) -> some View {
