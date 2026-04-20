@@ -17,7 +17,16 @@ final class SearchViewModel {
     var results: [ProductSearchResult] = []
     var isLoading: Bool = false
     var error: APIError?
+
+    /// Mirror of the `RecentSearches` service so SwiftUI re-renders when
+    /// the user adds or clears a recent. The service is the source of
+    /// truth for persistence; this property is read-only externally.
     var recentSearches: [String] = []
+
+    /// Live autocomplete suggestions for the current `query`. Driven by
+    /// `onQueryChange` — recents when the field is empty, prefix matches
+    /// otherwise.
+    var suggestions: [String] = []
 
     /// Set by `handleResultTap` when a Gemini result lacks a primary UPC —
     /// the view surfaces this as a toast so the user knows to scan instead.
@@ -31,89 +40,98 @@ final class SearchViewModel {
 
     @ObservationIgnored private let apiClient: any APIClientProtocol
     @ObservationIgnored private let featureGate: FeatureGateService
-    @ObservationIgnored private let userDefaults: UserDefaults
-    @ObservationIgnored private let debounceNanos: UInt64
-    @ObservationIgnored private let clock: @Sendable () async throws -> Void
+    @ObservationIgnored private let autocompleteService: any AutocompleteServiceProtocol
+    @ObservationIgnored private let recents: RecentSearches
 
     @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var suggestionsTask: Task<Void, Never>?
 
     // MARK: - Constants
 
-    static let recentSearchesKey = "recentSearches"
-    static let maxRecentSearches = 10
     static let defaultMaxResults = 10
-    nonisolated static let defaultDebounceNanos: UInt64 = 300_000_000  // 300ms
+    static let suggestionsLimit = 8
 
     // MARK: - Init
 
     init(
         apiClient: any APIClientProtocol,
         featureGate: FeatureGateService? = nil,
-        userDefaults: UserDefaults = .standard,
-        debounceNanos: UInt64 = SearchViewModel.defaultDebounceNanos,
-        clock: (@Sendable () async throws -> Void)? = nil
+        autocompleteService: (any AutocompleteServiceProtocol)? = nil,
+        recentSearches: RecentSearches? = nil
     ) {
         self.apiClient = apiClient
         self.featureGate = featureGate ?? FeatureGateService(proTierProvider: { false })
-        self.userDefaults = userDefaults
-        self.debounceNanos = debounceNanos
-        let capturedDebounce = debounceNanos
-        self.clock = clock ?? {
-            try await Task.sleep(nanoseconds: capturedDebounce)
-        }
-        self.recentSearches = Self.loadRecentSearches(from: userDefaults)
+        self.autocompleteService = autocompleteService ?? NoopAutocompleteService()
+        self.recents = recentSearches ?? RecentSearches()
+        self.recentSearches = self.recents.all()
+        self.suggestions = self.recentSearches
     }
 
-    // MARK: - Actions
+    // MARK: - Search input
 
-    /// Called whenever the search-bar text changes. Cancels any in-flight
-    /// search task, sleeps for the debounce interval, and then performs the
-    /// search if the task is still live. On empty query, clears results.
-    func queryChanged(_ newValue: String) {
-        // Editing the query reopens the "we can fetch more" hint, even if
-        // the user already deep-searched a previous string.
+    /// Called whenever the search-bar text changes. Only updates the
+    /// observable suggestions — the actual search is now submit-driven
+    /// (via `.searchCompletion` taps or the return key) per Step 3d.
+    func onQueryChange(_ newValue: String) async {
         if newValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             != (lastDeepSearchedQuery?.lowercased() ?? "") {
             lastDeepSearchedQuery = nil
         }
         query = newValue
         error = nil
-        searchTask?.cancel()
 
-        // If a previous tap left a PriceComparisonView on screen, dismiss it
-        // as soon as the user edits the search bar — otherwise the results
-        // list is hidden behind the comparison view and typing feels dead.
+        // Editing the query dismisses any presented PriceComparisonView so
+        // the suggestions list isn't hidden behind it.
         if presentedProductViewModel != nil {
             presentedProductViewModel = nil
         }
 
         let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
-            results = []
-            isLoading = false
+            suggestions = recentSearches
             return
         }
 
-        if trimmed.count < 3 {
-            // Backend will 422; don't bother sending.
-            results = []
-            isLoading = false
-            return
-        }
-
-        searchTask = Task { [weak self] in
+        suggestionsTask?.cancel()
+        let captured = trimmed
+        let task = Task { [weak self] in
             guard let self else { return }
-            do {
-                try await self.clock()
-            } catch {
-                return
-            }
+            let next = await self.autocompleteService.suggestions(
+                for: captured, limit: Self.suggestionsLimit
+            )
             if Task.isCancelled { return }
-            await self.performSearch(trimmed)
+            self.suggestions = next
         }
+        suggestionsTask = task
+        await task.value
     }
 
-    /// Direct (non-debounced) entry point used by recent-search taps + tests.
+    /// Tapping a `.searchCompletion(term)` row replaces the query and
+    /// fires the search, then records the term as a recent.
+    func onSuggestionTapped(_ term: String) async {
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        query = trimmed
+        suggestionsTask?.cancel()
+        searchTask?.cancel()
+        await performSearch(trimmed)
+        recordRecent(trimmed)
+    }
+
+    /// Manual return-key submit (covers raw-typed queries, including the
+    /// zero-match fallback row that submits the user's literal text).
+    func onSearchSubmitted(_ term: String) async {
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 3 else { return }
+        searchTask?.cancel()
+        await performSearch(trimmed)
+        recordRecent(trimmed)
+    }
+
+    // MARK: - Network search
+
+    /// Direct (non-debounced) entry point — used by suggestion taps and
+    /// manual submits. Sets `isLoading` for the duration of the API call.
     func performSearch(_ text: String, forceGemini: Bool = false) async {
         isLoading = true
         defer { isLoading = false }
@@ -136,23 +154,18 @@ final class SearchViewModel {
     }
 
     /// Deep search — invoked when the user submits the keyboard (return key)
-    /// after the debounced search returned results that don't substring-match
-    /// what they typed. Forces Gemini to run alongside Tier 2 and bypasses
-    /// the Redis cache so the user always gets a fresh long-tail sweep.
+    /// after the regular search returned results that don't substring-match
+    /// what they typed. Forces Gemini alongside Tier 2 and bypasses Redis.
     func deepSearch() async {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else { return }
         searchTask?.cancel()
         await performSearch(trimmed, forceGemini: true)
-        // Mark the query as "deep-searched" so the hint hides until the
-        // user edits the query again (see `queryChanged`).
         lastDeepSearchedQuery = trimmed
     }
 
     /// True as soon as the user has typed 3+ characters AND we haven't
-    /// already run a deep-search for the current query. Once the deep
-    /// search lands the hint disappears — the user already pulled that
-    /// lever and pestering them again would be noise.
+    /// already deep-searched the current query.
     var showDeepSearchHint: Bool {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else { return false }
@@ -163,19 +176,17 @@ final class SearchViewModel {
         return true
     }
 
-    /// Set after a successful deep search; cleared whenever the query
-    /// changes (see `queryChanged`). Used by `showDeepSearchHint` to
-    /// dismiss the affordance once the user has already invoked it.
     private var lastDeepSearchedQuery: String?
+
+    // MARK: - Result tap
 
     /// Called when the user taps a result row. For DB-sourced rows the
     /// `Product` is constructed from the row fields directly (no extra
-    /// request needed). For Gemini-sourced rows with a `primary_upc` we
-    /// run the existing `/products/resolve` path so the Product is created
-    /// or reused in the DB. Gemini rows without a UPC surface a toast —
-    /// we don't have a safe way to price them without a canonical identifier.
+    /// request). For Gemini rows with a `primary_upc` we run
+    /// `/products/resolve`; without a UPC we fall back to
+    /// `/products/resolve-from-search`.
     func handleResultTap(_ result: ProductSearchResult) async {
-        addToRecentSearches(query)
+        recordRecent(query)
         error = nil
         resolveFailureMessage = nil
 
@@ -198,14 +209,6 @@ final class SearchViewModel {
             await presentProduct(product)
 
         case .bestBuy, .upcitemdb, .gemini, .generic:
-            // Best Buy + Gemini rows are ephemeral — neither has a persisted
-            // product_id. Both carry a UPC most of the time (Best Buy almost
-            // always; Gemini sometimes), so prefer the UPC-direct path and
-            // fall back to /resolve-from-search when the UPC is missing.
-            // Generic rows always lack a UPC and additionally pass their
-            // own (stripped) name through to the price stream so retailers
-            // search the bare generic name instead of the resolved variant's
-            // SKU title (works for any device — iPhone, Galaxy, PS5, Moto…).
             isLoading = true
             defer { isLoading = false }
             do {
@@ -233,35 +236,32 @@ final class SearchViewModel {
 
     private func presentProduct(_ product: Product, queryOverride: String? = nil) async {
         let vm = ScannerViewModel(apiClient: apiClient, featureGate: featureGate)
-        // Inject the already-resolved product so handleBarcodeScan's redundant
-        // resolve call is skipped — jump straight to the price stream.
         vm.scannedUPC = product.upc
         vm.product = product
         presentedProductViewModel = vm
-        // `queryOverride` (set when the user tapped a generic row) flows
-        // through to retailer container searches so they get the bare
-        // generic string, not the resolved variant's SKU name.
         await vm.fetchPrices(queryOverride: queryOverride)
     }
 
-    // MARK: - Recent searches (@AppStorage-backed via UserDefaults)
+    // MARK: - Recent searches
 
-    func addToRecentSearches(_ raw: String) {
+    /// Wraps the `RecentSearches` service write + refreshes the local
+    /// observable mirror so `recentSearches` (and any view bound to it)
+    /// updates immediately.
+    private func recordRecent(_ raw: String) {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else { return }
-
-        var updated = recentSearches.filter { $0.lowercased() != trimmed.lowercased() }
-        updated.insert(trimmed, at: 0)
-        if updated.count > Self.maxRecentSearches {
-            updated = Array(updated.prefix(Self.maxRecentSearches))
+        recentSearches = recents.add(trimmed)
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            suggestions = recentSearches
         }
-        recentSearches = updated
-        Self.saveRecentSearches(updated, to: userDefaults)
     }
 
     func clearRecentSearches() {
+        recents.clear()
         recentSearches = []
-        userDefaults.removeObject(forKey: Self.recentSearchesKey)
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            suggestions = []
+        }
     }
 
     func selectRecentSearch(_ text: String) {
@@ -271,25 +271,17 @@ final class SearchViewModel {
         searchTask = Task { [weak self] in
             guard let self else { return }
             await self.performSearch(text)
+            self.recordRecent(text)
         }
     }
+}
 
-    // MARK: - Persistence helpers
+// MARK: - Noop autocomplete (used when no service is injected)
 
-    private static func loadRecentSearches(from defaults: UserDefaults) -> [String] {
-        guard let data = defaults.data(forKey: recentSearchesKey),
-              let decoded = try? JSONDecoder().decode([String].self, from: data)
-        else {
-            return []
-        }
-        return decoded
-    }
-
-    private static func saveRecentSearches(_ searches: [String], to defaults: UserDefaults) {
-        guard let data = try? JSONEncoder().encode(searches) else {
-            searchLog.error("Failed to encode recent searches")
-            return
-        }
-        defaults.set(data, forKey: recentSearchesKey)
-    }
+/// Returns nothing for every prefix. Used as a safe default in tests
+/// that don't care about suggestions, so existing test setUps that only
+/// pass `apiClient` continue to work.
+private struct NoopAutocompleteService: AutocompleteServiceProtocol {
+    var isReady: Bool { get async { false } }
+    func suggestions(for prefix: String, limit: Int) async -> [String] { [] }
 }

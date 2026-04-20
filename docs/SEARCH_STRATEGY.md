@@ -1,8 +1,60 @@
 # Barkain — Search & Data Acquisition Strategy
 
 > Source: Planning sessions, March–April 2026
-> Last updated: April 3, 2026 (v5 — all 11 Phase 1 retailers scraped, APIs deferred to Phase 4 production optimization, Costco/Newegg/B&H/Kohl's deferred)
+> Last updated: April 19, 2026 (v6 — Step 3d added on-device autocomplete; submit-driven search replaces 3a's auto-debounce-search)
 > Companion docs: SCRAPING_AGENT_ARCHITECTURE.md, agent-browser-scraping-guide.md, IDENTITY_DISCOUNTS.md
+
+---
+
+## Autocomplete (Step 3d)
+
+The Search tab opens a system-managed `.searchable` field whose suggestions
+are populated entirely on-device — there is no autocomplete endpoint and no
+per-keystroke network call.
+
+**Vocabulary source.** A monthly (or on-flagship-launch) offline sweep at
+`scripts/generate_autocomplete_vocab.py` walks Amazon's public autocomplete
+API across ~702 prefixes (a–z + aa–zz) for two scopes: `aps` (all
+departments) and `electronics`. Best Buy and eBay autocomplete are optional
+extras that gracefully skip on shape drift. The script dedupes (case-insensitive),
+scores by distinct-prefix hit count, filters for electronics relevance
+(brand/category allowlist + model regex + token-prefix hit, plus blanket pass
+for source-scoped sources), and emits a single bundled JSON at
+`Barkain/Resources/autocomplete_vocab.json` (capped at 5 000 terms,
+≤ 250 KB). Re-runs of the script reuse a per-prefix cache directory under
+`scripts/.autocomplete_cache/` (gitignored) so a partial sweep can resume
+without re-hitting Amazon.
+
+**Runtime lookup.** `actor AutocompleteService` lazy-loads the JSON on the
+first `suggestions(for:limit:)` call (one-shot ~20 ms cost on the first
+keystroke), decodes into a `[(term, termLower, score)]` array sorted by
+`termLower` ascending, then serves prefix matches via binary search +
+forward linear scan. Matches are re-sorted by score desc, then shorter-first,
+then alphabetical. Max 8 suggestions surface in the dropdown. Service is an
+actor so it's safe to call from any concurrency context; load failure (bundle
+missing or malformed JSON) logs once and degrades to returning `[]` — the
+app never crashes on autocomplete.
+
+**UI flow.** SwiftUI's `.searchable + .searchSuggestions + .searchCompletion`
+takes care of the dropdown. When the field is empty, suggestions show recent
+searches (a `RecentSearches` MainActor service backed by UserDefaults under
+`barkain.recentSearches`, cap 10, with one-time migration from the pre-3d
+`recentSearches` key). When the user taps a suggestion or presses return,
+search fires immediately via `POST /api/v1/products/search` (the existing 3a
+endpoint — Step 3d does not change the backend). A "Search for «query»"
+fallback row always appears so the user can submit any non-matching string.
+
+**Why this shape.** Static JSON + binary search beats a trie at this scale
+(~5 k entries) on cache locality and code complexity, and avoids per-keystroke
+latency entirely. Server autocomplete would need a similarly-sized vocab
+shipped via API anyway, plus a network round-trip per keystroke — a worse UX
+for the same payload.
+
+**Behavior change vs. 3a.** Step 3a auto-fired the API search after a 300 ms
+debounce once the user typed 3+ chars. Step 3d removes that path: typing only
+populates suggestions; search fires only on submit (suggestion tap or return
+key). This is the standard Apple `.searchable` pattern and removes a category
+of "I didn't mean to search yet" surprises.
 
 ---
 

@@ -1,0 +1,62 @@
+{
+  "alias": "aps",
+  "prefix": "ipho",
+  "suffix": "",
+  "suggestions": [
+    {
+      "suggType": "KeywordSuggestion",
+      "type": "KEYWORD",
+      "value": "iphone 17 pro max case",
+      "refTag": "nb_sb_ss_i_1_4",
+      "candidateSources": "local",
+      "strategyId": "organic",
+      "prior": 0.0,
+      "ghost": false,
+      "help": false
+    },
+    {
+      "suggType": "KeywordSuggestion",
+      "type": "KEYWORD",
+      "value": "iphone 17 pro max",
+      "refTag": "nb_sb_ss_i_2_4",
+      "candidateSources": "local",
+      "strategyId": "organic",
+      "prior": 0.0,
+      "ghost": false,
+      "help": false
+    },
+    {
+      "suggType": "KeywordSuggestion",
+      "type": "KEYWORD",
+      "value": "iphone 17 pro",
+      "refTag": "nb_sb_ss_i_3_4",
+      "candidateSources": "local",
+      "strategyId": "organic",
+      "prior": 0.0,
+      "ghost": false,
+      "help": false
+    },
+    {
+      "suggType": "KeywordSuggestion",
+      "type": "KEYWORD",
+      "value": "iphone 16 pro max",
+      "refTag": "nb_sb_ss_i_4_4",
+      "candidateSources": "local",
+      "strategyId": "organic",
+      "prior": 0.0,
+      "ghost": false,
+      "help": false
+    },
+    {
+      "suggType": "KeywordSuggestion",
+      "type": "KEYWORD",
+      "value": "  iPhone 17 Pro!  ",
+      "refTag": "nb_sb_ss_i_5_4",
+      "candidateSources": "local",
+      "strategyId": "organic",
+      "prior": 0.0,
+      "ghost": false,
+      "help": false
+    }
+  ]
+}

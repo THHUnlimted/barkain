@@ -1853,3 +1853,121 @@ test_m2_prices_stream.py:           +3 (scoped key written, scoped replay, overr
 - The bare-name query-override 30min cache means tapping "Any variant", waiting 30 min, then tapping again will roll fresh dice. If this becomes a UX papercut, raise the TTL or add an explicit "refresh" affordance.
 - Best Buy query sanitizer is conservative (replaces with space). If the resolved product name contains a critical token like a part number with a hyphen-slash combo, the sanitizer could degrade match quality. Hasn't been observed but worth watching.
 
+### Step 3d — Autocomplete (Vocab Generation + iOS Integration) (2026-04-19)
+
+**Scope.** Closed the longest-standing Search-tab UX gap: typing now surfaces
+instant on-device prefix suggestions. The user no longer has to spell out the
+full product name. A monthly offline sweep of Amazon's autocomplete API
+produces a bundled JSON vocabulary; the iOS app loads it lazily and serves
+suggestions via binary search with no per-keystroke network call. Apple's
+`.searchable + .searchSuggestions + .searchCompletion` is the host UI;
+recent searches persist via a new MainActor wrapper around UserDefaults.
+
+**Behavior change.** Step 3a auto-fired the API search on a 300 ms debounce
+when the typed query crossed 3 chars. Step 3d replaces that with the
+standard Apple submit-driven pattern: typing only updates suggestions; the
+search request fires when the user taps a `.searchCompletion` row or hits
+return. A "Search for «query»" zero-match fallback row is always present so
+the field never feels dead.
+
+**File inventory.**
+
+```
+# New
+scripts/generate_autocomplete_vocab.py                    # async CLI sweeping Amazon autocomplete
+backend/tests/scripts/__init__.py
+backend/tests/scripts/test_generate_autocomplete_vocab.py # 23 passing + 1 opt-in real-API smoke
+backend/tests/fixtures/amazon_suggestions_ipho.json       # captured fixture for unit tests
+Barkain/Resources/autocomplete_vocab.json                 # bundled vocab (~5k terms)
+Barkain/Services/Autocomplete/AutocompleteServiceProtocol.swift
+Barkain/Services/Autocomplete/AutocompleteService.swift   # actor + lazy load + binary search
+Barkain/Services/Autocomplete/RecentSearches.swift        # MainActor UserDefaults wrapper + legacy migration
+BarkainTests/Helpers/MockAutocompleteService.swift
+BarkainTests/Fixtures/autocomplete_vocab_test.json        # 50-term hand-curated test vocab
+BarkainTests/Services/Autocomplete/AutocompleteServiceTests.swift   # 10 tests
+BarkainTests/Services/Autocomplete/RecentSearchesTests.swift        # 7 tests
+
+# Modified
+.gitignore                                                # +scripts/.autocomplete_cache/
+Barkain/BarkainApp.swift                                  # injects AutocompleteService + RecentSearches
+Barkain/Features/Shared/Extensions/EnvironmentKeys.swift  # +autocompleteService + recentSearches keys
+Barkain/Features/Search/SearchView.swift                  # custom searchBar → .searchable + .searchSuggestions
+Barkain/Features/Search/SearchViewModel.swift             # onQueryChange/onSuggestionTapped/onSearchSubmitted; recents extracted
+BarkainTests/Features/Search/SearchViewModelTests.swift   # rewrite to new API; 17 tests (was 11)
+BarkainUITests/SearchFlowUITests.swift                    # +testTypeSuggestionTapToAffiliateSheet; existing test uses searchFields + return-key
+CLAUDE.md                                                 # +3d row, "What's Next" advanced to 3e
+docs/PHASES.md                                            # +3d row, original 3d–3k → 3f–3m, transition note
+docs/TESTING.md                                           # +3d row, total now ~482 backend / 100 iOS unit / 4 UI
+docs/SEARCH_STRATEGY.md                                   # prepended Autocomplete section
+docs/ARCHITECTURE.md                                      # iOS Frontend Architecture autocomplete one-liner
+```
+
+**Vocabulary generation command** (run from repo root, ~25 min wall time):
+
+```bash
+python3 scripts/generate_autocomplete_vocab.py \
+  --sources amazon_aps,amazon_electronics \
+  --prefix-depth 2 --throttle 1.0 --max-terms 5000 \
+  --output Barkain/Resources/autocomplete_vocab.json
+```
+
+Re-runs reuse the per-prefix cache under `scripts/.autocomplete_cache/`
+(gitignored) when invoked with `--resume`. Best Buy and eBay are wired in
+the script but skipped from the production sweep until their endpoints prove
+stable; both gracefully `SourceShapeError` on JSON drift.
+
+**Vocab stats** (filled in after the live sweep finishes — see PR body for
+the actual numbers; CHANGELOG will be amended in the PR commit if they
+change materially).
+
+**Decisions table.**
+
+| Decision | Why |
+|---|---|
+| Sorted-array + binary search, not a trie | At ~5 k entries the array wins on cache locality and is half the code. A trie's prefix-walk advantage doesn't kick in until the vocab is ~10× larger. |
+| Lazy-load on first `suggestions(...)` call (not at app launch) | Saves ~20 ms off cold start. The first keystroke pays the load cost once; users typing "iph" feel no perceptible delay. |
+| Static JSON shipped in app bundle | One round-trip per app install, predictable network behavior, no autocomplete service to operate. Mike regenerates the vocab manually on flagship launches. |
+| `actor` + shared `Task<Void, Never>` for the load | Multiple concurrent first calls converge on the same load future; no double-decode. Actor isolation removes any need for queue/lock. |
+| `nonisolated(unsafe) private let` on the file-scope `Logger` | Swift 6 mode treats file-scope `let` as MainActor-isolated; without `nonisolated` the actor can't call the logger. SourceKit reports the qualifier as unnecessary; the actual compiler requires it. |
+| Removed 300 ms auto-debounce-search | Submit-driven search is the native `.searchable` pattern and removes "I didn't mean to search yet" surprises. The debounce path was a 3a workaround for the absence of suggestions. |
+| `RecentSearches` extracted from `SearchViewModel` into a `@MainActor` service + key migration | Makes the recents store reusable (e.g. by a future Spotlight integration) and removes ~40 lines of persistence helper from the VM. One-time migration of the legacy `recentSearches` key to `barkain.recentSearches` preserves user data across the upgrade. |
+| `ProduceShapeError` for Best Buy/eBay shape drift, not retry | Their autocomplete shapes are undocumented and have changed historically. Failing soft (skip the source) keeps the sweep alive on Amazon, which is the source of record. |
+| `nonisolated struct Payload` | Required so the actor can decode JSON without a MainActor hop on the `Decodable` conformance. Future-proofs against Swift 6 strict checking. |
+
+**Test deltas.**
+
+- Backend: +23 (`tests/scripts/test_generate_autocomplete_vocab.py`) + 1
+  opt-in `BARKAIN_RUN_NETWORK_TESTS=1` real-API smoke skipped by default.
+  Unrelated pre-existing 6-test auth failure pattern in `test_auth.py` /
+  `test_integration.py` / `test_m1_product.py` / `test_m2_prices.py` /
+  `test_container_client.py` is environmental (DEMO_MODE missing in clean
+  shells) and untouched by this step.
+- iOS unit: +34 net across `SearchViewModelTests` (rewrite to new API,
+  +6 net), `AutocompleteServiceTests` (+10), `RecentSearchesTests` (+7).
+  Full target reports 100 passing.
+- iOS UI: +1 (`testTypeSuggestionTapToAffiliateSheet`); existing
+  `testTextSearchToAffiliateSheet` updated for the `.searchable` field
+  identity + return-key submit.
+
+**SourceKit footnote.** Throughout the build, SourceKit consistently
+reported "Cannot find type 'X' in scope" for *every* type in files that
+referenced new types — including types that have existed in the project
+for months (e.g. `APIClientProtocol`, `FeatureGateService`). The actual
+`xcodebuild` compile succeeds cleanly. Treat SourceKit diagnostics with
+suspicion when they appear immediately after adding files to a
+`PBXFileSystemSynchronizedRootGroup`-managed target.
+
+**Known gaps and follow-ups.**
+
+- Best Buy and eBay autocomplete are wired but not in the production sweep.
+  Re-enable them when their endpoint shapes are confirmed stable and worth
+  the additional ~25 min of sweep time per source.
+- The vocab is regenerated manually. A future enhancement could schedule
+  the script as a GitHub Actions cron with a PR auto-open. Deferred —
+  the current cadence (manual, ~monthly) is fine for v1.
+- The `.searchable` field's `.accessibilityIdentifier` does not propagate
+  to the underlying `UISearchTextField`. The XCUITest now targets it via
+  `app.searchFields.firstMatch` instead. If we ever ship multiple
+  `.searchable` fields in the same view hierarchy, we'll need a different
+  selector strategy.
+

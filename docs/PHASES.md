@@ -179,17 +179,19 @@
 |------|-------|--------|
 | 3a | M1 Product Text Search: `POST /products/search` with pg_trgm fuzzy match + Gemini grounding fallback; iOS SearchView with 300 ms debounce and recent-searches; migration 0007 | ✅ |
 | 3b | eBay Browse API adapter replacing `ebay_new` / `ebay_used` scraper legs (sub-second vs 70 s selector-drift timeouts); `client_credentials` token refresh cached in-process; Marketplace Account Deletion webhook (GDPR prerequisite for production API access); backend deployed on scraper EC2 via Caddy + systemd (`ebay-webhook.barkain.app` HTTPS) | ✅ |
-| 3c | M6 Recommendation Engine: synthesize all layers (prices + identity + cards + portals + secondary market + wait signal) into single recommendation via Claude Sonnet. Progressive updates as data streams in | ⬜ |
-| 3d | Card reward matching: query-time algorithm (pure SQL, < 50ms), purchase interstitial overlay UI ("Use your Chase Freedom Flex for 5% back"), portal instruction, activation reminder | ⬜ |
-| 3e | Portal bonus integration: portal stacking with card recommendations, "Open Rakuten first" guidance, portal vs. direct tracking for analytics | ⬜ |
-| 3f | M8 Image scanning: Claude Vision for product ID from photos (not just barcodes) | ⬜ |
-| 3g | M8+M10 Receipt scanning: on-device OCR (Vision framework) → structured text to backend → item extraction → savings calculation → dashboard | ⬜ |
-| 3h | Identity discount stacking in recommendations: brand-specific stacking rules, identity redirect opportunities (e.g., "Buy at Samsung.com with military discount for $450 less than Best Buy") | ⬜ |
-| 3i | Savings dashboard populated with real receipt data | ⬜ |
-| 3j | Coupon discovery + validation: agent-browser batch scraping of coupon sites, on-demand validation, confidence scoring | ⬜ |
-| 3k | Hardening: AI integration tests with mock responses, tag v0.3.0 | ⬜ |
+| 3c | M1 Search v2: 3-tier cascade (DB → BBY+UPCitemdb parallel → Gemini), brand-only routing, `force_gemini` deep-search, variant collapse, eBay affiliate URL fix; 3c-hardening (live-test bundle: Amazon platform-suffix accessory filter, Walmart/Best Buy retries, Redis device→UPC + scoped query caches, iOS sheet-anchor fix) | ✅ |
+| 3d | Autocomplete (vocab + iOS integration): on-device prefix suggestions via `actor AutocompleteService` + sorted-array binary search; Apple-native `.searchable + .searchSuggestions + .searchCompletion`; `RecentSearches` service (UserDefaults, legacy-key migrated); offline `scripts/generate_autocomplete_vocab.py` sweep of Amazon's autocomplete API → bundled JSON; submit-driven search replaces auto-debounce-search | ✅ |
+| 3e | M6 Recommendation Engine: synthesize all layers (prices + identity + cards + portals + secondary market + wait signal) into single recommendation via Claude Sonnet. Progressive updates as data streams in | ⬜ |
+| 3f | Card reward matching: query-time algorithm (pure SQL, < 50ms), purchase interstitial overlay UI ("Use your Chase Freedom Flex for 5% back"), portal instruction, activation reminder | ⬜ |
+| 3g | Portal bonus integration: portal stacking with card recommendations, "Open Rakuten first" guidance, portal vs. direct tracking for analytics | ⬜ |
+| 3h | M8 Image scanning: Claude Vision for product ID from photos (not just barcodes) | ⬜ |
+| 3i | M8+M10 Receipt scanning: on-device OCR (Vision framework) → structured text to backend → item extraction → savings calculation → dashboard | ⬜ |
+| 3j | Identity discount stacking in recommendations: brand-specific stacking rules, identity redirect opportunities (e.g., "Buy at Samsung.com with military discount for $450 less than Best Buy") | ⬜ |
+| 3k | Savings dashboard populated with real receipt data | ⬜ |
+| 3l | Coupon discovery + validation: agent-browser batch scraping of coupon sites, on-demand validation, confidence scoring | ⬜ |
+| 3m | Hardening: AI integration tests with mock responses, tag v0.3.0 | ⬜ |
 
-> **Note on renumbering:** the original PHASES stub named 3a "AI abstraction layer" — already shipped in Phase 1 at `backend/ai/abstraction.py`, so 3a was reassigned to Product Text Search. Step 3b (eBay Browse API + deletion webhook) was added mid-phase after live sim testing revealed eBay container legs were unrecoverable (selector drift + Chromium contention); it pushed the original 3b–3j (M6 Recommendation Engine downward) one letter each. Final row is now 3k (hardening + tag).
+> **Note on renumbering:** the original PHASES stub named 3a "AI abstraction layer" — already shipped in Phase 1 at `backend/ai/abstraction.py`, so 3a was reassigned to Product Text Search. Step 3b (eBay Browse API + deletion webhook) was added mid-phase after live sim testing revealed eBay container legs were unrecoverable; it pushed the original 3b–3j down one letter. Step 3d (Autocomplete) was inserted 2026-04-19 between Search v2 (now 3c) and the original Card-rewards step, shifting the originally-numbered 3d–3k → 3f–3m one letter further (M6 Recommendation Engine became 3e). Phase 3 letter order has been demo-prep- and feature-priority-driven rather than strict plan order.
 
 ### Phase 3 API Endpoints (tagged for this phase)
 

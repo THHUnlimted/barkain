@@ -82,6 +82,17 @@
 
 **Subscription:** StoreKit 2 via RevenueCat SDK.
 
+**Autocomplete (Step 3d):** `actor AutocompleteService` lazy-loads
+`Barkain/Resources/autocomplete_vocab.json` on first lookup, then serves
+prefix matches via binary search over a sorted `[term, termLower, score]`
+array — no network calls per keystroke. The vocab is regenerated offline
+by `scripts/generate_autocomplete_vocab.py` (Amazon autocomplete sweep,
+~5 k terms, ~150 KB). UI uses Apple-native `.searchable +
+.searchSuggestions + .searchCompletion`; recent searches persist via the
+`@MainActor RecentSearches` UserDefaults wrapper. Search now fires only
+on submit (suggestion tap or return key) — Step 3d removed 3a's
+auto-debounce-search.
+
 ---
 
 ## Backend Architecture
