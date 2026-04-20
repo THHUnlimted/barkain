@@ -637,6 +637,141 @@ async def test_brand_plus_model_still_uses_tier2(
     _stub_upcitemdb_tier2.assert_called_once()
 
 
+# MARK: - Tier 2 noise filter (samsung flip 7 → cases-only class)
+
+
+@pytest.mark.asyncio
+async def test_tier2_only_cases_escalates_to_gemini(
+    client, db_session, _stub_bestbuy_tier2, _stub_upcitemdb_tier2
+):
+    """Tier 2 returns only `Cell Phone Cases` rows → Gemini must fire."""
+    _stub_bestbuy_tier2.return_value = [
+        {
+            "device_name": "Samsung - S24 Flipsuit Case - White",
+            "brand": "Samsung", "model": "EF-MS921CWEGUS",
+            "category": "Cell Phone Cases",
+            "primary_upc": "887276832777", "confidence": 0.86,
+        },
+        {
+            "device_name": "OtterBox - Thin Flex for Galaxy Z Flip7 - Clear",
+            "brand": "OtterBox", "model": "77-95813",
+            "category": "Cell Phone Cases",
+            "primary_upc": "840304766307", "confidence": 0.74,
+        },
+    ]
+    gemini_rows = [{
+        "device_name": "Samsung Galaxy Z Flip 7", "brand": "Samsung",
+        "model": "Galaxy Z Flip 7", "confidence": 0.95, "primary_upc": None,
+    }]
+    with patch(
+        "modules.m1_product.search_service.gemini_generate_json",
+        new_callable=AsyncMock, return_value=gemini_rows,
+    ) as mock_gemini:
+        response = await client.post(
+            SEARCH_URL, json={"query": "samsung flip 7", "max_results": 5}
+        )
+
+    assert response.status_code == 200
+    assert mock_gemini.call_count == 1, "Gemini must fire when Tier 2 is all cases"
+    sources = {r["source"] for r in response.json()["results"]}
+    assert "gemini" in sources
+
+
+@pytest.mark.asyncio
+async def test_tier2_only_applecare_escalates_to_gemini(
+    client, db_session, _stub_bestbuy_tier2, _stub_upcitemdb_tier2
+):
+    """Tier 2 returns only AppleCare warranty rows → Gemini must fire."""
+    _stub_bestbuy_tier2.return_value = [
+        {
+            "device_name": "AppleCare+ for iPhone - Monthly",
+            "brand": "Apple", "category": "AppleCare Warranties",
+            "primary_upc": "ac1", "confidence": 0.9,
+        },
+        {
+            "device_name": "AppleCare+ for iPhone - 2 Year Plan",
+            "brand": "Apple", "category": "AppleCare Warranties",
+            "primary_upc": "ac2", "confidence": 0.86,
+        },
+    ]
+    gemini_rows = [{
+        "device_name": "Apple iPhone 17 Pro", "brand": "Apple",
+        "model": "iPhone 17 Pro", "confidence": 0.97, "primary_upc": None,
+    }]
+    with patch(
+        "modules.m1_product.search_service.gemini_generate_json",
+        new_callable=AsyncMock, return_value=gemini_rows,
+    ) as mock_gemini:
+        response = await client.post(
+            SEARCH_URL, json={"query": "iphone 17 pro", "max_results": 5}
+        )
+
+    assert response.status_code == 200
+    assert mock_gemini.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_tier2_mixed_relevant_plus_noise_skips_gemini(
+    client, db_session, _stub_bestbuy_tier2, _stub_upcitemdb_tier2
+):
+    """Tier 2 has at least one non-noise row → Gemini stays quiet (cost guard)."""
+    _stub_bestbuy_tier2.return_value = [
+        {
+            "device_name": "ASUS - TUF Gaming RTX 5090 32GB",
+            "brand": "ASUS", "category": "GPUs / Video Graphics Cards",
+            "primary_upc": "rtx1", "confidence": 0.9,
+        },
+        {
+            "device_name": "Standard Products - Monthly Best Buy Protection",
+            "brand": "Best Buy", "category": "Protection Plans",
+            "primary_upc": "p1", "confidence": 0.86,
+        },
+    ]
+    with patch(
+        "modules.m1_product.search_service.gemini_generate_json",
+        new_callable=AsyncMock, return_value=[],
+    ) as mock_gemini:
+        response = await client.post(
+            SEARCH_URL, json={"query": "rtx 5090", "max_results": 5}
+        )
+
+    assert response.status_code == 200
+    assert mock_gemini.call_count == 0, "Real RTX 5090 row keeps cascade quiet"
+
+
+@pytest.mark.asyncio
+async def test_tier2_pixel_collision_escalates_to_gemini(
+    client, db_session, _stub_bestbuy_tier2, _stub_upcitemdb_tier2
+):
+    """`pixel 10` → Mobile Pixels monitor collision → Gemini must fire."""
+    _stub_bestbuy_tier2.return_value = [
+        {
+            "device_name": "Mobile Pixels - Fold 15.6\" LCD Monitor - Black",
+            "brand": "Mobile Pixels", "category": "Portable Monitors",
+            "primary_upc": "mp1", "confidence": 0.9,
+        },
+        {
+            "device_name": "Mobile Pixels - Glance 16\" LCD Monitor - Black",
+            "brand": "Mobile Pixels", "category": "Portable Monitors",
+            "primary_upc": "mp2", "confidence": 0.86,
+        },
+    ]
+    gemini_rows = [{
+        "device_name": "Google Pixel 10", "brand": "Google",
+        "model": "Pixel 10", "confidence": 0.96, "primary_upc": None,
+    }]
+    with patch(
+        "modules.m1_product.search_service.gemini_generate_json",
+        new_callable=AsyncMock, return_value=gemini_rows,
+    ) as mock_gemini:
+        response = await client.post(
+            SEARCH_URL, json={"query": "pixel 10", "max_results": 5}
+        )
+
+    assert response.status_code == 200
+    assert mock_gemini.call_count == 1
+
+
 # MARK: - Deep search (force_gemini)
 
 

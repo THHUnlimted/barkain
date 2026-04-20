@@ -276,8 +276,9 @@ Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; 
 | 3c | M1 Search v2: 3-tier cascade (DB → [BBY+UPCitemdb parallel] → Gemini), brand-only routing, `force_gemini` deep-search, variant collapse w/ synthetic generic row, price-stream `?query=` override, eBay affiliate URL fix (rover pixel → EPN params) | +14 | +5 | #32 |
 | 3c-hardening | Live-test bundle: Amazon platform-suffix accessory filter, service/repair filter, Walmart 5× CHALLENGE retry + back-off, Best Buy 429/5xx retry + query sanitizer, Redis device→UPC cache (24h), Redis scoped cache for `query_override` runs, iOS sheet-anchoring fix | +26 | — | #32 |
 | 3d | Autocomplete: `actor AutocompleteService` (sorted-array binary search over bundled JSON) + `.searchable + .searchSuggestions + .searchCompletion` + `RecentSearches` (UserDefaults, legacy-key migrated) + `scripts/generate_autocomplete_vocab.py` Amazon sweep (4,448 terms / 128 KB). Removed 300 ms auto-debounce-search; submit-driven now | +23 | +34 / +1 UI | #34 |
+| 3d-noise-filter | Search cascade noise filter: `_is_tier2_noise` classifier (category + title denylist) escalates Tier 3 Gemini when only accessories / AppleCare / protection / monitors / games surface; merge drops noise on escalation so flagship hits aren't crowded out at `max_results`. Cost guard preserved (real ASUS RTX 5090 keeps Gemini quiet). 9/9 live probe queries fixed | +4 | — | #36 |
 
-**Test totals:** ~512 backend + 100 iOS unit + 4 iOS UI. `ruff check` clean. `xcodebuild` clean.
+**Test totals:** ~516 backend + 100 iOS unit + 4 iOS UI. `ruff check` clean. `xcodebuild` clean.
 
 **Migrations:** 0001 (initial, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert + failure counter) → 0006 (`chk_subscription_tier` CHECK) → 0007 (pg_trgm extension + `idx_products_name_trgm` GIN index).
 
@@ -303,7 +304,7 @@ Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; 
 ## What's Next
 
 1. **Phase 2 CLOSED** — `v0.2.0` tagged (2026-04-16). Outstanding: revoke leaked PAT `gho_UUsp9ML7…` in GitHub UI (SP-L1-b, Mike).
-2. **Phase 3:** 3a–3c-hardening ✅, 3d ✅ autocomplete (#34). Next: 3e M6 Recommendation Engine (Claude Sonnet), then 3f cards, 3g portals, 3h image, 3i receipts, 3j identity stacking, 3k savings, 3l coupons, 3m hardening + `v0.3.0`. See `docs/CHANGELOG.md` + `docs/PHASES.md`.
+2. **Phase 3:** 3a–3c-hardening ✅, 3d ✅ autocomplete (#34), 3d-noise-filter ✅ Tier 2 noise classifier escalates Gemini (#36). Next: 3e M6 Recommendation Engine (Claude Sonnet), then 3f cards, 3g portals, 3h image, 3i receipts, 3j identity stacking, 3k savings, 3l coupons, 3m hardening + `v0.3.0`. See `docs/CHANGELOG.md` + `docs/PHASES.md`.
 3. **Phase 4 — Production Optimization:** ~~Best Buy~~ (done via demo-prep bundle, PR #30), Keepa API adapter, App Store submission, Sentry error tracking
 4. **Phase 5 — Growth:** Push notifications (APNs), web dashboard, Android (KMP)
 
@@ -400,3 +401,4 @@ ssh -i ~/.ssh/barkain-scrapers.pem ubuntu@54.197.27.219 'sudo systemctl restart 
 - Redis device→UPC: `product:devupc:<sha1(name|brand)>` 24h TTL; short-circuits Gemini + UPCitemdb in `resolve_from_search`; Redis failure non-fatal (3c-hardening)
 - Redis scoped query cache: `prices:product:{id}:q:<sha1(query)>` 30min TTL, namespace-disjoint from `prices:product:{id}`; DB-freshness skipped on override (3c-hardening)
 - iOS sheet-anchoring: `browserURL @State` + `.sheet(item:)` lifted from inline `PriceComparisonView` to stable parents (`SearchView`, `ScannerView`) as `@Binding` so SFSafari survives parent re-renders (3c-hardening)
+- Search Tier 2 noise filter: `_is_tier2_noise(row)` classifier with category denylist (`case / warrant / applecare / subscription / gift card / specialty gift / protection / monitor / physical video game / service / digital signage / charger / screen protector`) + title denylist (`applecare / protection plan / best buy protection / gift card / warranty / subscription / membership card / belt clip / skin case`). Cascade escalates Gemini when `relevant_tier2 == []` (was: raw count 0). On escalation, noise rows are dropped from merge so they don't crowd out Gemini's hits at `max_results`. Carve-outs: `force_gemini` keeps Tier 2 visible (deep search asked for both); empty-Gemini guard keeps noisy rows on screen if Gemini also returned empty. Cost guard: real RTX 5090 cards (category `GPUs / Video Graphics Cards`) keep cascade quiet — no Gemini call. 9/9 live probe queries fixed; 4 tests in `test_product_search.py` (3d-noise-filter)
