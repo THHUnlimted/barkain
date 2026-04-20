@@ -1,7 +1,7 @@
 # Barkain — Search & Data Acquisition Strategy
 
 > Source: Planning sessions, March–April 2026
-> Last updated: April 19, 2026 (v6 — Step 3d added on-device autocomplete; submit-driven search replaces 3a's auto-debounce-search)
+> Last updated: April 20, 2026 (v6.1 — Step 3d-noise-filter: Tier 2 noise classifier escalates cascade to Gemini on accessory/service/peripheral-only Tier 2 results)
 > Companion docs: SCRAPING_AGENT_ARCHITECTURE.md, agent-browser-scraping-guide.md, IDENTITY_DISCOUNTS.md
 
 ---
@@ -224,6 +224,16 @@ User taps a result
 ```
 
 Indexing scope: the DB leg matches against whatever is already in `products`. Barkain does not index a full retailer catalog — `products` grows organically as users scan/resolve UPCs. For cold brand + category queries the DB leg will miss and Gemini's grounded search fills the gap. Redis caching ensures the second user asking the same question in 24h avoids both legs entirely.
+
+#### Cascade evolution (3c, 3c-hardening, 3d-noise-filter)
+
+The 2-leg flow above (3a) was rebuilt as a 3-tier cascade in 3c and hardened twice:
+
+1. **Tier 1 — DB pg_trgm match** (unchanged from 3a). On hit, return.
+2. **Tier 2 — `gather(BBY Products API, UPCitemdb keyword search)` in parallel.** Brand-only queries (e.g. `apple`, `sony`, full list in `_BRAND_ONLY_TERMS`) skip Tier 2 and route straight to Tier 3 since Tier 2 floods with accessories for these.
+3. **Tier 3 — Gemini with Google Search grounding.** Fires when `force_gemini=true` (deep search, iOS Enter key) OR when no relevant Tier 2 row exists.
+
+**3d-noise-filter (2026-04-20).** Live testing showed Tier 2 returning ONLY accessories / AppleCare / gift cards / monitors named "Pixel" / games-for-Switch for many flagship queries — yet the original gate `if not bestbuy_rows and not upcitemdb_rows` only fired Gemini on TOTAL Tier 2 emptiness. Result: searching "samsung flip 7" returned 5 cases instead of the Galaxy Z Flip 7. New `_is_tier2_noise(row)` classifier (in `backend/modules/m1_product/search_service.py`) flags rows whose `category` contains denylist tokens (`case`, `warrant`, `applecare`, `subscription`, `gift card`, `specialty gift`, `protection`, `monitor`, `physical video game`, `service`, `digital signage`, `charger`, `screen protector`) OR whose `device_name` contains denylist tokens (`applecare`, `protection plan`, `best buy protection`, `gift card`, `warranty`, `subscription`, `membership card`, `belt clip`, `skin case`). The cascade now escalates to Tier 3 when `relevant_tier2 == []` (filtered count is 0). On escalation, noise rows are dropped from the merge so Gemini's flagship hits aren't crowded out at `max_results`. Two carve-outs: `force_gemini` keeps Tier 2 rows visible (user explicitly asked for both sources), and an empty-Gemini guard keeps the noisy rows on screen if Gemini also returned nothing (half-relevant beats nothing). Cost guard: real Tier 2 product rows (e.g. ASUS RTX 5090 cards under category `GPUs / Video Graphics Cards`) keep Gemini quiet — no escalation, no API spend. 9/9 probe queries fixed; 4 regression tests in `test_product_search.py`.
 
 ---
 

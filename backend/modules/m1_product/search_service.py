@@ -77,6 +77,58 @@ def _is_brand_only_query(normalized_query: str) -> bool:
     """True iff the query is just a manufacturer name with no model/qualifier."""
     return normalized_query in _BRAND_ONLY_TERMS
 
+
+# Tier 2 noise filter — when Best Buy / UPCitemdb return ONLY accessories,
+# warranties, gift cards, games-for-platform, or peripheral collisions
+# (e.g. "pixel 10" → Mobile Pixels monitors, "iphone 17 pro" → AppleCare,
+# "switch 2" → games), the cascade currently swallows the result and skips
+# Gemini. This filter classifies a Tier 2 row as noise so the cascade can
+# treat "Tier 2 returned only noise" the same as "Tier 2 returned nothing"
+# and escalate to Gemini. See probe data in CHANGELOG (Step 3d hardening).
+_TIER2_NOISE_CATEGORY_TOKENS: tuple[str, ...] = (
+    "case",  # "Cell Phone Cases", "Samsung Galaxy Cases"
+    "warrant",  # "AppleCare Warranties"
+    "applecare",
+    "subscription",  # "Gaming Subscriptions"
+    "gift card",
+    "specialty gift",  # "All Specialty Gift Cards"
+    "protection",  # "Protection Plans", "Best Buy Protection"
+    "monitor",  # "Portable Monitors" — pixel 10 collision with Mobile Pixels
+    "physical video game",  # switch 2 → games-for-switch
+    "service",
+    "digital signage",  # "samsung flip 7" → "Samsung 75in FLIP PRO Interactive"
+    "charger",  # "Portable Chargers" — samsung z flip 7 → SaharaCase chargers
+    "screen protector",
+)
+_TIER2_NOISE_TITLE_TOKENS: tuple[str, ...] = (
+    "applecare",
+    "protection plan",
+    "best buy protection",
+    "gift card",
+    "warranty",
+    "subscription",
+    "membership card",
+    "belt clip",  # SaharaCase accessory pattern
+    "skin case",
+)
+
+
+def _is_tier2_noise(row: dict) -> bool:
+    """Classify a Tier 2 row as accessory/service/peripheral noise.
+
+    Used to decide whether to escalate to Gemini even when Tier 2 returned
+    rows. Returning True here does NOT drop the row from the merged response —
+    it only contributes to the "no relevant Tier 2 hits" signal that gates
+    the Tier 3 fire.
+    """
+    category = (row.get("category") or "").lower()
+    if any(token in category for token in _TIER2_NOISE_CATEGORY_TOKENS):
+        return True
+    title = (row.get("device_name") or row.get("name") or "").lower()
+    if any(token in title for token in _TIER2_NOISE_TITLE_TOKENS):
+        return True
+    return False
+
 _WHITESPACE_RE = re.compile(r"\s+")
 _STRIP_PUNCT_RE = re.compile(r"^[\W_]+|[\W_]+$", re.UNICODE)
 
@@ -257,11 +309,29 @@ class ProductSearchService:
                     self._best_buy_search(normalized, max_results),
                     self._upcitemdb_search(normalized, max_results),
                 )
-                # Tier 3: Gemini fires when forced (deep-search hint) OR when
+                # Tier 3: Gemini fires when forced (deep-search hint), when
                 # both Tier 2 sources returned nothing (genuine long-tail:
-                # groceries, apparel, hand tools, etc.).
-                if force_gemini or (not bestbuy_rows and not upcitemdb_rows):
+                # groceries, apparel, hand tools), OR when every Tier 2 row
+                # is accessory/service/peripheral noise (cases, AppleCare,
+                # gift cards, monitors-named-Pixel, games-for-Switch). The
+                # noise check resolves the "samsung flip 7 → cases only"
+                # class of failures.
+                relevant_tier2 = [
+                    row for row in (*bestbuy_rows, *upcitemdb_rows)
+                    if not _is_tier2_noise(row)
+                ]
+                escalate_to_gemini = force_gemini or not relevant_tier2
+                if escalate_to_gemini:
                     gemini_rows = await self._gemini_search(normalized, max_results)
+                # Noise suppression: if Gemini was escalated specifically
+                # because Tier 2 was all noise (cases / AppleCare / monitors
+                # named Pixel / games-for-Switch), the noise rows must NOT
+                # crowd out Gemini's real flagship hits at merge time.
+                # Skip suppression when Gemini itself returned nothing —
+                # half-noisy answer beats none.
+                if escalate_to_gemini and not force_gemini and gemini_rows:
+                    bestbuy_rows = [r for r in bestbuy_rows if not _is_tier2_noise(r)]
+                    upcitemdb_rows = [r for r in upcitemdb_rows if not _is_tier2_noise(r)]
 
         merged = self._merge(
             db_rows, bestbuy_rows, upcitemdb_rows, gemini_rows, max_results,

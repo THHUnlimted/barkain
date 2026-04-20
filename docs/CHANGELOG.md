@@ -1971,3 +1971,139 @@ suspicion when they appear immediately after adding files to a
   `.searchable` fields in the same view hierarchy, we'll need a different
   selector strategy.
 
+### Step 3d-noise-filter — Search cascade noise filter (2026-04-20)
+
+**Branch:** `phase-3/3d-search-noise-filter`. Driven entirely by live sim
+testing of the 3d build: the user typed "samsung flip 7" expecting Galaxy Z
+Flip 7 results and got 5 case listings + a 75-inch Samsung interactive
+display. Asked "what happened to gemini searching if there are still no
+results?" — that question exposed the cascade bug.
+
+**Root cause.** Search v2's Tier-3 gate at `search_service.py:263` was:
+
+```python
+if force_gemini or (not bestbuy_rows and not upcitemdb_rows):
+    gemini_rows = await self._gemini_search(normalized, max_results)
+```
+
+It only escalated to Gemini when Tier 2 (BBY + UPCitemdb) returned ZERO
+total rows. Best Buy's keyword search returns SOMETHING for almost any
+query — usually accessories, AppleCare, gift cards, or peripherals with
+brand-collision names — so the gate almost never fired on flagship-product
+queries. Result: real flagships never reached Gemini.
+
+**Probe data drove the rule design.** Hit the live `/products/search`
+endpoint with 10 representative queries to map the failure surface:
+
+| Query | Tier 2 returned | Right answer |
+|---|---|---|
+| samsung flip 7 | Cases + 75" Samsung Digital Signage | Galaxy Z Flip 7 |
+| samsung z flip 7 | SaharaCase belt clips, skin cases, charger | Galaxy Z Flip 7 |
+| iphone 17 pro | AppleCare+ for iPhone × 4 | iPhone 17 Pro / Max |
+| macbook pro m4 | AppleCare+ for MacBook × 2 | MacBook Pro 14"/16" M4 |
+| airpods 4 | AppleCare+ for AirPods × 3 | AirPods 4 / 4 ANC |
+| pixel 10 | Mobile Pixels Fold/Glance/TRIO monitors | Google Pixel 10 |
+| playstation 5 pro | $50 PS Store Gift Card, Best Buy Protection | PS5 Pro Console |
+| switch 2 | NBA 2K26 / WWE 2K25 / Switch Online cards | Nintendo Switch 2 |
+| rtx 5090 | Real ASUS TUF & ROG Astral RTX 5090s | (BBY's answer is correct) |
+| samsung galaxy s26 | DB hit — Tier 2 not reached | (DB hit) |
+
+The signal was the `category` field: every junk row had `Cell Phone Cases`,
+`AppleCare Warranties`, `Portable Monitors`, `Physical Video Games`, `All
+Specialty Gift Cards`, `Protection Plans`, `Digital Signage`, etc.
+
+**Fix in `backend/modules/m1_product/search_service.py`:**
+
+1. New `_is_tier2_noise(row)` classifier — categories containing any of
+   `case / warrant / applecare / subscription / gift card / specialty gift
+   / protection / monitor / physical video game / service / digital
+   signage / charger / screen protector` OR titles containing `applecare
+   / protection plan / best buy protection / gift card / warranty /
+   subscription / membership card / belt clip / skin case`. The two
+   denylists overlap intentionally — some BBY rows have null categories
+   but obvious titles, and vice versa.
+
+2. New cascade gate:
+
+   ```python
+   relevant_tier2 = [
+       row for row in (*bestbuy_rows, *upcitemdb_rows)
+       if not _is_tier2_noise(row)
+   ]
+   escalate_to_gemini = force_gemini or not relevant_tier2
+   if escalate_to_gemini:
+       gemini_rows = await self._gemini_search(normalized, max_results)
+   ```
+
+3. **Critical second step (discovered during validation).** Even after
+   Gemini fired, the merge still preferred BBY rows by source order — so
+   at `max_results=6`, the 5 noise BBY rows + 1 DB row consumed every
+   slot and Gemini's real Z Flip 7 / iPhone 17 Pro rows were dropped.
+   Diagnostic prints showed `gemini fired returned=3` but final response
+   contained `0 gemini rows`. Fix:
+
+   ```python
+   if escalate_to_gemini and not force_gemini and gemini_rows:
+       bestbuy_rows = [r for r in bestbuy_rows if not _is_tier2_noise(r)]
+       upcitemdb_rows = [r for r in upcitemdb_rows if not _is_tier2_noise(r)]
+   ```
+
+   Two carve-outs:
+   - **`force_gemini`-respecting:** when the user explicitly hits Enter
+     for deep search, they asked for BOTH sources side-by-side; don't
+     drop Tier 2 rows.
+   - **Empty-Gemini guard:** if Gemini also returned nothing, keep the
+     noisy Tier 2 rows — half-relevant beats nothing on screen.
+
+**Validation against the probe data after fix:**
+
+| Query | Result |
+|---|---|
+| samsung flip 7 | Galaxy Z Flip 7 256GB (1.0), Z Flip 7 FE (0.65), Z Flip 6 (0.55) |
+| samsung z flip 7 | Z Flip 7 (0.98), Z Flip 7 FE (0.70), Z Flip 6, Fold 7 |
+| iphone 17 pro | iPhone 17 Pro (1.0), Pro Max (0.75), 17 (0.60), Air (0.50) |
+| macbook pro m4 | MacBook Pro 14" M4 (0.98), 16" M4 (0.95) |
+| airpods 4 | AirPods 4 ANC (0.98), AirPods 4 (0.92) |
+| pixel 10 | Pixel 10 (0.95), Pro (0.85), Pro XL (0.80), Pro Fold, 10a |
+| playstation 5 pro | PS5 Pro Console (0.98) |
+| switch 2 | Nintendo Switch 2 Console (0.98) |
+| rtx 5090 | Real ASUS RTX 5090s (Gemini did NOT fire — cost guard) ✓ |
+
+9/9 fixed. The cost guard for `rtx 5090` is the load-bearing test that
+the noise filter is conservative enough — real product categories
+(`GPUs / Video Graphics Cards`) are not on the denylist.
+
+**Cache impact.** Redis 24h TTL means each fixed query is now warm in
+local Redis and replays instantly without re-hitting Gemini. Deep search
+(Enter key) still bypasses cache reads but writes the result, so a normal
+search after a deep search benefits from the deeper Gemini answer.
+
+**Tests.** +4 in `backend/tests/modules/test_product_search.py`:
+
+- `test_tier2_only_cases_escalates_to_gemini` (samsung flip 7 reproduction)
+- `test_tier2_only_applecare_escalates_to_gemini` (iphone 17 pro reproduction)
+- `test_tier2_mixed_relevant_plus_noise_skips_gemini` (rtx 5090 cost guard)
+- `test_tier2_pixel_collision_escalates_to_gemini` (Mobile Pixels brand
+  collision)
+
+29/29 search tests pass (4 new + 25 existing). 40/40 m1_product tests pass.
+
+**Files changed.** `backend/modules/m1_product/search_service.py` (+76),
+`backend/tests/modules/test_product_search.py` (+135), `CLAUDE.md`,
+`docs/CHANGELOG.md`, `docs/SEARCH_STRATEGY.md`.
+
+**Outstanding (deferred to future iteration).**
+
+- Brand-collision detection is currently denylist-shaped (we hard-code
+  "monitor" to catch Mobile Pixels). A general rule — "when query starts
+  with a known brand and Tier 2 row's brand differs" — would be more
+  durable but requires a brand vocabulary and careful handling of OEM
+  resellers. Re-evaluate when a new collision pattern emerges.
+- The denylist is hand-maintained. Future enhancement: derive it from
+  Best Buy's `categoryPath` distribution over a few weeks of production
+  queries (count categories that appear in queries with ZERO real
+  product matches and lift them automatically).
+- Filter applies to all retailers for symmetry, but in practice only BBY
+  surfaces these rows currently. UPCitemdb rarely returns matched-category
+  noise; if that changes the filter is already wired in.
+
