@@ -8,6 +8,8 @@ struct SearchView: View {
 
     @Environment(\.apiClient) private var apiClient
     @Environment(FeatureGateService.self) private var featureGate
+    @Environment(\.autocompleteService) private var autocompleteService
+    @Environment(\.recentSearches) private var recentSearches
 
     // MARK: - State
 
@@ -32,7 +34,12 @@ struct SearchView: View {
         .navigationTitle("Search")
         .task {
             if viewModel == nil {
-                viewModel = SearchViewModel(apiClient: apiClient, featureGate: featureGate)
+                viewModel = SearchViewModel(
+                    apiClient: apiClient,
+                    featureGate: featureGate,
+                    autocompleteService: autocompleteService,
+                    recentSearches: recentSearches
+                )
             }
         }
     }
@@ -44,7 +51,6 @@ struct SearchView: View {
         @Bindable var vm = viewModel
 
         VStack(spacing: 0) {
-            searchBar(vm: vm)
             deepSearchHint(vm: vm)
 
             Group {
@@ -67,12 +73,28 @@ struct SearchView: View {
                 } else if !vm.results.isEmpty {
                     resultsList(vm: vm)
                 } else if vm.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    recentSearchesOrEmpty(vm: vm)
+                    recentsHintEmpty(vm: vm)
                 } else {
                     noResultsState
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .searchable(
+            text: Binding(
+                get: { vm.query },
+                set: { newValue in Task { await vm.onQueryChange(newValue) } }
+            ),
+            placement: .navigationBarDrawer(displayMode: .always),
+            prompt: "Sony WH-1000XM5, AirPods Pro…"
+        )
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled(true)
+        .searchSuggestions {
+            suggestionRows(vm: vm)
+        }
+        .onSubmit(of: .search) {
+            Task { await vm.onSearchSubmitted(vm.query) }
         }
         .alert(
             "Can't open this result",
@@ -89,44 +111,45 @@ struct SearchView: View {
         }
     }
 
-    // MARK: - Search bar
+    // MARK: - Search suggestions (Apple-native dropdown)
 
-    private func searchBar(vm: SearchViewModel) -> some View {
-        HStack(spacing: Spacing.sm) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(Color.barkainOnSurfaceVariant)
-            TextField("Sony WH-1000XM5, AirPods Pro…", text: Binding(
-                get: { vm.query },
-                set: { vm.queryChanged($0) }
-            ))
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled(true)
-            .submitLabel(.search)
-            .onSubmit { Task { await vm.deepSearch() } }
-            .accessibilityIdentifier("searchTextField")
-
-            if !vm.query.isEmpty {
-                Button {
-                    vm.queryChanged("")
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(Color.barkainOutlineVariant)
+    @ViewBuilder
+    private func suggestionRows(vm: SearchViewModel) -> some View {
+        let trimmed = vm.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            if !vm.recentSearches.isEmpty {
+                Section("Recent") {
+                    ForEach(vm.recentSearches, id: \.self) { term in
+                        Label(term, systemImage: "clock.arrow.circlepath")
+                            .searchCompletion(term)
+                            .accessibilityIdentifier(suggestionRowIdentifier(term))
+                    }
                 }
-                .accessibilityIdentifier("searchClearButton")
             }
+        } else if !vm.suggestions.isEmpty {
+            ForEach(vm.suggestions, id: \.self) { term in
+                Text(term)
+                    .searchCompletion(term)
+                    .accessibilityIdentifier(suggestionRowIdentifier(term))
+            }
+        } else if trimmed.count >= 3 {
+            // Zero-match fallback so the user always has a way forward.
+            Text("Search for \"\(trimmed)\"")
+                .searchCompletion(trimmed)
+                .accessibilityIdentifier("suggestionRow_fallback")
         }
-        .padding(.horizontal, Spacing.md)
-        .padding(.vertical, Spacing.sm)
-        .background(Color.barkainSurfaceContainer)
-        .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadiusLarge))
-        .padding(.horizontal, Spacing.md)
-        .padding(.top, Spacing.sm)
+    }
+
+    /// Replaces whitespace with underscores so XCUITest can target
+    /// suggestion rows by stable identifier.
+    private func suggestionRowIdentifier(_ term: String) -> String {
+        let slug = term.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .joined(separator: "_")
+        return "suggestionRow_\(slug)"
     }
 
     // MARK: - Deep search hint
 
-    /// Sub-search-bar banner shown when the typed query doesn't substring-match
-    /// any returned result. Inviting the user to hit return to fetch more.
     @ViewBuilder
     private func deepSearchHint(vm: SearchViewModel) -> some View {
         if vm.showDeepSearchHint {
@@ -140,8 +163,6 @@ struct SearchView: View {
             }
             .padding(.horizontal, Spacing.md)
             .padding(.vertical, Spacing.xs)
-            .padding(.horizontal, Spacing.md)
-            .padding(.top, Spacing.xs)
             .accessibilityIdentifier("deepSearchHint")
         }
     }
@@ -160,15 +181,15 @@ struct SearchView: View {
         .listStyle(.plain)
     }
 
-    // MARK: - Recent searches / empty
+    // MARK: - Recents hint / empty
 
     @ViewBuilder
-    private func recentSearchesOrEmpty(vm: SearchViewModel) -> some View {
+    private func recentsHintEmpty(vm: SearchViewModel) -> some View {
         if vm.recentSearches.isEmpty {
             EmptyState(
                 icon: "magnifyingglass",
                 title: "Find the best price",
-                subtitle: "Search by product name, model number, or brand to compare prices across retailers."
+                subtitle: "Tap the search bar to find products by name, model, or brand."
             )
         } else {
             VStack(alignment: .leading, spacing: 0) {

@@ -44,6 +44,9 @@ TestResults.xcresult
 # ── Prompt Packages (NOT in repo) ────────────────
 /prompts/
 
+# ── Autocomplete vocab build cache (Step 3d) ─────
+scripts/.autocomplete_cache/
+
 # ── Misc ─────────────────────────────────────────
 *.log
 tmp/
