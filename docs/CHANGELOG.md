@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-21 (Step 3f — Purchase Interstitial + Activation Reminder + 4 pre-fixes, killed 6-test auth carry-forward)
+> Last updated: 2026-04-21 (Step 3f-hotfix — identity savings correctness: per-retailer price + `discount_programs.scope` for membership-fee discounts)
 
 ---
 
@@ -2769,6 +2769,53 @@ away from Apple products correctly, per `IdentityService`).
   and Apple programs on a phone product would only see the higher-
   value one. By design for the demo — stacking callouts would muddy
   the headline.
+
+### Step 3f-hotfix — Identity Savings Correctness (2026-04-21)
+
+```
+backend/modules/m5_identity/service.py           # per-retailer price map + scope skip
+backend/modules/m5_identity/models.py            # DiscountProgram.scope column + CheckConstraint
+backend/modules/m5_identity/schemas.py           # EligibleDiscount.scope field
+backend/modules/m6_recommend/service.py          # cache key :v3 → :v4
+infrastructure/migrations/versions/0009_discount_program_scope.py   # NEW
+scripts/seed_discount_catalog.py                 # Prime Student flipped to membership_fee + upsert carries scope
+backend/tests/conftest.py                        # drift marker 0008 → 0009
+backend/tests/modules/test_m5_identity.py        # +3 regression tests
+```
+
+**Why.** Live smoke on MacBook Pro surfaced two separate identity-savings bugs:
+
+1. **Wrong basis for percentage savings.** `IdentityService.get_eligible_discounts` computed a single `best_price = min(Price.price)` across all retailers and applied it to every program's percentage discount. So a Samsung 10 % military discount at `samsung_direct` got multiplied by eBay's $100 price instead of Samsung's $150 price — under-claiming on brand-direct purchases, over-claiming anywhere the winning retailer wasn't the program's retailer. For a user on an Amazon listing where eBay was cheapest, the Amazon Prime Student line read with eBay's number.
+
+2. **Membership-fee discounts claimed product savings.** Prime Student's 50 % applies to the $7.99/mo Prime fee, not to the MacBook. Without a scope marker, the code multiplied `product_price × 50 %` and showed "save $1,250" on a MacBook. Pure fiction.
+
+**Fix #1 — per-retailer price resolution.** `get_eligible_discounts` now loads `price_by_retailer: dict[str, float]` for every available price on the product. Each program's percentage is computed against `price_by_retailer.get(prog.retailer_id, fallback_price)` where `fallback_price = max(price_by_retailer.values())` — the highest scraped price, MSRP-adjacent, used when a program lives at an unscraped brand-direct retailer (e.g., `samsung_direct` with no scraped listing). Rationale for "highest" vs "lowest" as the fallback: brand-direct retailers usually price at or near MSRP, so the highest scraped number is the closest proxy. Rename `best_price` param to `applicable_price` so the semantics are explicit at the call site.
+
+**Fix #2 — `discount_programs.scope`.** Migration 0009 adds `scope TEXT NOT NULL DEFAULT 'product'` with CHECK constraint `scope IN ('product', 'membership_fee', 'shipping')`. Mirrored on `DiscountProgram.__table_args__` + the declarative column. `_build` now skips `estimated_savings` entirely when `scope != 'product'` — the program still surfaces in the response (so iOS can render "Prime Student: 50 % off Prime membership (separate fee)") but claims no dollars against the product. `EligibleDiscount.scope` is carried through to the wire so iOS can style non-product pills distinctively (default `"product"` keeps backward-compat).
+
+**Catalog audit.** Reviewed all 17 seeded `_PROGRAM_TEMPLATES` rows. Only Prime Student (amazon / Prime Student / `program_type="membership"`) is a membership-fee discount. All 16 others — Apple Military & Veterans, Apple Education Pricing, Samsung Offer Program, HP Frontline Heroes, HP Education Store, Dell Military Store, Dell Member Purchase (government), Dell University Store, Lenovo Military, Lenovo Education, Microsoft Military Store, Microsoft Education Store, Sony Identity Discount, LG Appreciation, Home Depot Military, Lowe's Honor Our Military — are genuine product discounts (sticker-reduction at checkout). All stay on the default `product` scope; only Prime Student flips.
+
+**M6 integration.** No code changes. `_stack_retailer_path` already reads `estimated_savings` via `max(identity_matches, key=lambda d: d.estimated_savings or 0.0)` — when the value is `None` for membership-fee programs, they naturally contribute 0 to the identity layer. Cache key bumped `:v3 → :v4` because v3 entries were built with bug #2 still active; 15-min TTL will naturally expire any lingering v2/v3 keys, but we also flushed them manually post-deploy.
+
+**Seed upsert.** `seed_discount_catalog.py` template syntax extended with optional `"scope"` key (defaults to `"product"` via `template.get("scope", "product")`). Existing INSERT SQL extended to include the column; `ON CONFLICT ... DO UPDATE SET scope = EXCLUDED.scope` so existing catalog rows flip cleanly on re-seed. Post-deploy: `SELECT retailer_id, program_name, scope FROM discount_programs WHERE scope != 'product'` returns exactly one row (amazon / Prime Student).
+
+**Drift marker.** `conftest._ensure_schema` probe bumped from `affiliate_clicks.metadata` to `discount_programs.scope`. Test DBs at 0008 will auto-rebuild on first 0009-aware session; drift marker checklist item noted.
+
+**Tests.** +3 regression tests in `test_m5_identity.py`:
+- `test_eligible_discounts_uses_program_retailer_price_not_global_min`: seeds Samsung at $1500 + Walmart at $1000, asserts Samsung 10 % = $150 (not $100).
+- `test_eligible_discounts_brand_direct_no_scraped_price_falls_back_to_highest`: seeds no samsung_direct price, Walmart at $1000, eBay at $1400, asserts Samsung 10 % at samsung_direct = $140 (highest fallback).
+- `test_membership_fee_scope_surfaces_but_claims_no_product_savings`: seeds Prime Student `scope="membership_fee"` on a $2500 MacBook, asserts `estimated_savings is None`, program still in response, `scope == "membership_fee"`, `discount_value == 50.0`.
+
+Existing tests unchanged — they all seed a single retailer's price, which means `price_by_retailer` has one entry and both the "own retailer" and "fallback highest" paths produce the same number.
+
+**Known limits / deferrals.**
+- iOS UI still needs a dedicated treatment for `scope != "product"` pills (e.g., "Separate fee" micro-label). Current behavior: `estimated_savings` is `nil`, so the dollar column is hidden by existing nil-guards — acceptable for demo, not ideal long-term.
+- Subscription profile flags (`is_prime_member`, `is_costco_member`, `is_sams_member`, `is_aaa_member`, `is_aarp_member`) remain dead code — `_active_eligibility_types` doesn't map them, no programs seeded with those eligibility types. Out of scope for this hotfix; see follow-up ticket.
+- Shipping-scope discounts (`free ground shipping for veterans`, etc.) are vocabulary-only today; no programs seed with `scope="shipping"` yet. Schema is ready when the catalog adds them.
+
+**Verification at commit time.** 510 backend / 0 failed / 7 skipped. `ruff check .` clean. Migration applied to dev DB, catalog re-seeded (52 programs, 1 at `membership_fee`). Redis `recommend:*` keys flushed. Uvicorn bounced.
+
+---
 
 ### Step 3f — Purchase Interstitial + Activation Reminder (2026-04-21)
 

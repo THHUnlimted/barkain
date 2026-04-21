@@ -56,12 +56,14 @@ async def _seed_program(
     verification_url: str | None = "https://example.com/verify",
     url: str | None = "https://example.com/program",
     program_type: str = "identity",
+    scope: str = "product",
     is_active: bool = True,
 ) -> DiscountProgram:
     program = DiscountProgram(
         retailer_id=retailer_id,
         program_name=program_name,
         program_type=program_type,
+        scope=scope,
         eligibility_type=eligibility_type,
         discount_type=discount_type,
         discount_value=Decimal(str(discount_value)) if discount_value is not None else None,
@@ -387,6 +389,134 @@ async def test_eligible_discounts_fixed_amount(db_session):
     resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=product.id)
 
     assert resp.eligible_discounts[0].estimated_savings == 50.0
+
+
+async def test_eligible_discounts_uses_program_retailer_price_not_global_min(db_session):
+    """A percentage discount's estimated_savings must be computed against the
+    PROGRAM'S OWN retailer price, not the global cheapest price across all
+    retailers. Samsung 10 % at samsung_direct ($1500) must be $150 even when
+    walmart is cheaper at $1000 — the Samsung discount doesn't apply at
+    Walmart.
+    """
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "samsung_direct")
+    await _seed_retailer(db_session, "walmart_test")
+    # Seed the product at Walmart at the lower price.
+    product = await _seed_product_with_price(
+        db_session, "walmart_test", 1000.00, brand="Samsung", category="electronics"
+    )
+    # Add a higher samsung_direct price for the same product.
+    db_session.add(
+        Price(
+            product_id=product.id,
+            retailer_id="samsung_direct",
+            price=Decimal("1500.00"),
+            condition="new",
+            is_available=True,
+        )
+    )
+    await db_session.flush()
+
+    await _seed_program(
+        db_session,
+        "samsung_direct",
+        "Samsung Offer Program",
+        "military",
+        discount_value=10,
+    )
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_military=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=product.id)
+
+    assert len(resp.eligible_discounts) == 1
+    # Bug was: 1000 * 0.10 = 100 (using global cheapest). Fix: 1500 * 0.10 = 150.
+    assert resp.eligible_discounts[0].estimated_savings == 150.0
+
+
+async def test_eligible_discounts_brand_direct_no_scraped_price_falls_back_to_highest(
+    db_session,
+):
+    """samsung_direct is never scraped, so the program has no own-retailer
+    price. Fall back to the HIGHEST available scraped price (closer to MSRP
+    than the lowest)."""
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "samsung_direct")
+    await _seed_retailer(db_session, "walmart_test")
+    await _seed_retailer(db_session, "ebay_new_test")
+    product = await _seed_product_with_price(
+        db_session, "walmart_test", 1000.00, brand="Samsung", category="electronics"
+    )
+    # A second scraped price, higher. No samsung_direct price.
+    db_session.add(
+        Price(
+            product_id=product.id,
+            retailer_id="ebay_new_test",
+            price=Decimal("1400.00"),
+            condition="new",
+            is_available=True,
+        )
+    )
+    await db_session.flush()
+
+    await _seed_program(
+        db_session,
+        "samsung_direct",
+        "Samsung Offer Program",
+        "military",
+        discount_value=10,
+    )
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_military=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=product.id)
+
+    assert len(resp.eligible_discounts) == 1
+    # Fallback = max(walmart 1000, ebay 1400) = 1400; 10% → 140.
+    assert resp.eligible_discounts[0].estimated_savings == 140.0
+
+
+async def test_membership_fee_scope_surfaces_but_claims_no_product_savings(db_session):
+    """Prime Student (scope=membership_fee) must still appear in the eligible
+    list so the UI can tell the user about it, but estimated_savings must be
+    None — the 50 % is off Prime's $7.99 fee, not off the MacBook.
+    """
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "amazon")
+    product = await _seed_product_with_price(
+        db_session, "amazon", 2500.00, name="MacBook Pro", brand="Apple"
+    )
+    await _seed_program(
+        db_session,
+        "amazon",
+        "Prime Student",
+        "student",
+        discount_value=50,
+        program_type="membership",
+        scope="membership_fee",
+    )
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_student=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=product.id)
+
+    assert len(resp.eligible_discounts) == 1
+    disc = resp.eligible_discounts[0]
+    assert disc.program_name == "Prime Student"
+    assert disc.scope == "membership_fee"
+    # Bug was: 2500 * 0.50 = 1250 claimed as product savings. Fix: None.
+    assert disc.estimated_savings is None
+    # Percentage is still carried so the UI can render "50 % off Prime fee".
+    assert disc.discount_value == 50.0
 
 
 async def test_eligible_discounts_no_product_id_no_savings(db_session):

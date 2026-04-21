@@ -174,7 +174,10 @@ class IdentityService:
         card per matched user.
 
         When `product_id` is provided, computes `estimated_savings` against
-        the product's current best available price.
+        the program's OWN retailer price when we have one scraped, falling
+        back to the product's highest available price otherwise. Using the
+        global cheapest was wrong — a Samsung 10 % discount at samsung_direct
+        needs to apply to Samsung's price, not eBay's.
         """
         profile = await self._load_profile(user_id)
         active_types = self._active_eligibility_types(profile)
@@ -202,20 +205,26 @@ class IdentityService:
             seen.add(key)
             unique.append((prog, retailer_name))
 
-        best_price: float | None = None
+        price_by_retailer: dict[str, float] = {}
+        fallback_price: float | None = None
         product_brand: str | None = None
         product_category: str | None = None
         product_name: str | None = None
         if product_id is not None:
-            result = await self.db.execute(
-                select(Price.price)
+            # Load every available price for the product, keyed by retailer.
+            # Programs at a scraped retailer use that retailer's own price;
+            # programs at brand-direct retailers (samsung_direct, apple_direct,
+            # …) that we don't scrape fall back to the highest scraped price
+            # as an MSRP-adjacent proxy.
+            price_rows = await self.db.execute(
+                select(Price.retailer_id, Price.price)
                 .where(Price.product_id == product_id)
                 .where(Price.is_available.is_(True))
-                .order_by(Price.price.asc())
-                .limit(1)
             )
-            raw = result.scalar_one_or_none()
-            best_price = float(raw) if raw is not None else None
+            for rid, raw in price_rows.all():
+                price_by_retailer[rid] = float(raw)
+            if price_by_retailer:
+                fallback_price = max(price_by_retailer.values())
 
             # Pull brand + category + name for the relevance gate.
             prod_row = await self.db.execute(
@@ -247,7 +256,14 @@ class IdentityService:
                     dropped, before, product_brand, product_category, product_name,
                 )
 
-        discounts = [self._build(prog, rname, best_price) for prog, rname in unique]
+        discounts = [
+            self._build(
+                prog,
+                rname,
+                price_by_retailer.get(prog.retailer_id, fallback_price),
+            )
+            for prog, rname in unique
+        ]
         # Sort: highest estimated savings first, then highest discount_value
         # (for the no-product-id case), then alphabetical program_name for stability
         discounts.sort(
@@ -284,7 +300,7 @@ class IdentityService:
             if key in seen:
                 continue
             seen.add(key)
-            result.append(self._build(prog, rname, best_price=None))
+            result.append(self._build(prog, rname, applicable_price=None))
         result.sort(key=lambda d: (d.retailer_name, d.program_name))
         return result
 
@@ -321,9 +337,16 @@ class IdentityService:
     def _build(
         prog: DiscountProgram,
         retailer_name: str,
-        best_price: float | None,
+        applicable_price: float | None,
     ) -> EligibleDiscount:
-        """Build an EligibleDiscount, computing estimated_savings when possible."""
+        """Build an EligibleDiscount, computing estimated_savings when possible.
+
+        `applicable_price` is the price the percentage discount should apply
+        to — the program's own retailer price if we scraped it, else the
+        product's highest scraped price as an MSRP-adjacent fallback for
+        brand-direct retailers we don't scrape. Caller resolves; this
+        function just multiplies.
+        """
         discount_value = (
             float(prog.discount_value) if prog.discount_value is not None else None
         )
@@ -333,22 +356,29 @@ class IdentityService:
             else None
         )
 
+        # Only 'product' scope discounts reduce the product's purchase price.
+        # Membership-fee (Prime Student) + shipping scopes still surface to
+        # the UI but never claim a dollar savings against the product.
+        scope = getattr(prog, "scope", "product") or "product"
         estimated: float | None = None
-        if (
-            prog.discount_type == "percentage"
-            and discount_value is not None
-            and best_price is not None
-        ):
-            raw = best_price * discount_value / 100.0
-            estimated = (
-                min(raw, discount_max_value) if discount_max_value is not None else raw
-            )
-        elif prog.discount_type == "fixed_amount" and discount_value is not None:
-            estimated = (
-                min(discount_value, discount_max_value)
-                if discount_max_value is not None
-                else discount_value
-            )
+        if scope == "product":
+            if (
+                prog.discount_type == "percentage"
+                and discount_value is not None
+                and applicable_price is not None
+            ):
+                raw = applicable_price * discount_value / 100.0
+                estimated = (
+                    min(raw, discount_max_value)
+                    if discount_max_value is not None
+                    else raw
+                )
+            elif prog.discount_type == "fixed_amount" and discount_value is not None:
+                estimated = (
+                    min(discount_value, discount_max_value)
+                    if discount_max_value is not None
+                    else discount_value
+                )
 
         return EligibleDiscount(
             program_id=prog.id,
@@ -364,4 +394,5 @@ class IdentityService:
             verification_url=prog.verification_url,
             url=prog.url,
             estimated_savings=estimated,
+            scope=scope,
         )

@@ -302,12 +302,14 @@ class RecommendationService:
     ) -> str:
         """Cache key scoped to user + product + card portfolio + identity flags.
 
-        Version bumped to v2 in Step 3f — v1 keys (without user-state hashes)
-        are not read and will expire on their 15-min TTL.
+        Version bumped to v4 in 3f-hotfix — v2/v3 entries were built against
+        buggy identity_savings math (v2: used global lowest price; v3: still
+        treated Prime Student membership-fee discounts as product savings).
+        v1/v2/v3 keys are not read and expire on their 15-min TTL.
         """
         return (
             f"{_CACHE_KEY_PREFIX}{user_id}:product:{product_id}"
-            f":c{user_card_hash}:i{identity_hash}:v2"
+            f":c{user_card_hash}:i{identity_hash}:v4"
         )
 
     async def _user_card_hash(self, user_id: str) -> str:

@@ -66,9 +66,11 @@ class IdentityProfileResponse(IdentityProfileRequest):
 class EligibleDiscount(BaseModel):
     """A single identity discount the user qualifies for.
 
-    `estimated_savings` is computed against the product's best available price
-    when the caller supplies `product_id=` to GET /api/v1/identity/discounts.
-    Without a product context, it's always null.
+    `estimated_savings` is computed against the program's own retailer price
+    when the caller supplies `product_id=` and `scope == "product"`. For
+    non-`product` scopes (membership_fee, shipping) or no product context,
+    it's always null — iOS renders those as informational pills with no
+    dollar claim on the product.
     """
 
     program_id: UUID
@@ -84,6 +86,7 @@ class EligibleDiscount(BaseModel):
     verification_url: str | None = None
     url: str | None = None
     estimated_savings: float | None = None
+    scope: str = "product"
 
     model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 
