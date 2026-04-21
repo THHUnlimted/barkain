@@ -8,6 +8,7 @@ struct ProfileView: View {
 
     @State private var profile: IdentityProfile?
     @State private var userCards: [UserCardSummary] = []
+    @State private var affiliateStats: AffiliateStatsResponse?
     @State private var isLoading = false
     @State private var loadError: APIError?
     @State private var showEditSheet = false
@@ -34,10 +35,11 @@ struct ProfileView: View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.barkainSurface.ignoresSafeArea())
-            .navigationTitle("Profile")
+            .navigationTitle("The Kennel")
             .task {
                 await loadProfile()
                 await loadCards()
+                await loadAffiliateStats()
             }
             .sheet(isPresented: $showEditSheet, onDismiss: {
                 Task { await loadProfile() }
@@ -79,7 +81,9 @@ struct ProfileView: View {
             profileSummary(profile)
         } else {
             ScrollView {
-                VStack(spacing: Spacing.xl) {
+                VStack(spacing: Spacing.lg) {
+                    kennelHeader
+                    scentTrailsCard
                     emptyProfileCTA
                     subscriptionSection
                     cardsSection
@@ -87,6 +91,98 @@ struct ProfileView: View {
                 .padding(Spacing.lg)
             }
         }
+    }
+
+    // MARK: - Kennel Header (new)
+    //
+    // Hero banner for the Profile tab. Mirrors the prototype's "Welcome
+    // back" card but keeps the copy honest — we don't have a user name,
+    // so the subtitle addresses the subscription tier instead.
+
+    private var kennelHeader: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "pawprint.fill")
+                    .foregroundStyle(Color.barkainPrimary)
+                Text("Welcome back")
+                    .barkainEyebrow()
+            }
+            Text("The Kennel")
+                .font(.barkainLargeTitle)
+                .foregroundStyle(Color.barkainOnSurface)
+            Text(kennelSubtitle)
+                .font(.barkainBody)
+                .foregroundStyle(Color.barkainOnSurfaceVariant)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Spacing.lg)
+    }
+
+    private var kennelSubtitle: String {
+        if subscription.isProUser {
+            return "You're running Barkain Pro — unlimited sniffs, every deal."
+        }
+        return "Keep tabs on your identity profile, cards, and the deals we've fetched for you."
+    }
+
+    // MARK: - Scent Trails Card (new)
+    //
+    // Gradient hero showing real affiliate click totals. Replaces the
+    // prototype's "Barkain Points" card — we don't have a loyalty
+    // program yet, but `affiliate/stats.total_clicks` is a real number
+    // that tracks how many deals the user actually followed through on.
+
+    private var scentTrailsCard: some View {
+        VStack(spacing: Spacing.md) {
+            Text("Scent Trails Followed")
+                .barkainEyebrow(color: .white.opacity(0.9))
+
+            HStack(alignment: .lastTextBaseline, spacing: Spacing.xs) {
+                Text("\(affiliateStats?.totalClicks ?? 0)")
+                    .font(.system(size: 56, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                Image(systemName: "pawprint.fill")
+                    .font(.title2)
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+
+            Text(scentTrailsSubtitle)
+                .font(.barkainCaption)
+                .foregroundStyle(.white.opacity(0.9))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, Spacing.md)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, Spacing.xl)
+        .padding(.horizontal, Spacing.lg)
+        .background(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadiusLarge, style: .continuous)
+                .fill(Color.barkainPrimaryGradient)
+        )
+        .overlay(alignment: .bottomTrailing) {
+            Image(systemName: "pawprint.fill")
+                .font(.system(size: 180))
+                .foregroundStyle(.white.opacity(0.08))
+                .rotationEffect(.degrees(-15))
+                .offset(x: 30, y: 30)
+                .clipped()
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadiusLarge, style: .continuous))
+        .barkainShadowGlow()
+    }
+
+    private var scentTrailsSubtitle: String {
+        let total = affiliateStats?.totalClicks ?? 0
+        if total == 0 {
+            return "Tap any retailer in a price comparison to follow the scent to a real deal."
+        }
+        let top = affiliateStats?.clicksByRetailer
+            .max(by: { $0.value < $1.value })
+            .map { $0.key.capitalized }
+        if let top {
+            return "You've sniffed out \(total) deal\(total == 1 ? "" : "s"). Top trail: \(top)."
+        }
+        return "You've sniffed out \(total) deal\(total == 1 ? "" : "s")."
     }
 
     // MARK: - Subscription (Step 2f)
@@ -100,8 +196,7 @@ struct ProfileView: View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             HStack {
                 Text("Subscription")
-                    .font(.barkainHeadline)
-                    .foregroundStyle(Color.barkainOnSurfaceVariant)
+                    .barkainEyebrow()
                 Spacer()
                 tierBadge
             }
@@ -144,16 +239,28 @@ struct ProfileView: View {
                 .tint(.barkainPrimary)
             }
         }
+        .padding(Spacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                .fill(Color.barkainSurfaceContainerLowest)
+        )
+        .barkainShadowSoft()
     }
 
     private var tierBadge: some View {
         Text(subscription.isProUser ? "Barkain Pro" : "Free Plan")
-            .font(.barkainCaption)
-            .foregroundStyle(Color.barkainPrimary)
-            .padding(.horizontal, Spacing.sm)
+            .font(.barkainCaption.weight(.bold))
+            .foregroundStyle(subscription.isProUser ? .white : Color.barkainOnPrimaryContainer)
+            .padding(.horizontal, Spacing.md)
             .padding(.vertical, Spacing.xxs)
-            .background(Color.barkainPrimaryFixed.opacity(0.6))
-            .clipShape(Capsule())
+            .background(
+                Capsule().fill(
+                    subscription.isProUser
+                        ? AnyShapeStyle(Color.barkainPrimaryGradient)
+                        : AnyShapeStyle(Color.barkainPrimaryFixed)
+                )
+            )
     }
 
     // MARK: - Summary
@@ -161,7 +268,8 @@ struct ProfileView: View {
     private func profileSummary(_ profile: IdentityProfile) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.lg) {
-                headerCard(profile)
+                kennelHeader
+                scentTrailsCard
 
                 subscriptionSection
 
@@ -209,19 +317,19 @@ struct ProfileView: View {
     // MARK: - My Cards
 
     private var cardsSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
+        VStack(alignment: .leading, spacing: Spacing.md) {
             HStack {
                 Text("My Cards")
-                    .font(.barkainHeadline)
-                    .foregroundStyle(Color.barkainOnSurfaceVariant)
+                    .barkainEyebrow()
                 Spacer()
                 Text("\(userCards.count)")
-                    .font(.barkainCaption)
-                    .foregroundStyle(Color.barkainOnSurfaceVariant)
+                    .font(.barkainCaption.weight(.bold))
+                    .foregroundStyle(Color.barkainOnPrimaryContainer)
                     .padding(.horizontal, Spacing.sm)
                     .padding(.vertical, Spacing.xxs)
-                    .background(Color.barkainPrimaryFixed.opacity(0.4))
-                    .clipShape(Capsule())
+                    .background(
+                        Capsule().fill(Color.barkainPrimaryFixed)
+                    )
             }
 
             if userCards.isEmpty {
@@ -243,10 +351,6 @@ struct ProfileView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(.barkainPrimary)
                 }
-                .padding(Spacing.lg)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.barkainPrimaryFixed.opacity(0.25))
-                .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous))
             } else {
                 FlowLayout(spacing: Spacing.xs) {
                     ForEach(userCards) { card in
@@ -257,13 +361,19 @@ struct ProfileView: View {
                                     .foregroundStyle(.yellow)
                             }
                             Text(card.cardDisplayName)
-                                .font(.barkainCaption)
+                                .font(.barkainCaption.weight(.semibold))
                         }
-                        .foregroundStyle(Color.barkainPrimary)
-                        .padding(.horizontal, Spacing.sm)
-                        .padding(.vertical, Spacing.xxs)
-                        .background(Color.barkainPrimaryFixed.opacity(0.6))
-                        .clipShape(Capsule())
+                        .foregroundStyle(Color.barkainOnPrimaryContainer)
+                        .padding(.horizontal, Spacing.md)
+                        .padding(.vertical, Spacing.xs)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color.barkainPrimaryFixed)
+                        )
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(Color.barkainPrimaryContainer.opacity(0.4), lineWidth: 1)
+                        )
                     }
                 }
 
@@ -282,51 +392,81 @@ struct ProfileView: View {
                 .tint(.barkainPrimary)
             }
         }
-    }
-
-    private func headerCard(_ profile: IdentityProfile) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.xs) {
-            Text("Your Barkain profile")
-                .font(.barkainTitle2)
-                .foregroundStyle(Color.barkainOnSurface)
-            Text("Tap any discount you see in the Scan tab to verify through the retailer.")
-                .font(.barkainBody)
-                .foregroundStyle(Color.barkainOnSurfaceVariant)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.lg)
-        .background(Color.barkainPrimaryFixed.opacity(0.4))
-        .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                .fill(Color.barkainSurfaceContainerLowest)
+        )
+        .barkainShadowSoft()
     }
 
     private func chipsSection(title: String, chips: [String]) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.xs) {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
             Text(title)
-                .font(.barkainHeadline)
-                .foregroundStyle(Color.barkainOnSurfaceVariant)
+                .barkainEyebrow()
 
             FlowLayout(spacing: Spacing.xs) {
                 ForEach(chips, id: \.self) { chip in
                     Text(chip)
                         .font(.barkainCaption)
-                        .foregroundStyle(Color.barkainPrimary)
-                        .padding(.horizontal, Spacing.sm)
-                        .padding(.vertical, Spacing.xxs)
-                        .background(Color.barkainPrimaryFixed.opacity(0.6))
-                        .clipShape(Capsule())
+                        .foregroundStyle(Color.barkainOnPrimaryContainer)
+                        .padding(.horizontal, Spacing.md)
+                        .padding(.vertical, Spacing.xs)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color.barkainPrimaryFixed)
+                        )
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(Color.barkainPrimaryContainer.opacity(0.4), lineWidth: 1)
+                        )
                 }
             }
         }
+        .padding(Spacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                .fill(Color.barkainSurfaceContainerLowest)
+        )
+        .barkainShadowSoft()
     }
 
     private var emptyProfileCTA: some View {
-        EmptyState(
-            icon: "person.crop.circle.badge.plus",
-            title: "No profile yet",
-            subtitle: "Set up your identity profile to unlock exclusive discounts at Samsung.com, Apple, HP, and more.",
-            actionTitle: "Set up profile",
-            action: { showEditSheet = true }
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "person.crop.circle.badge.plus")
+                    .foregroundStyle(Color.barkainPrimary)
+                Text("Your scent profile")
+                    .barkainEyebrow()
+            }
+            Text("Tell Barkain who you are to unlock exclusive discounts at Samsung.com, Apple, HP, and more.")
+                .font(.barkainBody)
+                .foregroundStyle(Color.barkainOnSurfaceVariant)
+
+            Button {
+                showEditSheet = true
+            } label: {
+                HStack {
+                    Image(systemName: "pawprint.fill")
+                    Text("Set up profile")
+                        .font(.barkainHeadline)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, Spacing.sm)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.barkainPrimary)
+            .padding(.top, Spacing.xs)
+        }
+        .padding(Spacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                .fill(Color.barkainSurfaceContainerLowest)
         )
+        .barkainShadowSoft()
     }
 
     // MARK: - Load
@@ -351,6 +491,11 @@ struct ProfileView: View {
             // Non-fatal — profile still renders without the cards section.
             userCards = []
         }
+    }
+
+    private func loadAffiliateStats() async {
+        // Non-fatal: if this fails, the Scent Trails card shows zero.
+        affiliateStats = try? await apiClient.getAffiliateStats()
     }
 
     // MARK: - Helpers

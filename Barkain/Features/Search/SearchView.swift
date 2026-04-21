@@ -4,12 +4,25 @@ import SwiftUI
 
 struct SearchView: View {
 
+    // MARK: - Parent-owned
+
+    /// Seeded by HomeView when a user taps a "Recently sniffed" card.
+    /// When non-nil, SearchView fires a submit-style search and clears
+    /// the binding so it's one-shot. Default `.constant(nil)` keeps
+    /// direct NavigationStack instantiations working.
+    @Binding var pendingSeed: String?
+
+    init(pendingSeed: Binding<String?> = .constant(nil)) {
+        self._pendingSeed = pendingSeed
+    }
+
     // MARK: - Environment
 
     @Environment(\.apiClient) private var apiClient
     @Environment(FeatureGateService.self) private var featureGate
     @Environment(\.autocompleteService) private var autocompleteService
     @Environment(\.recentSearches) private var recentSearches
+    @Environment(\.recentlyScanned) private var recentlyScanned
 
     // MARK: - State
 
@@ -49,6 +62,20 @@ struct SearchView: View {
                 searchRevealed = false
             }
         }
+        .onChange(of: viewModel?.presentedProductViewModel?.product?.id) { _, newValue in
+            // Record search-resolved products into the same "Recently
+            // Scanned" rail the Scan tab writes to. Keeps the Home rail
+            // a unified surface regardless of how the product arrived.
+            guard let product = viewModel?.presentedProductViewModel?.product,
+                  product.id == newValue else { return }
+            recentlyScanned.record(
+                id: product.id,
+                upc: product.upc,
+                name: product.name,
+                brand: product.brand,
+                imageUrl: product.imageUrl
+            )
+        }
         .task {
             if viewModel == nil {
                 viewModel = SearchViewModel(
@@ -58,6 +85,18 @@ struct SearchView: View {
                     recentSearches: recentSearches
                 )
             }
+        }
+        .onChange(of: pendingSeed) { _, newSeed in
+            // One-shot hand-off from HomeView's "Recently sniffed" rail.
+            // Seed the query + submit, then clear the binding so the
+            // same tap doesn't re-fire on subsequent re-renders.
+            guard let seed = newSeed,
+                  let vm = viewModel else { return }
+            Task {
+                await vm.onQueryChange(seed)
+                await vm.onSearchSubmitted(seed)
+            }
+            pendingSeed = nil
         }
     }
 
@@ -217,50 +256,158 @@ struct SearchView: View {
     }
 
     // MARK: - Recents hint / empty
+    //
+    // Empty-query state. Swaps between a brand hero (no recents) and a
+    // styled recents column with chip rows (has recents). Both paths
+    // stay scrollable so the autocomplete drawer still overlays cleanly.
 
     @ViewBuilder
     private func recentsHintEmpty(vm: SearchViewModel) -> some View {
         if vm.recentSearches.isEmpty {
-            EmptyState(
-                icon: "magnifyingglass",
-                title: "Find the best price",
-                subtitle: "Tap the search bar to find products by name, model, or brand."
-            )
+            searchHeroEmpty
         } else {
-            VStack(alignment: .leading, spacing: 0) {
+            recentsColumn(vm: vm)
+        }
+    }
+
+    private var searchHeroEmpty: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.lg) {
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    HStack(spacing: Spacing.xs) {
+                        Image(systemName: "pawprint.fill")
+                            .foregroundStyle(Color.barkainPrimary)
+                        Text("Search")
+                            .barkainEyebrow()
+                    }
+
+                    VStack(alignment: .leading, spacing: -6) {
+                        Text("Sniff Out")
+                            .font(.system(size: 40, weight: .black, design: .rounded))
+                            .foregroundStyle(Color.barkainOnSurface)
+                        Text("Better Deals")
+                            .font(.system(size: 40, weight: .black, design: .rounded).italic())
+                            .foregroundStyle(Color.barkainPrimary)
+                    }
+
+                    Text("Type a product, model, or brand — our AI scent-tracker checks every retailer for the best price.")
+                        .font(.barkainBody)
+                        .foregroundStyle(Color.barkainOnSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, Spacing.xxs)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Spacing.lg)
+                .background(
+                    RoundedRectangle(cornerRadius: Spacing.cornerRadiusLarge, style: .continuous)
+                        .fill(Color.barkainSurfaceContainerLow)
+                )
+                .barkainShadowSoft()
+
+                exampleSearchesCard
+                Spacer(minLength: Spacing.xxl)
+            }
+            .padding(.horizontal, Spacing.lg)
+            .padding(.top, Spacing.sm)
+        }
+        .accessibilityIdentifier("searchHeroEmpty")
+    }
+
+    /// Examples drawn from the live autocomplete vocab — honest because
+    /// these strings definitely hit `AutocompleteService`'s prefix index,
+    /// not made-up categories.
+    private var exampleSearchesCard: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text("Popular sniffs")
+                .barkainEyebrow()
+
+            VStack(spacing: Spacing.xs) {
+                exampleRow(icon: "airpodspro", text: "Sony WH-1000XM5")
+                exampleRow(icon: "iphone", text: "iPhone 15 Pro")
+                exampleRow(icon: "tv", text: "LG C3 OLED 65 inch")
+                exampleRow(icon: "gamecontroller.fill", text: "PlayStation 5 Slim")
+            }
+        }
+        .padding(Spacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                .fill(Color.barkainSurfaceContainerLowest)
+        )
+        .barkainShadowSoft()
+    }
+
+    private func exampleRow(icon: String, text: String) -> some View {
+        HStack(spacing: Spacing.md) {
+            Image(systemName: icon)
+                .foregroundStyle(Color.barkainPrimary)
+                .frame(width: 28)
+            Text(text)
+                .font(.barkainBody)
+                .foregroundStyle(Color.barkainOnSurface)
+            Spacer()
+            Image(systemName: "arrow.up.left")
+                .font(.caption)
+                .foregroundStyle(Color.barkainOnSurfaceVariant)
+        }
+        .padding(.vertical, Spacing.xs)
+        .padding(.horizontal, Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadiusSmall, style: .continuous)
+                .fill(Color.barkainSurfaceContainerLow)
+        )
+    }
+
+    private func recentsColumn(vm: SearchViewModel) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
                 HStack {
-                    Text("Recent searches")
-                        .font(.barkainHeadline)
-                        .foregroundStyle(Color.barkainOnSurface)
+                    HStack(spacing: Spacing.xs) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .foregroundStyle(Color.barkainPrimary)
+                        Text("Recent sniffs")
+                            .barkainEyebrow()
+                    }
                     Spacer()
                     Button("Clear") { vm.clearRecentSearches() }
-                        .font(.barkainCaption)
-                        .foregroundStyle(Color.barkainOnSurfaceVariant)
+                        .font(.barkainCaption.weight(.semibold))
+                        .foregroundStyle(Color.barkainPrimary)
                 }
-                .padding(.horizontal, Spacing.md)
-                .padding(.top, Spacing.md)
 
-                List {
+                VStack(spacing: Spacing.xs) {
                     ForEach(Array(vm.recentSearches.enumerated()), id: \.offset) { index, text in
                         Button {
                             vm.selectRecentSearch(text)
                         } label: {
-                            HStack {
-                                Image(systemName: "clock.arrow.circlepath")
-                                    .foregroundStyle(Color.barkainOnSurfaceVariant)
+                            HStack(spacing: Spacing.md) {
+                                Image(systemName: "magnifyingglass")
+                                    .foregroundStyle(Color.barkainPrimary)
                                 Text(text)
                                     .font(.barkainBody)
                                     .foregroundStyle(Color.barkainOnSurface)
                                 Spacer()
+                                Image(systemName: "arrow.up.left")
+                                    .font(.caption)
+                                    .foregroundStyle(Color.barkainOnSurfaceVariant)
                             }
+                            .padding(Spacing.md)
+                            .background(
+                                RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                                    .fill(Color.barkainSurfaceContainerLowest)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                                    .stroke(Color.barkainOutlineVariant.opacity(0.25), lineWidth: 1)
+                            )
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("recentSearchRow_\(index)")
-                        .listRowBackground(Color.barkainSurface)
                     }
                 }
-                .listStyle(.plain)
             }
+            .padding(.horizontal, Spacing.lg)
+            .padding(.top, Spacing.sm)
+            .padding(.bottom, Spacing.xxl)
         }
     }
 

@@ -71,20 +71,38 @@ struct IdentityOnboardingView: View {
     // MARK: - Header
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: Spacing.xs) {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "pawprint.fill")
+                    .font(.caption)
+                    .foregroundStyle(Color.barkainPrimary)
+                Text("Step \(step.rawValue + 1) of \(Step.allCases.count)")
+                    .barkainEyebrow()
+            }
             stepIndicator
             Text(step.subtitle)
                 .font(.barkainBody)
                 .foregroundStyle(Color.barkainOnSurfaceVariant)
+                .padding(.top, Spacing.xxs)
         }
+        .padding(Spacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                .fill(Color.barkainPrimaryFixed.opacity(0.35))
+        )
     }
 
     private var stepIndicator: some View {
         HStack(spacing: Spacing.xxs) {
             ForEach(Step.allCases, id: \.rawValue) { s in
                 Capsule()
-                    .fill(s.rawValue <= step.rawValue ? Color.barkainPrimary : Color.barkainOutlineVariant)
-                    .frame(height: 4)
+                    .fill(
+                        s.rawValue <= step.rawValue
+                            ? AnyShapeStyle(Color.barkainPrimaryGradient)
+                            : AnyShapeStyle(Color.barkainOutlineVariant.opacity(0.5))
+                    )
+                    .frame(height: 6)
             }
         }
     }
@@ -139,12 +157,18 @@ struct IdentityOnboardingView: View {
         }
         .tint(.barkainPrimary)
         .padding(Spacing.md)
-        .background(Color.barkainSurfaceContainerLowest)
-        .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadiusSmall, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Spacing.cornerRadiusSmall, style: .continuous)
-                .stroke(Color.barkainOutlineVariant, lineWidth: 1)
+        .background(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                .fill(Color.barkainSurfaceContainerLowest)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                .stroke(
+                    isOn.wrappedValue ? Color.barkainPrimaryContainer.opacity(0.6) : Color.barkainOutlineVariant.opacity(0.4),
+                    lineWidth: isOn.wrappedValue ? 1.5 : 1
+                )
+        )
+        .barkainShadowSoft()
     }
 
     // MARK: - Action Bar

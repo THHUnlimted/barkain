@@ -16,6 +16,7 @@ struct BarkainApp: App {
     @State private var subscriptionService: SubscriptionService
     @State private var featureGateService: FeatureGateService
     @State private var recentSearches = RecentSearches()
+    @State private var recentlyScanned = RecentlyScannedStore()
     private let autocompleteService: any AutocompleteServiceProtocol = AutocompleteService()
 
     init() {
@@ -42,6 +43,7 @@ struct BarkainApp: App {
                 .environment(featureGateService)
                 .environment(\.autocompleteService, autocompleteService)
                 .environment(\.recentSearches, recentSearches)
+                .environment(\.recentlyScanned, recentlyScanned)
         }
     }
 }
