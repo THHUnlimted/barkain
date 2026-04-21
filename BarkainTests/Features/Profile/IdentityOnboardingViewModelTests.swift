@@ -66,6 +66,7 @@ final class IdentityOnboardingViewModelTests: XCTestCase {
         XCTAssertEqual(last?.isHealthcareWorker, false)
         XCTAssertEqual(last?.isSenior, false)
         XCTAssertEqual(last?.isGovernment, false)
+        XCTAssertEqual(last?.isYoungAdult, false)
         XCTAssertEqual(last?.isAaaMember, false)
         XCTAssertEqual(last?.isAarpMember, false)
         XCTAssertEqual(last?.isCostcoMember, false)
@@ -104,5 +105,31 @@ final class IdentityOnboardingViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.request.isVeteran)
         XCTAssertTrue(viewModel.request.idMeVerified)
         XCTAssertFalse(viewModel.request.isStudent)
+    }
+
+    func test_identityProfile_decodes_isYoungAdult() throws {
+        // Benefits Expansion: ensure convertFromSnakeCase maps is_young_adult → isYoungAdult.
+        let json = """
+        {
+            "user_id": "u",
+            "is_military": false, "is_veteran": false, "is_student": false,
+            "is_teacher": false, "is_first_responder": false, "is_nurse": false,
+            "is_healthcare_worker": false, "is_senior": false, "is_government": false,
+            "is_young_adult": true,
+            "is_aaa_member": false, "is_aarp_member": false,
+            "is_costco_member": false, "is_prime_member": false, "is_sams_member": false,
+            "id_me_verified": false, "sheer_id_verified": false,
+            "created_at": "2026-04-21T00:00:00Z",
+            "updated_at": "2026-04-21T00:00:00Z"
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .iso8601
+
+        let profile = try decoder.decode(IdentityProfile.self, from: json)
+        XCTAssertTrue(profile.isYoungAdult)
+        XCTAssertFalse(profile.isStudent)
     }
 }

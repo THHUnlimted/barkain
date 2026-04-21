@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-21 (Step 3f-hotfix — identity savings correctness: per-retailer price + `discount_programs.scope` for membership-fee discounts)
+> Last updated: 2026-04-21 (Benefits Expansion — +10 student-tech programs, +4 brand-direct retailers, `is_young_adult` axis + Amazon Prime Young Adult (`scope='membership_fee'`), migration 0010)
 
 ---
 
@@ -2769,6 +2769,126 @@ away from Apple products correctly, per `IdentityService`).
   and Apple programs on a phone product would only see the higher-
   value one. By design for the demo — stacking callouts would muddy
   the headline.
+
+### Benefits Expansion — Tech Product Discount Catalog (2026-04-21)
+
+**Branch:** `chore/benefits-expansion` → `main`
+
+**Motivation.** Barkain's student + young-adult audience skews heavily toward
+tech purchases (laptops, phones, peripherals). The original catalog (8
+`*_direct` retailers, 52 programs) covered military/veteran/first-responder
+breadth well, but student-tech coverage was thin and age-based programs
+(Amazon Prime Young Adult) had no representation at all. This step expands the
+seed-only catalog without restructuring the zero-LLM matching path.
+
+**Scope.**
+- 4 new brand-direct retailers: `acer_direct`, `asus_direct`, `razer_direct`,
+  `logitech_direct` (all `extraction_method='none'`, `supports_identity=True`).
+- 10 new student-tech programs: Apple Education (Student), Samsung Student
+  Pricing, HP Education, Dell University, Lenovo Student, Microsoft Education
+  (Surface), Acer Education, ASUS Education, Razer Educate, Logitech Education.
+- 1 new young-adult program: Amazon Prime Young Adult with
+  `scope='membership_fee'` (reuses the 3f-hotfix skip-savings contract — the
+  50 % is off Prime's $7.49/mo fee, not off products). New
+  `verification_method='age_verification'`.
+- New eligibility axis: `is_young_adult` (boolean on
+  `user_discount_profiles`, migration 0010). `ELIGIBILITY_TYPES` grows 9 → 10
+  with `"young_adult"`. `IdentityService._active_eligibility_types()` picks up
+  the new axis.
+- iOS: `IdentityProfile` + `IdentityProfileRequest` gain `isYoungAdult`
+  (16 → 17 booleans); `IdentityOnboardingView` step 2 (memberships) adds a
+  toggle at the top. `EligibleDiscount` gains `scope: String?` (optional-decode
+  so legacy JSON still works) — backend has been returning `scope` since
+  3f-hotfix but iOS was ignoring it.
+
+**Post-expansion counts.** 8 → 12 brand-direct retailers, 17 → 28 program
+templates, 52 → 63 expanded program rows, 9 → 10 eligibility types, 14 → 15
+`UserDiscountProfile` identity + affinity boolean fields (+ 2 verification
+unchanged).
+
+**Files changed.**
+```
+docs/IDENTITY_DISCOUNTS.md                         # NEW Student & Young Adult Tech section + stacking rules
+docs/FEATURES.md                                   # M5 rows updated
+docs/DATA_MODEL.md                                 # +is_young_adult + migrations 0008/0009/0010
+docs/TESTING.md                                    # v2.6 → v2.7
+docs/CHANGELOG.md                                  # this entry
+infrastructure/migrations/versions/0010_add_young_adult_to_user_discount_profiles.py  # NEW
+backend/modules/m5_identity/models.py              # UserDiscountProfile.is_young_adult
+backend/modules/m5_identity/schemas.py             # ELIGIBILITY_TYPES += young_adult, IdentityProfileRequest.is_young_adult
+backend/modules/m5_identity/service.py             # _active_eligibility_types mapping; BRAND_SPECIFIC_RETAILERS + RETAILER_CATEGORY_KEYWORDS for acer/asus/razer/logitech
+scripts/seed_discount_catalog.py                   # +4 BRAND_RETAILERS, +11 _PROGRAM_TEMPLATES
+backend/tests/conftest.py                          # drift marker: discount_programs.scope → user_discount_profiles.is_young_adult
+backend/tests/test_discount_catalog_seed.py        # +age_verification vocab, brand count 8 → 12, +3 coverage tests
+backend/tests/modules/test_m5_identity.py          # +2 service-level regression tests
+Barkain/Features/Shared/Models/IdentityProfile.swift            # +isYoungAdult, +EligibleDiscount.scope with explicit init
+Barkain/Features/Profile/IdentityOnboardingView.swift           # Young Adult toggle in memberships step, preview stub updated
+Barkain/Features/Profile/IdentityOnboardingViewModel.swift      # docstring 16 → 17
+Barkain/Features/Profile/ProfileView.swift                      # preview stub updated
+BarkainTests/Helpers/TestFixtures.swift            # sample + veteran profile fixtures
+BarkainTests/Features/Profile/IdentityOnboardingViewModelTests.swift  # +isYoungAdult skip assertion + decode test
+CLAUDE.md                                          # v5.11 — Benefits Expansion row + merged 3f/3f-hotfix, migrations line + drift marker bumped
+```
+
+**Key decisions.**
+1. **Prime Young Adult uses `scope='membership_fee'`** — same contract as
+   Prime Student post-3f-hotfix. Service automatically skips
+   `estimated_savings` when scope ≠ product, so the UI never claims a
+   per-product dollar figure for the membership-fee discount.
+2. **Extended-student via existing `is_student`, not a new `is_recent_grad`.**
+   UNiDAYS GRADLiFE (3 yr post-grad) + Student Beans GradBeans (5 yr)
+   operate as extended-student programs, so Barkain treats them under
+   `is_student`. A dedicated flag is reserved for a future migration if
+   demand surfaces.
+3. **US-only, items-only.** UK/EU programs (TOTUM, Student Edge, ISIC,
+   EYCA, NUS), streaming + SaaS (Spotify, Apple Music, Adobe CC, YouTube
+   Premium, Autodesk Edu, Microsoft 365 Edu) explicitly carved out of
+   scope. Employer-perks platforms (PerkSpot, BenefitHub, Abenity, etc.)
+   also out — they require a dedicated scraper step with auth-gate
+   percentage analysis.
+4. **Onboarding toggle in step 2 (memberships), not step 1 (identity).**
+   Step 1 already carried 9 rows; step 2 had 5. Young Adult fits the
+   light-touch "who you are" axis without visually swamping the dense
+   identity-groups step.
+5. **iOS `EligibleDiscount.scope: String?` with explicit init.** Had to
+   add an explicit init so existing call sites (2 previews in
+   `IdentityDiscountsSection.swift`, 2 fixtures in `TestFixtures.swift`,
+   1 fixture in `test_m6_recommend.py` mirror) keep compiling with no
+   changes — `scope` defaults to `nil` and `Codable` still synthesizes
+   decode for the backend payload.
+6. **`BRAND_SPECIFIC_RETAILERS` + `RETAILER_CATEGORY_KEYWORDS` updated.**
+   Acer/ASUS/Razer/Logitech each need a brand gate entry to prune
+   irrelevant results (e.g. Razer discount on a Samsung phone). Category
+   keywords narrow each brand to its tech surface (Razer includes
+   `peripheral, audio, gaming`; Logitech same with broader webcam/audio
+   coverage).
+
+**Test counts.** 510 → **515 backend** (+3 seed lint, +2 service; 0
+pre-existing failures) / 117 → **118 iOS unit** (+1 decode test in
+`IdentityOnboardingViewModelTests`) / 6 iOS UI unchanged. `ruff check` clean,
+`xcodebuild build` clean (1 pre-existing unrelated warning in
+`AutocompleteService.swift`).
+
+**Known limits.**
+- 3 existing programs (Apple "Education Pricing", HP "Education Store",
+  Samsung "Samsung Offer Program" student row) overlap with new
+  student-tech entries at the same retailer — the service dedupes by
+  `(retailer_id, program_name)`, so users will see two distinct cards
+  per brand (e.g. "Education Pricing" + "Apple Education (Student)").
+  Acceptable for now; the new rows represent the more specific
+  back-to-school SKU-level offerings. A dedup-by-eligibility sweep is
+  a candidate for a later pass.
+- Verification URLs are catalog-level only; the weekly
+  `discount_verification.py` worker will start polling them on its next
+  cron tick, flipping `is_active=False` after 3 consecutive hard failures.
+  No manual pre-check performed this step.
+- 5 subscription-like booleans on `UserDiscountProfile` remain
+  (`is_prime_member`, `is_costco_member`, `is_sams_member`, `is_aaa_member`,
+  `is_aarp_member`) — these are stored but not mapped into
+  `_active_eligibility_types()`. Separate follow-up to decide whether
+  they should feed matching or stay profile-only.
+
+---
 
 ### Step 3f-hotfix — Identity Savings Correctness (2026-04-21)
 

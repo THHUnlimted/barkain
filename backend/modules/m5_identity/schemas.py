@@ -19,6 +19,7 @@ ELIGIBILITY_TYPES: tuple[str, ...] = (
     "healthcare_worker",
     "senior",
     "government",
+    "young_adult",
 )
 
 
@@ -41,6 +42,7 @@ class IdentityProfileRequest(BaseModel):
     is_healthcare_worker: bool = False
     is_senior: bool = False
     is_government: bool = False
+    is_young_adult: bool = False
     is_aaa_member: bool = False
     is_aarp_member: bool = False
     is_costco_member: bool = False

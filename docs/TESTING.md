@@ -2,7 +2,7 @@
 
 > Source: Architecture sessions, March–April 2026
 > Scope: Backend (pytest) + iOS (XCTest) test conventions, CI configuration, coverage targets
-> Last updated: 2026-04-21 (v2.6 — Step 3f-hotfix: 510 backend / 117 iOS unit / 6 iOS UI. **0 pre-existing failures**. +3 regression tests in `test_m5_identity.py` covering (a) per-retailer price resolution, (b) brand-direct fallback to highest scraped price, (c) membership-fee scope surfaces without claiming product savings. Drift marker in `_ensure_schema` now checks `discount_programs.scope` (migration 0009) — bump it on every new migration that touches existing tables)
+> Last updated: 2026-04-21 (v2.7 — Benefits Expansion: **515 backend** / 118 iOS unit / 6 iOS UI. **0 pre-existing failures**. +5 backend tests — 3 in `test_discount_catalog_seed.py` (`test_benefits_expansion_brand_retailers_present`, `test_student_covers_all_tech_brands`, `test_young_adult_amazon_row_exists`) + 2 in `test_m5_identity.py` (`test_student_profile_surfaces_all_tech_brands`, `test_young_adult_profile_surfaces_amazon_prime`). +1 iOS unit test (`test_identityProfile_decodes_isYoungAdult` in `IdentityOnboardingViewModelTests`). Drift marker in `_ensure_schema` now checks `user_discount_profiles.is_young_adult` (migration 0010) — bump on every new migration that touches existing tables)
 
 ---
 

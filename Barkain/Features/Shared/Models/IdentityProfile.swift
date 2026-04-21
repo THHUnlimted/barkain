@@ -15,6 +15,7 @@ nonisolated struct IdentityProfile: Codable, Equatable, Sendable {
     var isHealthcareWorker: Bool
     var isSenior: Bool
     var isGovernment: Bool
+    var isYoungAdult: Bool
     var isAaaMember: Bool
     var isAarpMember: Bool
     var isCostcoMember: Bool
@@ -38,6 +39,7 @@ nonisolated struct IdentityProfileRequest: Codable, Equatable, Sendable {
     var isHealthcareWorker: Bool = false
     var isSenior: Bool = false
     var isGovernment: Bool = false
+    var isYoungAdult: Bool = false
     var isAaaMember: Bool = false
     var isAarpMember: Bool = false
     var isCostcoMember: Bool = false
@@ -57,6 +59,7 @@ nonisolated struct IdentityProfileRequest: Codable, Equatable, Sendable {
         self.isHealthcareWorker = profile.isHealthcareWorker
         self.isSenior = profile.isSenior
         self.isGovernment = profile.isGovernment
+        self.isYoungAdult = profile.isYoungAdult
         self.isAaaMember = profile.isAaaMember
         self.isAarpMember = profile.isAarpMember
         self.isCostcoMember = profile.isCostcoMember
@@ -86,6 +89,44 @@ nonisolated struct EligibleDiscount: Codable, Equatable, Sendable, Identifiable 
     let verificationUrl: String?
     let url: String?
     let estimatedSavings: Double?
+    /// `product` (default) | `membership_fee` | `shipping`. Backend sets this
+    /// on every row since 3f-hotfix. Default-nil keeps legacy call sites +
+    /// pre-3f-hotfix JSON decodable. When non-`product`, UI must not imply a
+    /// per-product dollar savings figure (see Prime Student / Prime Young
+    /// Adult).
+    let scope: String?
+
+    init(
+        programId: UUID,
+        retailerId: String,
+        retailerName: String,
+        programName: String,
+        eligibilityType: String?,
+        discountType: String,
+        discountValue: Double?,
+        discountMaxValue: Double?,
+        discountDetails: String?,
+        verificationMethod: String?,
+        verificationUrl: String?,
+        url: String?,
+        estimatedSavings: Double?,
+        scope: String? = nil
+    ) {
+        self.programId = programId
+        self.retailerId = retailerId
+        self.retailerName = retailerName
+        self.programName = programName
+        self.eligibilityType = eligibilityType
+        self.discountType = discountType
+        self.discountValue = discountValue
+        self.discountMaxValue = discountMaxValue
+        self.discountDetails = discountDetails
+        self.verificationMethod = verificationMethod
+        self.verificationUrl = verificationUrl
+        self.url = url
+        self.estimatedSavings = estimatedSavings
+        self.scope = scope
+    }
 }
 
 // MARK: - IdentityDiscountsResponse
