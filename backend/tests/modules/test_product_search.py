@@ -877,6 +877,74 @@ async def test_tier2_brand_and_model_match_skips_gemini(
 
 
 @pytest.mark.asyncio
+async def test_tier2_noise_stripped_from_output_even_when_legit_hit_exists(
+    client, db_session, _stub_bestbuy_tier2, _stub_upcitemdb_tier2
+):
+    """Regression (fix/search-merge-noise): BBY noise + 1 UPCitemdb legit hit
+    should return ONLY the legit hit — noise must not crowd it out at merge
+    time even though its presence keeps Gemini from escalating.
+
+    Reproduces the `iphone air` field bug: BBY returned 5 noise rows
+    (AppleCare / Airbnb gift cards / Medify Air purifiers) with confidence
+    0.9→0.54, UPCitemdb returned 1 real iPhone Air row with confidence ≤0.5.
+    Pre-fix: all 6 rows merged, BBY noise outranked UPCitemdb by confidence,
+    the real hit fell below `max_results=5`. Post-fix: noise dropped pre-merge,
+    only the UPCitemdb hit survives.
+    """
+    _stub_bestbuy_tier2.return_value = [
+        {
+            "device_name": "AppleCare+ for iPhone - Monthly",
+            "brand": "AppleCare", "model": "APPLECARE+ IPHONE AIR MON",
+            "category": "AppleCare Warranties",
+            "primary_upc": "ac1", "confidence": 0.9,
+        },
+        {
+            "device_name": "Airbnb - $100 Gift Card [Digital]",
+            "brand": "Airbnb", "model": "AIRBNB $100 DIGITAL.COM",
+            "category": "All Specialty Gift Cards",
+            "primary_upc": "ab1", "confidence": 0.86,
+        },
+        {
+            "device_name": "Medify Air - MA-15 Portable Air Purifier",
+            "brand": "Medify Air", "model": "MA-15-S1",
+            "category": "Portable Air Purifiers",
+            "primary_upc": "ma1", "confidence": 0.82,
+        },
+    ]
+    _stub_upcitemdb_tier2.return_value = [
+        {
+            "device_name": "Apple iPhone Air 256GB - Sky Blue",
+            "brand": "Apple", "model": "iPhone Air",
+            "category": None,
+            "primary_upc": "195949000001", "confidence": 0.5,
+        },
+    ]
+    with patch(
+        "modules.m1_product.search_service.gemini_generate_json",
+        new_callable=AsyncMock, return_value=[],
+    ) as mock_gemini:
+        response = await client.post(
+            SEARCH_URL, json={"query": "iphone air", "max_results": 5}
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    # Gemini does NOT fire — one UPCitemdb row passed the filter, so Tier 2
+    # is not empty. But the 3 BBY noise rows must be absent from the output.
+    assert mock_gemini.call_count == 0
+    sources = [r["source"] for r in body["results"]]
+    brands = [r["brand"] for r in body["results"]]
+    assert "AppleCare" not in brands
+    assert "Airbnb" not in brands
+    assert "Medify Air" not in brands
+    # The real iPhone Air must survive.
+    assert any("iPhone Air" in r["device_name"] for r in body["results"])
+    # And it must be from UPCitemdb (which our stub mapped to source=best_buy
+    # alias per search_service convention — relax to either source).
+    assert all(s in {"best_buy", "upcitemdb"} for s in sources)
+
+
+@pytest.mark.asyncio
 async def test_tier2_rtx5090_title_matches_without_brand_token(
     client, db_session, _stub_bestbuy_tier2, _stub_upcitemdb_tier2
 ):
