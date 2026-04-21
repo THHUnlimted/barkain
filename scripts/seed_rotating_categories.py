@@ -132,11 +132,9 @@ async def main() -> None:
 
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-    database_url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql+asyncpg://app:localdev@localhost:5432/barkain",
-    )
-    engine = create_async_engine(database_url)
+    from _db_url import get_dev_db_url
+
+    engine = create_async_engine(get_dev_db_url())
     async_session = async_sessionmaker(engine, expire_on_commit=False)
 
     async with async_session() as session:
