@@ -73,6 +73,16 @@ final class SearchViewModel {
     /// observable suggestions — the actual search is now submit-driven
     /// (via `.searchCompletion` taps or the return key) per Step 3d.
     func onQueryChange(_ newValue: String) async {
+        // SwiftUI's `.searchable` binding setter can fire with the same
+        // value on internal UI churn — e.g. when the nav bar hides or
+        // shows as `hideNavDuringStream` flips during an SSE stream.
+        // Only treat a non-identity call as a real user edit; spurious
+        // same-value calls must not wipe `presentedProductViewModel`
+        // (bug surfaced in ui-refresh-v2: the PriceComparisonView +
+        // SniffingHero got dismissed mid-stream, leaving the user on
+        // the results list with no prices).
+        let isActualEdit = newValue != query
+
         if newValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             != (lastDeepSearchedQuery?.lowercased() ?? "") {
             lastDeepSearchedQuery = nil
@@ -82,7 +92,7 @@ final class SearchViewModel {
 
         // Editing the query dismisses any presented PriceComparisonView so
         // the suggestions list isn't hidden behind it.
-        if presentedProductViewModel != nil {
+        if isActualEdit, presentedProductViewModel != nil {
             presentedProductViewModel = nil
         }
 
