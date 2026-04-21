@@ -221,7 +221,10 @@ async def test_eligible_discounts_military_matches_brands(db_session):
 
 
 async def test_eligible_discounts_multi_group_union(db_session):
-    """is_military + is_student returns the union of both groups, deduped."""
+    """is_military + is_student pulls both groups. Per-retailer scope dedup
+    (BE-L2) keeps the best program per retailer: Apple's military 10 % wins
+    over Education 5 % because Apple's real-world terms forbid stacking them.
+    """
     await _seed_user(db_session)
     await _seed_retailer(db_session, "samsung_direct")
     await _seed_retailer(db_session, "apple_direct")
@@ -238,12 +241,12 @@ async def test_eligible_discounts_multi_group_union(db_session):
     service = IdentityService(db_session)
     resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=None)
 
-    # 3 unique programs: Samsung (dedup), Apple Military, Apple Education
+    # 2 programs post-dedup: Samsung (one card for both eligibilities) and
+    # Apple Military Discount (10 % beats Education 5 % at the same retailer).
     names = {(d.retailer_id, d.program_name) for d in resp.eligible_discounts}
     assert names == {
         ("samsung_direct", "Samsung Offer Program"),
         ("apple_direct", "Military Discount"),
-        ("apple_direct", "Education Pricing"),
     }
     assert set(resp.identity_groups_active) == {"military", "student"}
 
@@ -498,7 +501,7 @@ async def test_membership_fee_scope_surfaces_but_claims_no_product_savings(db_se
         "Prime Student",
         "student",
         discount_value=50,
-        program_type="membership",
+        program_type="identity",
         scope="membership_fee",
     )
 
@@ -594,6 +597,80 @@ async def test_young_adult_profile_surfaces_amazon_prime(db_session):
     )
     assert disc.discount_value == 50.0
     assert "young_adult" in resp.identity_groups_active
+
+
+async def test_per_retailer_scope_dedup_keeps_best(db_session):
+    """BE-L2: when two student programs at the same retailer match, only the
+    highest-savings one survives. Catalog has both "HP Education Store" (40 %)
+    and "HP Education" (35 %) — a student must see the 40 %-er only.
+    """
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "hp_direct")
+    product = await _seed_product_with_price(
+        db_session,
+        "hp_direct",
+        1000.00,
+        name="HP Envy Laptop",
+        brand="HP",
+        category="Electronics > Computers > Laptops",
+    )
+    await _seed_program(
+        db_session, "hp_direct", "Education Store", "student", discount_value=40
+    )
+    await _seed_program(
+        db_session, "hp_direct", "HP Education", "student", discount_value=35
+    )
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_student=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=product.id)
+
+    hp_programs = [d for d in resp.eligible_discounts if d.retailer_id == "hp_direct"]
+    assert len(hp_programs) == 1
+    assert hp_programs[0].program_name == "Education Store"
+    assert hp_programs[0].discount_value == 40.0
+
+
+async def test_per_retailer_scope_dedup_preserves_different_scopes(db_session):
+    """Dedup must NOT collapse across scopes: Prime Student (membership_fee)
+    should coexist with a hypothetical product-scope program at amazon.
+    """
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "amazon")
+    product = await _seed_product_with_price(
+        db_session, "amazon", 2500.00, name="MacBook Pro", brand="Apple"
+    )
+    await _seed_program(
+        db_session,
+        "amazon",
+        "Prime Student",
+        "student",
+        discount_value=50,
+        scope="membership_fee",
+    )
+    await _seed_program(
+        db_session,
+        "amazon",
+        "Amazon Student Deal",
+        "student",
+        discount_value=5,
+        scope="product",
+    )
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_student=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=product.id)
+
+    amazon = [d for d in resp.eligible_discounts if d.retailer_id == "amazon"]
+    scopes = {d.scope for d in amazon}
+    assert scopes == {"membership_fee", "product"}
+    assert len(amazon) == 2
 
 
 async def test_eligible_discounts_no_product_id_no_savings(db_session):

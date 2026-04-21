@@ -53,14 +53,25 @@ struct IdentityDiscountCard: View {
                         .font(.barkainCaption)
                         .foregroundStyle(Color.barkainOnSurfaceVariant)
                         .lineLimit(2)
-                    if let badge = verificationBadge {
-                        Text(badge)
-                            .font(.barkainCaption)
-                            .foregroundStyle(Color.barkainPrimary)
-                            .padding(.horizontal, Spacing.xs)
-                            .padding(.vertical, 2)
-                            .background(Color.barkainPrimaryFixed.opacity(0.6))
-                            .clipShape(Capsule())
+                    HStack(spacing: Spacing.xxs) {
+                        if let scope = scopeBadge {
+                            Text(scope)
+                                .font(.barkainCaption)
+                                .foregroundStyle(Color.barkainOnSurface)
+                                .padding(.horizontal, Spacing.xs)
+                                .padding(.vertical, 2)
+                                .background(Color.barkainOutlineVariant.opacity(0.35))
+                                .clipShape(Capsule())
+                        }
+                        if let badge = verificationBadge {
+                            Text(badge)
+                                .font(.barkainCaption)
+                                .foregroundStyle(Color.barkainPrimary)
+                                .padding(.horizontal, Spacing.xs)
+                                .padding(.vertical, 2)
+                                .background(Color.barkainPrimaryFixed.opacity(0.6))
+                                .clipShape(Capsule())
+                        }
                     }
                 }
 
@@ -117,8 +128,21 @@ struct IdentityDiscountCard: View {
         case "sheer_id": return "Verify with SheerID"
         case "unidays": return "Verify with UNiDAYS"
         case "wesalute": return "Verify with WeSalute"
+        case "age_verification": return "Age verification"
         case .some(let other): return "Verify with \(other)"
         case .none: return nil
+        }
+    }
+
+    // BE-L9: surface non-product scopes so Prime Student / Prime YA (50 % off
+    // the Prime membership fee, not the product) read honestly. Default
+    // 'product' scope → no badge; matches existing card shape. Exposed for
+    // unit testing.
+    var scopeBadge: String? {
+        switch discount.scope {
+        case "membership_fee": return "Membership fee"
+        case "shipping": return "Shipping only"
+        default: return nil
         }
     }
 
@@ -128,7 +152,19 @@ struct IdentityDiscountCard: View {
             .foregroundStyle(Color.barkainPrimary)
     }
 
-    private var savingsText: String {
+    var savingsText: String {
+        // Non-product scopes never have estimated_savings (backend nulls it
+        // out — 3f-hotfix). Short-label the percentage so we don't imply a
+        // product discount.
+        if discount.scope == "membership_fee" {
+            if discount.discountType == "percentage", let value = discount.discountValue {
+                return "\(Int(value))% off fee"
+            }
+            return "On fee"
+        }
+        if discount.scope == "shipping" {
+            return "Free shipping"
+        }
         if let savings = discount.estimatedSavings, savings > 0 {
             return "Save \(formatCurrency(savings))"
         }
@@ -224,6 +260,22 @@ struct IdentityOnboardingCTARow: View {
                 verificationUrl: "https://www.homedepot.com/c/military",
                 url: nil,
                 estimatedSavings: 400
+            ),
+            EligibleDiscount(
+                programId: UUID(),
+                retailerId: "amazon",
+                retailerName: "Amazon",
+                programName: "Prime Student",
+                eligibilityType: "student",
+                discountType: "percentage",
+                discountValue: 50,
+                discountMaxValue: nil,
+                discountDetails: "50% off Prime membership fee for students ($7.49/mo after 6-mo free trial).",
+                verificationMethod: "unidays",
+                verificationUrl: "https://www.amazon.com/primestudent",
+                url: nil,
+                estimatedSavings: nil,
+                scope: "membership_fee"
             ),
         ],
         onOpen: { _ in }

@@ -386,6 +386,16 @@ Most identity discounts **cannot be stacked** with each other or with other prom
 
 **Portal bonuses are generally stackable** — a user can shop Samsung.com through Rakuten (cashback) AND use their military discount. This is where Barkain's multi-layer stacking creates the most value.
 
+**Per-retailer scope dedup (BE-L2).** When two identity programs at the same
+retailer would both surface for the same user (e.g. Apple Military 10% + Apple
+Education 5% for a military-and-student user; or HP "Education Store" 40% + HP
+"HP Education" 35% for a student), `IdentityService._dedup_best_per_retailer_scope`
+keeps the highest-savings program per `(retailer_id, scope)` pair. Matches the
+real-world terms listed in the table above — Apple's terms explicitly say
+military and education are mutually exclusive. Different scopes survive the
+dedup, so a Prime Student (`scope='membership_fee'`) card coexists with any
+product-scope Amazon program.
+
 ---
 
 ## Expansion Roadmap

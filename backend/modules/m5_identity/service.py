@@ -274,6 +274,19 @@ class IdentityService:
             )
             for prog, rname in unique
         ]
+
+        # Per-retailer scope dedup (BE-L2). The Benefits Expansion added
+        # brand-specific student programs (Apple Education, HP Education, …)
+        # that overlap the older cross-eligibility programs (HP Education
+        # Store, Apple Education Pricing). Real-world terms at these
+        # retailers forbid stacking, so surfacing both makes the UI claim
+        # savings the checkout won't honor. Keep the best program per
+        # (retailer_id, scope): highest estimated_savings → highest
+        # discount_value → alphabetical for determinism. Multiple scopes
+        # coexist untouched (Prime Student's membership_fee stays alongside
+        # a product-scope program at amazon).
+        discounts = self._dedup_best_per_retailer_scope(discounts)
+
         # Sort: highest estimated savings first, then highest discount_value
         # (for the no-product-id case), then alphabetical program_name for stability
         discounts.sort(
@@ -311,6 +324,10 @@ class IdentityService:
                 continue
             seen.add(key)
             result.append(self._build(prog, rname, applicable_price=None))
+        # Apply the same per-retailer scope dedup here so the browse view's
+        # shape matches the matched view. Without it, Apple Education Pricing
+        # AND Apple Education (Student) both surface in /programs.
+        result = IdentityService._dedup_best_per_retailer_scope(result)
         result.sort(key=lambda d: (d.retailer_name, d.program_name))
         return result
 
@@ -343,6 +360,37 @@ class IdentityService:
             "young_adult": profile.is_young_adult,
         }
         return [k for k, v in mapping.items() if v]
+
+    @staticmethod
+    def _dedup_best_per_retailer_scope(
+        discounts: list[EligibleDiscount],
+    ) -> list[EligibleDiscount]:
+        """Keep the best EligibleDiscount per (retailer_id, scope) pair.
+
+        "Best" = highest estimated_savings, then highest discount_value
+        (covers the browse path where savings isn't computed), then lowest
+        program_name for deterministic tie-break. Different scopes survive:
+        a membership_fee card coexists with a product card at the same
+        retailer. See BE-L2 in docs/CHANGELOG.md for motivation.
+        """
+        best: dict[tuple[str, str], EligibleDiscount] = {}
+        for d in discounts:
+            key = (d.retailer_id, d.scope or "product")
+            incumbent = best.get(key)
+            if incumbent is None:
+                best[key] = d
+                continue
+            # Rank: higher savings wins, then higher discount_value, then
+            # lexicographically smaller program_name.
+            def rank(x: EligibleDiscount) -> tuple[float, float, str]:
+                return (
+                    -(x.estimated_savings or 0.0),
+                    -(x.discount_value or 0.0),
+                    x.program_name,
+                )
+            if rank(d) < rank(incumbent):
+                best[key] = d
+        return list(best.values())
 
     @staticmethod
     def _build(

@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-21 (Benefits Expansion — +10 student-tech programs, +4 brand-direct retailers, `is_young_adult` axis + Amazon Prime Young Adult (`scope='membership_fee'`), migration 0010)
+> Last updated: 2026-04-21 (Benefits Expansion Follow-ups — BE-L1 `program_type='membership'` retired, BE-L2 per-retailer scope dedup, BE-L9 iOS scope badge + honest membership-fee phrasing)
 
 ---
 
@@ -2769,6 +2769,99 @@ away from Apple products correctly, per `IdentityService`).
   and Apple programs on a phone product would only see the higher-
   value one. By design for the demo — stacking callouts would muddy
   the headline.
+
+### Benefits Expansion Follow-ups — BE-L1 / BE-L2 / BE-L9 (2026-04-21)
+
+**Branch:** `chore/benefits-expansion-followups` → `main`
+
+**Motivation.** Three issues surfaced in the Benefits Expansion error report:
+
+- **BE-L1.** `program_type='membership'` was a single-use value carried only by
+  Prime Student; Prime Young Adult used `program_type='identity'` + new
+  `scope='membership_fee'` instead. Two shapes for the same concept.
+- **BE-L2.** Seeding the new student-tech brand-direct programs created
+  overlapping rows at Apple/HP/Samsung/Dell/Lenovo/Microsoft (existing
+  Education Store programs + new BE-specific ones). A student at hp_direct
+  saw both "Education Store" (40%) and "HP Education" (35%) — two cards for
+  benefits the retailer's terms forbid stacking.
+- **BE-L9.** iOS `EligibleDiscount` decoded the new `scope` field after 3f-hotfix
+  + Benefits Expansion but rendered nothing for it. Prime Student and Prime
+  Young Adult read identically to product-scope cards (just without a dollar
+  savings figure).
+
+**Scope.**
+- `scripts/seed_discount_catalog.py`: Prime Student → `program_type='identity'`.
+  Comment points at Prime Young Adult as the canonical shape.
+- `backend/modules/m5_identity/service.py`: new static helper
+  `_dedup_best_per_retailer_scope()` applied after the existing
+  `(retailer_id, program_name)` dedup in both `get_eligible_discounts` and
+  `get_all_programs`. Ranks by `-(estimated_savings)`, `-(discount_value)`,
+  then `program_name` for deterministic tie-break. Different scopes survive
+  (membership_fee ≠ product) so a Prime Student card coexists with any
+  product-scope program at amazon.
+- `Barkain/Features/Recommendation/IdentityDiscountsSection.swift`: new
+  `scopeBadge` computed property ("Membership fee" / "Shipping only" / nil)
+  surfaces as a grey pill next to the verification badge. `savingsText`
+  switches on `scope`: membership_fee → "50% off fee", shipping → "Free
+  shipping", product (default) → unchanged. `verificationBadge` also now
+  labels the new `age_verification` method (Prime Young Adult).
+
+**Files changed.**
+```
+scripts/seed_discount_catalog.py                       # BE-L1: program_type='membership' → 'identity'
+backend/modules/m5_identity/service.py                 # BE-L2: _dedup_best_per_retailer_scope, applied to both paths
+backend/tests/test_discount_catalog_seed.py            # BE-L1: +test_membership_program_type_retired, _VALID_PROGRAM_TYPES tightened
+backend/tests/modules/test_m5_identity.py              # BE-L1: prime student test → program_type='identity';
+                                                       # BE-L2: +test_per_retailer_scope_dedup_keeps_best,
+                                                       #        +test_per_retailer_scope_dedup_preserves_different_scopes;
+                                                       # BE-L2: multi_group_union expected set tightened (Apple mil wins over edu)
+Barkain/Features/Recommendation/IdentityDiscountsSection.swift  # BE-L9: scopeBadge, savingsText scope-aware, age_verification label, preview
+BarkainTests/Features/Recommendation/IdentityDiscountCardTests.swift  # BE-L9: +6 tests on scopeBadge + savingsText
+docs/CHANGELOG.md                                      # this entry
+CLAUDE.md                                              # bump last-updated + test totals
+```
+
+**Key decisions.**
+1. **Dedup rule, not seed deletion.** BE-L2 surfaced as overlapping catalog
+   rows (e.g. hp_direct "Education Store" 40% vs "HP Education" 35%). The
+   catalog correctly reflects the real-world programs — HP genuinely has both
+   pages in documentation. The Planner proposed a dedup *rule* over a
+   delete. Keeps the catalog honest; puts the business rule (pick-best) in
+   service code where it belongs.
+2. **Dedup key = (retailer_id, scope).** Not (retailer_id) alone — that would
+   incorrectly collapse Prime Student (membership_fee) into a hypothetical
+   future product-scope program at amazon. Not
+   (retailer_id, scope, eligibility_type) — a user with both military AND
+   student would get two stacked cards at hp_direct when HP's real terms say
+   pick one.
+3. **Rank by estimated_savings first.** When a product_id is present, savings
+   are the most informative signal. When it isn't, discount_value fills in.
+   Alphabetical tie-break keeps ordering deterministic across runs.
+4. **Apply dedup to both matched + browse paths.** The browse view (`/programs`)
+   uses the same card shape as the matched view. Without dedup in both, the
+   browse view would still show duplicates — stale test signal.
+5. **`age_verification` label pushed through verificationBadge.** Prime Young
+   Adult is the only consumer. Simpler to add one case to the switch than
+   route around it.
+6. **`savingsText` avoids "% off" phrasing for membership_fee.** The whole
+   reason `scope='membership_fee'` was introduced (3f-hotfix) was to prevent
+   claiming product savings against a membership fee. Carrying the same
+   intent into the copy ("50% off fee") closes the loop. "Free shipping" is
+   the matching shape for shipping scope.
+
+**Test counts (this step).** +3 backend (BE-L1 retirement + 2 BE-L2 dedup), +6 iOS.
+Running totals: 518 backend + 124 iOS unit + 6 iOS UI.
+
+**Known limits.**
+- The multi-group-union test was updated to reflect the new dedup outcome
+  (Apple Military 10% wins over Education 5% when a user has both flags).
+  This is a real behavior change, not just a test update — a student+military
+  user at Apple will now see one card instead of two. Matches Apple's
+  real-world terms.
+- `BE-L3–L8`, `BE-L10`, `BE-L11` (from the original error report) remain
+  open. None block this cleanup.
+
+---
 
 ### Benefits Expansion — Tech Product Discount Catalog (2026-04-21)
 
