@@ -4,6 +4,7 @@ Zero-LLM, deterministic. URL construction lives in a pure static method
 (`build_affiliate_url`) so tests can validate it without a DB fixture.
 """
 
+import json
 import logging
 import urllib.parse
 
@@ -144,11 +145,16 @@ class AffiliateService:
             {"id": user_id},
         )
 
+        metadata_payload = json.dumps(
+            {"activation_skipped": request.activation_skipped}
+        )
+
         await self.db.execute(
             text(
                 "INSERT INTO affiliate_clicks "
-                "(user_id, product_id, retailer_id, affiliate_network, click_url) "
-                "VALUES (:user_id, :product_id, :retailer_id, :network, :url)"
+                "(user_id, product_id, retailer_id, affiliate_network, click_url, metadata) "
+                "VALUES (:user_id, :product_id, :retailer_id, :network, :url, "
+                "CAST(:metadata AS jsonb))"
             ),
             {
                 "user_id": user_id,
@@ -156,6 +162,7 @@ class AffiliateService:
                 "retailer_id": request.retailer_id,
                 "network": network_for_db,
                 "url": tagged.affiliate_url,
+                "metadata": metadata_payload,
             },
         )
         await self.db.flush()

@@ -21,6 +21,10 @@ class AffiliateClickRequest(BaseModel):
     product_id: uuid.UUID | None = None
     retailer_id: str
     product_url: str
+    # Step 3f — purchase interstitial records whether the user bypassed
+    # the card-activation reminder. Persisted to affiliate_clicks.metadata
+    # for post-demo analytics. Default false preserves the 2g contract.
+    activation_skipped: bool = False
 
 
 # MARK: - Response envelopes
