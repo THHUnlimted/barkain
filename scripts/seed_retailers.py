@@ -1,7 +1,6 @@
 """Seed the retailers table with the 11 Phase 1 retailers."""
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 
