@@ -32,7 +32,7 @@ _VALID_VERIFICATION_METHODS = {
     None,
 }
 _VALID_DISCOUNT_TYPES = {"percentage", "fixed_amount"}
-_VALID_PROGRAM_TYPES = {"identity", "membership"}
+_VALID_PROGRAM_TYPES = {"identity"}
 
 
 def _known_retailer_ids() -> set[str]:
@@ -106,6 +106,18 @@ def test_all_program_types_valid():
         assert p["program_type"] in _VALID_PROGRAM_TYPES, (
             f"Unknown program_type '{p['program_type']}' "
             f"in program '{p['program_name']}'"
+        )
+
+
+def test_membership_program_type_retired():
+    """Post-Benefits-Expansion: program_type='membership' is retired. Membership-
+    fee programs (Prime Student, Prime Young Adult) use program_type='identity'
+    + scope='membership_fee' — scope is what flips savings math off. See BE-L1.
+    """
+    for p in DISCOUNT_PROGRAMS:
+        assert p["program_type"] != "membership", (
+            f"program_type='membership' is retired — '{p['program_name']}' "
+            f"should use 'identity' + scope='membership_fee'"
         )
 
 

@@ -408,7 +408,11 @@ _PROGRAM_TEMPLATES: list[dict] = [
     {
         "retailer_id": "amazon",
         "program_name": "Prime Student",
-        "program_type": "membership",
+        # Membership-fee programs live on the same 'identity' program_type as
+        # everything else; scope='membership_fee' is what flips the savings
+        # math off in IdentityService._build. See Prime Young Adult below for
+        # the same shape.
+        "program_type": "identity",
         "eligibility_types": ["student"],
         "discount_type": "percentage",
         "discount_value": 50,
@@ -417,8 +421,6 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.amazon.com/primestudent",
         "url": "https://www.amazon.com/primestudent",
         "discount_details": "50% off Prime ($7.49/mo after 6-mo free trial). Requires .edu email. Includes GrubHub+, other perks.",
-        # Prime Student's 50 % is off the Prime membership fee, NOT off
-        # products purchased with Prime. Don't claim product savings.
         "scope": "membership_fee",
     },
     # MARK: - Benefits Expansion — Student Tech (US, items-only)

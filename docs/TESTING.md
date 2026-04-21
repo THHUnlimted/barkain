@@ -2,7 +2,7 @@
 
 > Source: Architecture sessions, March–April 2026
 > Scope: Backend (pytest) + iOS (XCTest) test conventions, CI configuration, coverage targets
-> Last updated: 2026-04-21 (v2.7 — Benefits Expansion: **515 backend** / 118 iOS unit / 6 iOS UI. **0 pre-existing failures**. +5 backend tests — 3 in `test_discount_catalog_seed.py` (`test_benefits_expansion_brand_retailers_present`, `test_student_covers_all_tech_brands`, `test_young_adult_amazon_row_exists`) + 2 in `test_m5_identity.py` (`test_student_profile_surfaces_all_tech_brands`, `test_young_adult_profile_surfaces_amazon_prime`). +1 iOS unit test (`test_identityProfile_decodes_isYoungAdult` in `IdentityOnboardingViewModelTests`). Drift marker in `_ensure_schema` now checks `user_discount_profiles.is_young_adult` (migration 0010) — bump on every new migration that touches existing tables)
+> Last updated: 2026-04-21 (v2.8 — Benefits Expansion follow-ups: **518 backend** / 124 iOS unit / 6 iOS UI. **0 pre-existing failures**. +3 backend — `test_membership_program_type_retired` (BE-L1), `test_per_retailer_scope_dedup_keeps_best` + `test_per_retailer_scope_dedup_preserves_different_scopes` (BE-L2). +6 iOS — 3 `scopeBadge_*` + 3 `savingsText_*` in `IdentityDiscountCardTests` (BE-L9). `test_eligible_discounts_multi_group_union` expected set updated to reflect dedup — Apple mil 10% wins over edu 5%. Drift marker unchanged: follow-ups added no schema.)
 
 ---
 
