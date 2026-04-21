@@ -379,6 +379,9 @@ _PROGRAM_TEMPLATES: list[dict] = [
         "verification_url": "https://www.amazon.com/primestudent",
         "url": "https://www.amazon.com/primestudent",
         "discount_details": "50% off Prime ($7.49/mo after 6-mo free trial). Requires .edu email. Includes GrubHub+, other perks.",
+        # Prime Student's 50 % is off the Prime membership fee, NOT off
+        # products purchased with Prime. Don't claim product savings.
+        "scope": "membership_fee",
     },
 ]
 
@@ -393,6 +396,7 @@ def _expand_programs() -> list[dict]:
                 "retailer_id": template["retailer_id"],
                 "program_name": template["program_name"],
                 "program_type": template["program_type"],
+                "scope": template.get("scope", "product"),
                 "eligibility_type": etype,
                 "discount_type": template["discount_type"],
                 "discount_value": template["discount_value"],
@@ -448,19 +452,20 @@ async def seed_discount_programs(session: AsyncSession) -> int:
             text(
                 """
                 INSERT INTO discount_programs (
-                    retailer_id, program_name, program_type, eligibility_type,
-                    discount_type, discount_value, discount_max_value,
-                    discount_details, verification_method, verification_url,
-                    url, is_active
+                    retailer_id, program_name, program_type, scope,
+                    eligibility_type, discount_type, discount_value,
+                    discount_max_value, discount_details, verification_method,
+                    verification_url, url, is_active
                 )
                 VALUES (
-                    :retailer_id, :program_name, :program_type, :eligibility_type,
-                    :discount_type, :discount_value, :discount_max_value,
-                    :discount_details, :verification_method, :verification_url,
-                    :url, :is_active
+                    :retailer_id, :program_name, :program_type, :scope,
+                    :eligibility_type, :discount_type, :discount_value,
+                    :discount_max_value, :discount_details, :verification_method,
+                    :verification_url, :url, :is_active
                 )
                 ON CONFLICT (retailer_id, program_name, eligibility_type) DO UPDATE SET
                     program_type = EXCLUDED.program_type,
+                    scope = EXCLUDED.scope,
                     discount_type = EXCLUDED.discount_type,
                     discount_value = EXCLUDED.discount_value,
                     discount_max_value = EXCLUDED.discount_max_value,

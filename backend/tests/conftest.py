@@ -55,7 +55,7 @@ async def _ensure_schema(engine):
     if _schema_ready:
         return
 
-    # Drift marker: affiliate_clicks.metadata column from migration 0008.
+    # Drift marker: discount_programs.scope column from migration 0009.
     # Update this query when adding new migrations that introduce
     # constraints, columns, or indexes to existing tables.
     async with engine.begin() as conn:
@@ -64,7 +64,7 @@ async def _ensure_schema(engine):
         marker = await conn.execute(
             text(
                 "SELECT 1 FROM information_schema.columns "
-                "WHERE table_name = 'affiliate_clicks' AND column_name = 'metadata'"
+                "WHERE table_name = 'discount_programs' AND column_name = 'scope'"
             )
         )
         schema_current = marker.scalar() is not None

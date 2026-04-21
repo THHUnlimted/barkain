@@ -5,6 +5,7 @@ from typing import Optional
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Computed,
     Date,
     DateTime,
@@ -74,6 +75,12 @@ class DiscountProgram(Base):
     )
     program_name: Mapped[str] = mapped_column(Text, nullable=False)
     program_type: Mapped[str] = mapped_column(Text, nullable=False)
+    # 'product' (default), 'membership_fee', or 'shipping'. See migration
+    # 0009 — `percentage` discounts at non-'product' scope do NOT subtract
+    # from the product price; iOS renders them as informational.
+    scope: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'product'")
+    )
     eligibility_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     discount_type: Mapped[str] = mapped_column(Text, nullable=False)
     discount_value: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
@@ -118,6 +125,10 @@ class DiscountProgram(Base):
 
     __table_args__ = (
         UniqueConstraint("retailer_id", "program_name", "eligibility_type"),
+        CheckConstraint(
+            "scope IN ('product', 'membership_fee', 'shipping')",
+            name="chk_discount_programs_scope",
+        ),
         Index(
             "idx_discount_programs_lookup",
             "retailer_id",
