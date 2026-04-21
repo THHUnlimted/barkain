@@ -406,33 +406,41 @@ class ProductSearchService:
                     self._best_buy_search(normalized, max_results),
                     self._upcitemdb_search(normalized, max_results),
                 )
-                # Tier 3: Gemini fires when forced (deep-search hint), when
-                # both Tier 2 sources returned nothing (genuine long-tail:
-                # groceries, apparel, hand tools), OR when every Tier 2 row
-                # is accessory/service/peripheral noise (cases, AppleCare,
-                # gift cards, monitors-named-Pixel, games-for-Switch). The
-                # noise check resolves the "samsung flip 7 → cases only"
-                # class of failures.
-                relevant_tier2 = [
-                    row for row in (*bestbuy_rows, *upcitemdb_rows)
-                    if not _is_tier2_noise(row, query=normalized)
+                # Unconditional Tier 2 noise filter (fix/search-merge-noise).
+                #
+                # Noise rows (accessories, warranties, gift cards, off-brand
+                # fuzzy matches) never outrank real hits — they only crowd
+                # them out at merge time. Before this fix, noise was only
+                # dropped when Gemini escalated AND returned something,
+                # which meant queries like "iphone air" that returned 1
+                # real UPCitemdb row + 5 BBY noise rows skipped escalation
+                # entirely (one "relevant" row → no Gemini fire) and the
+                # merge's confidence ordering put BBY noise above the
+                # real hit, pushing it below the top-N cut.
+                noise_dropped_bb = [
+                    r for r in bestbuy_rows if not _is_tier2_noise(r, query=normalized)
                 ]
-                escalate_to_gemini = force_gemini or not relevant_tier2
+                noise_dropped_upc = [
+                    r for r in upcitemdb_rows if not _is_tier2_noise(r, query=normalized)
+                ]
+                if (len(noise_dropped_bb) != len(bestbuy_rows)
+                        or len(noise_dropped_upc) != len(upcitemdb_rows)):
+                    logger.info(
+                        "tier2 noise filter dropped bb=%d→%d upc=%d→%d for query=%r",
+                        len(bestbuy_rows), len(noise_dropped_bb),
+                        len(upcitemdb_rows), len(noise_dropped_upc), normalized,
+                    )
+                bestbuy_rows = noise_dropped_bb
+                upcitemdb_rows = noise_dropped_upc
+
+                # Tier 3: Gemini fires when forced (deep-search hint) OR
+                # when both Tier 2 sources came back empty after filtering
+                # (either genuine long-tail, or all-noise).
+                escalate_to_gemini = force_gemini or not (
+                    bestbuy_rows or upcitemdb_rows
+                )
                 if escalate_to_gemini:
                     gemini_rows = await self._gemini_search(normalized, max_results)
-                # Noise suppression: if Gemini was escalated specifically
-                # because Tier 2 was all noise (cases / AppleCare / monitors
-                # named Pixel / games-for-Switch / off-brand fuzzy hits),
-                # the noise rows must NOT crowd out Gemini's real flagship
-                # hits at merge time. Skip suppression when Gemini itself
-                # returned nothing — half-noisy answer beats none.
-                if escalate_to_gemini and not force_gemini and gemini_rows:
-                    bestbuy_rows = [
-                        r for r in bestbuy_rows if not _is_tier2_noise(r, query=normalized)
-                    ]
-                    upcitemdb_rows = [
-                        r for r in upcitemdb_rows if not _is_tier2_noise(r, query=normalized)
-                    ]
 
         merged = self._merge(
             db_rows, bestbuy_rows, upcitemdb_rows, gemini_rows, max_results,
