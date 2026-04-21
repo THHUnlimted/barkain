@@ -99,11 +99,11 @@ auto-debounce-search.
 
 ### Module System
 
-9 modules currently shipped (`m1_product`, `m2_prices`, `m3_secondary`, `m4_coupons`, `m5_identity`, `m9_notify`, `m10_savings`, `m11_billing`, `m12_affiliate`). Each is self-contained with `router.py` (FastAPI endpoints), `service.py` (business logic), `schemas.py` (Pydantic request/response). ORM models live in the shared `backend/app/models.py` so every module can reference the same SQLAlchemy declarative base.
+10 modules currently shipped (`m1_product`, `m2_prices`, `m3_secondary`, `m4_coupons`, `m5_identity`, `m6_recommend`, `m9_notify`, `m10_savings`, `m11_billing`, `m12_affiliate`). Each is self-contained with `router.py` (FastAPI endpoints), `service.py` (business logic), `schemas.py` (Pydantic request/response). ORM models live in the shared `backend/app/models.py` so every module can reference the same SQLAlchemy declarative base.
 
-Modules communicate via direct Python imports (modular monolith). No message bus between modules at MVP scale. Background workers (`backend/workers/`) reuse module services directly — `price_ingestion.process_queue` calls `PriceAggregationService.get_prices(force_refresh=True)` without duplication.
+Modules communicate via direct Python imports (modular monolith). No message bus between modules at MVP scale. Background workers (`backend/workers/`) reuse module services directly — `price_ingestion.process_queue` calls `PriceAggregationService.get_prices(force_refresh=True)` without duplication. `m6_recommend.service.RecommendationService` gathers inputs from `PriceAggregationService`, `IdentityService`, `CardService`, and the `portal_bonuses` table in one `asyncio.gather`.
 
-Phase 3 modules not yet shipped: `m6_recommend` (Claude Sonnet synthesis), `m7_predict` (Prophet), `m8_scanner` (image + receipt vision).
+Phase 3 modules not yet shipped: `m7_predict` (Prophet), `m8_scanner` (image + receipt vision).
 
 ### Middleware Stack (outermost → innermost)
 
@@ -273,7 +273,7 @@ All LLM interactions go through `abstraction.py`. No module imports `google.gena
 | Task | Model | Rationale | Phase |
 |---|---|---|---|
 | UPC product resolution | Gemini 3.1 Flash Lite Preview | Fast, cost-effective UPC lookup with thinking + Google Search grounding. System instruction (9-step reasoning, cached by Gemini); user prompt (bare UPC + output format). Returns `device_name` (fully specified name) + `model` (shortest unambiguous identifier — generation markers, capacity, GPU SKUs) | 1 |
-| Full-stack recommendation | Claude Sonnet | Multi-variable reasoning across all 9 layers | 3 |
+| ~~Full-stack recommendation~~ | ~~Claude Sonnet~~ | **Reclassified AI → T in Step 3e (2026-04-22).** `m6_recommend` is now deterministic stacking — one `asyncio.gather` then pure Python math. Sonnet can be layered on later as a Phase 4 "polish" pass if demo feedback demands headline flair. | ~~3~~ |
 | Image product identification | Claude Sonnet (vision) | Best vision quality in testing | 3 |
 | Receipt OCR interpretation | Claude Sonnet (vision) | Structured data extraction from text | 3 |
 | Price prediction reasoning | Claude Sonnet | Complex temporal pattern analysis | 4 |
@@ -334,7 +334,7 @@ All AI calls request JSON output. Use Instructor library for Pydantic model vali
 | GET | /api/v1/webhooks/ebay/account-deletion | app/ebay_webhook | **Step 3b** — eBay Marketplace Account Deletion verification handshake. Returns `{"challengeResponse": SHA-256(challenge_code + EBAY_VERIFICATION_TOKEN + EBAY_ACCOUNT_DELETION_ENDPOINT)}` as lowercase hex. 503 if either env var is unset. GDPR prerequisite for Browse API production access. | Exempt |
 | POST | /api/v1/webhooks/ebay/account-deletion | app/ebay_webhook | **Step 3b** — eBay Marketplace Account Deletion notification. Logs `notificationId` / `userId` / `eoiUserId`, returns 204. Swallows malformed JSON (still 204) so eBay doesn't retry. Barkain does not store per-user eBay data today — log-and-ack is GDPR-compliant. Extend to row-level purge in `_handle_notification` if Phase 5 adds wishlists. | Exempt |
 | POST | /api/v1/products/identify | M1 | Image → product (vision AI) | 10/min |
-| POST | /api/v1/recommend | M6 | Full-stack recommendation | 10/min |
+| POST | /api/v1/recommend | M6 | **Step 3e (2026-04-22)** — Deterministic stacking (no LLM). Gathers prices + identity + cards + portals in one `asyncio.gather`, picks winner by `effective_cost` (base − identity, minus deferred card + portal rebates), emits `Recommendation { winner, alternatives[], brand_direct_callout?, headline, why, has_stackable_value, compute_ms, cached }`. 404 `PRODUCT_NOT_FOUND`, 422 `RECOMMEND_INSUFFICIENT_DATA` when < 2 usable prices. Rate limit bumped from original 10/min (LLM-era) to 60/min now that it's pure SQL + arithmetic. | 60/min |
 | GET | /api/v1/card-match/{product_id} | M5 | ~~Card recommendation for product at retailer~~ — **landed early in Step 2e as `/api/v1/cards/recommendations`**; Phase 3 wraps it with the pre-redirect purchase interstitial. | 60/min |
 | POST | /api/v1/receipts/scan | M8+M10 | Receipt text → savings calc | 10/min |
 | GET | /api/v1/savings | M10 | Savings dashboard data | 60/min |

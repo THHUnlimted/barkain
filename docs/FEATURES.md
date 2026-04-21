@@ -30,7 +30,7 @@
 
 | Feature | Status | Phase | Class | Data Source | Notes |
 |---------|--------|-------|-------|-------------|-------|
-| Price comparison (11 retailers — mixed extraction) | ✅ | 1 | T | **10 retailers via agent-browser containers**: Amazon, Best Buy, Target, Home Depot, Lowe's, eBay (new + used), Sam's Club, BackMarket, Facebook Marketplace. **Walmart via HTTP adapter routing** (Firecrawl for demo, Decodo residential proxy for production) | Paradigm shift 2026-04-10: walmart moved to HTTP adapter. 10 others unchanged. Free APIs (Best Buy, eBay Browse, Keepa) added as production speed optimization in Phase 4 |
+| Price comparison (9 active retailers — mixed extraction) | ✅ | 1 | T | **9 active retailers** (11 originally shipped; Lowe's + Sam's Club retired 2026-04-18 with `is_active=False` rows retained for FK integrity): Amazon, Best Buy, Target, Home Depot, eBay (new + used), BackMarket, Facebook Marketplace via agent-browser containers; **Walmart via HTTP adapter routing** (Firecrawl for demo, Decodo residential proxy for production). Brand-direct `*_direct` retailers remain `is_active=True` as identity-discount redirect targets (not scraped) | Paradigm shift 2026-04-10: walmart moved to HTTP adapter. Free APIs (Best Buy, eBay Browse, Keepa) added as production speed optimization in Phase 4 |
 | Walmart HTTP adapter (`WALMART_ADAPTER` flag) | ✅ | 2 | T | `backend/modules/m2_prices/adapters/{walmart_firecrawl,walmart_http}.py` — both paths parse `<script id="__NEXT_DATA__">` JSON. Firecrawl demo (~$0.00125/scrape), Decodo rotating US residential production (~$0.000466/scrape). Shared parser in `_walmart_parser.py` | Bypasses PerimeterX client-side JS fingerprinting by never executing JS. 5/5 PASS on Decodo probe 2026-04-10. One-env-var demo→prod switch |
 | Price comparison (production API optimization) | ⬜ | 4 | T | Best Buy Products API (free), eBay Browse API (free), Keepa API ($15/mo) layered on top of scraper containers | API results return ~500ms vs 3-8s for containers. Fallback: API → container → skip |
 | Price caching (6hr TTL, Redis + TimescaleDB hypertable) | ✅ | 1 | T | Redis 6hr TTL + `prices` table + `price_history` TimescaleDB hypertable | First query triggers live scrape; subsequent queries read from Redis → DB → containers |
@@ -105,7 +105,7 @@
 
 | Feature | Status | Phase | Class | Notes |
 |---------|--------|-------|-------|-------|
-| Full-stack recommendation engine | ⬜ | 3 | AI | Synthesizes all layers (prices + identity + cards + portals + coupons + secondary market + wait signal) into single recommendation via Claude Sonnet. Re-fires as more data streams in |
+| Full-stack recommendation engine | ✅ | 3 | T | **Step 3e (deterministic stacking — reclassified from AI)**. `POST /api/v1/recommend` gathers prices + identity + cards + portals in one `asyncio.gather` then stacks in pure Python (p95 < 150 ms). Winner = lowest `effective_cost` (base − identity, minus deferred card + portal rebates); tiebreaks = new>refurb>used, then well-known retailer. Brand-direct callout for ≥15 % identity program at `*_direct` retailer. Sentence templates generate headline + "why" copy. iOS `RecommendationHero` renders only after SSE done + identity + cards all settle. No LLM — can layer Sonnet narration in Phase 4 if demo feedback demands flair |
 | Push notifications (price drops) | 🔮 | 5 | T | Coming soon — requires item tracking infrastructure with higher compute costs. Event-driven dispatch on threshold triggers |
 | Push notifications (incentive spikes) | 🔮 | 5 | T | Coming soon — scheduled spike check from `portal_bonuses.is_elevated` → notify |
 | Savings dashboard (running totals) | ⬜ | 3 | T | Aggregation queries on receipt data |
@@ -115,7 +115,7 @@
 
 ### Changes from v2
 
-- **All 11 Phase 1 retailers now use scrapers** (was 3 APIs). Container infrastructure moves from Phase 2 → Phase 1.
+- **9 active retailers in prod** (11 originally shipped; Lowe's + Sam's Club retired 2026-04-18). Container infrastructure moves from Phase 2 → Phase 1.
 - **Free APIs (Best Buy, eBay Browse) and Keepa moved to Phase 4** as production speed optimization.
 - **Watched items moved to Phase 4** (from Phase 5). Paired with price prediction — natural fit.
 - **Push notifications remain Phase 5.**
@@ -146,7 +146,7 @@ Affiliate connections take weeks to establish (Amazon Associates requires live w
 | Clerk authentication | ✅ | 1 | T | JWT validation via `clerk-backend-api`, session management. MCP server for dev inspection. `DEMO_MODE=1` bypass (renamed from `BARKAIN_DEMO_MODE` in 2i-b; read via `settings.DEMO_MODE`) for local physical-device testing |
 | API rate limiting | ✅ | 1 | T | Redis-backed sliding window, per-user. Tier-aware in 2f: pro users get base × `RATE_LIMIT_PRO_MULTIPLIER` (default 2×). Tier cached in Redis `tier:{user_id}` with 60s TTL |
 | Docker local development | ✅ | 1 | T | PostgreSQL+TimescaleDB, Test DB, Redis via docker-compose.yml. LocalStack added in Step 2h for SQS emulation |
-| agent-browser scraper containers | ✅ | 1 | T | Per-retailer Docker containers: Chrome + agent-browser + extraction script. 11 retailers + shared base image (`containers/base/`) |
+| agent-browser scraper containers | ✅ | 1 | T | Per-retailer Docker containers: Chrome + agent-browser + extraction script. 9 active retailers (Lowe's + Sam's Club retired 2026-04-18; rows kept `is_active=False` for FK integrity) + shared base image (`containers/base/`) |
 | Self-healing Watchdog (supervisor agent) | ✅ 2a | 2 | H | `backend/workers/watchdog.py` — monitors script health, classifies failures (transient/selector_drift/blocked), auto-heals via Claude Opus (YC credits). Escalates to developer after 3 failed heal attempts. Nightly via `scripts/run_watchdog.py --check-all` |
 | Background job processing | ✅ 2h | 2 | T | SQS (LocalStack in dev, real AWS in prod) + `scripts/run_worker.py` CLI. 4 workers: price ingestion, portal rates, discount verification, watchdog |
 | Web dashboard | 🔮 | 5+ | T | Next.js on Vercel |

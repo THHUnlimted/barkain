@@ -322,4 +322,5 @@ private struct PreviewOnboardingAPIClient: APIClientProtocol {
     func getAffiliateStats() async throws -> AffiliateStatsResponse {
         AffiliateStatsResponse(clicksByRetailer: [:], totalClicks: 0)
     }
+    func fetchRecommendation(productId: UUID, forceRefresh: Bool) async throws -> Recommendation? { nil }
 }

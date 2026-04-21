@@ -319,4 +319,166 @@ enum TestFixtures {
         recommendations: [],
         userHasCards: false
     )
+
+    // MARK: - Stream events (Step 3e — ready-made SSE sequence)
+
+    /// Three retailer_result events followed by `done`. Matches the shape
+    /// the backend emits for a successful cached SSE round-trip.
+    static let successfulStreamEvents: [RetailerStreamEvent] = [
+        .retailerResult(RetailerResultUpdate(
+            retailerId: "amazon", retailerName: "Amazon",
+            status: .success,
+            price: RetailerPrice(
+                retailerId: "amazon", retailerName: "Amazon",
+                price: 298.0, originalPrice: 349.99, currency: "USD",
+                url: "https://amazon.com/dp/B0BSHF7WHN", condition: "new",
+                isAvailable: true, isOnSale: true, lastChecked: Date()
+            )
+        )),
+        .retailerResult(RetailerResultUpdate(
+            retailerId: "best_buy", retailerName: "Best Buy",
+            status: .success,
+            price: RetailerPrice(
+                retailerId: "best_buy", retailerName: "Best Buy",
+                price: 329.99, originalPrice: nil, currency: "USD",
+                url: "https://bestbuy.com/site/123", condition: "new",
+                isAvailable: true, isOnSale: false, lastChecked: Date()
+            )
+        )),
+        .retailerResult(RetailerResultUpdate(
+            retailerId: "walmart", retailerName: "Walmart",
+            status: .success,
+            price: RetailerPrice(
+                retailerId: "walmart", retailerName: "Walmart",
+                price: 299.99, originalPrice: nil, currency: "USD",
+                url: "https://walmart.com/ip/123", condition: "new",
+                isAvailable: true, isOnSale: false, lastChecked: Date()
+            )
+        )),
+        .done(StreamSummary(
+            productId: sampleProductId,
+            productName: "Sony WH-1000XM5",
+            totalRetailers: 3,
+            retailersSucceeded: 3,
+            retailersFailed: 0,
+            cached: false,
+            fetchedAt: Date()
+        )),
+    ]
+
+    // MARK: - Recommendation (Step 3e)
+
+    static let sampleStackedPathAmazon = StackedPath(
+        retailerId: "amazon",
+        retailerName: "Amazon",
+        basePrice: 298.0,
+        finalPrice: 298.0,
+        effectiveCost: 283.10,
+        totalSavings: 14.90,
+        identitySavings: 0.0,
+        identitySource: nil,
+        cardSavings: 14.90,
+        cardSource: "Chase Freedom Flex",
+        portalSavings: 0.0,
+        portalSource: nil,
+        condition: "new",
+        productUrl: "https://amazon.com/dp/B0BSHF7WHN"
+    )
+
+    static let sampleStackedPathBestBuy = StackedPath(
+        retailerId: "best_buy",
+        retailerName: "Best Buy",
+        basePrice: 329.99,
+        finalPrice: 329.99,
+        effectiveCost: 316.39,
+        totalSavings: 13.60,
+        identitySavings: 0.0,
+        identitySource: nil,
+        cardSavings: 13.60,
+        cardSource: "Chase Freedom Flex",
+        portalSavings: 0.0,
+        portalSource: nil,
+        condition: "new",
+        productUrl: "https://bestbuy.com/site/123"
+    )
+
+    static let sampleRecommendation = Recommendation(
+        productId: sampleProductId,
+        productName: "Sony WH-1000XM5",
+        winner: sampleStackedPathAmazon,
+        headline: "Amazon with Chase Freedom Flex",
+        why: "Stacking Chase Freedom Flex earns $14.90 in rewards beats the naive cheapest listing by $14.90.",
+        alternatives: [sampleStackedPathBestBuy],
+        brandDirectCallout: nil,
+        hasStackableValue: true,
+        computeMs: 42,
+        cached: false
+    )
+
+    static let recommendationJSON = """
+    {
+        "product_id": "12345678-1234-1234-1234-123456789abc",
+        "product_name": "Sony WH-1000XM5",
+        "winner": {
+            "retailer_id": "amazon",
+            "retailer_name": "Amazon",
+            "base_price": 298.0,
+            "final_price": 298.0,
+            "effective_cost": 283.10,
+            "total_savings": 14.90,
+            "identity_savings": 0.0,
+            "identity_source": null,
+            "card_savings": 14.90,
+            "card_source": "Chase Freedom Flex",
+            "portal_savings": 0.0,
+            "portal_source": null,
+            "condition": "new",
+            "product_url": "https://amazon.com/dp/B0BSHF7WHN"
+        },
+        "headline": "Amazon with Chase Freedom Flex",
+        "why": "Lowest available price at Amazon.",
+        "alternatives": [],
+        "brand_direct_callout": null,
+        "has_stackable_value": true,
+        "compute_ms": 42,
+        "cached": false
+    }
+    """.data(using: .utf8)!
+
+    static let recommendationWithCalloutJSON = """
+    {
+        "product_id": "12345678-1234-1234-1234-123456789abc",
+        "product_name": "Samsung Galaxy S25",
+        "winner": {
+            "retailer_id": "samsung_direct",
+            "retailer_name": "Samsung.com",
+            "base_price": 1000.0,
+            "final_price": 700.0,
+            "effective_cost": 658.0,
+            "total_savings": 342.0,
+            "identity_savings": 300.0,
+            "identity_source": "Samsung Military",
+            "card_savings": 14.0,
+            "card_source": "Chase Freedom Flex",
+            "portal_savings": 28.0,
+            "portal_source": "rakuten",
+            "condition": "new",
+            "product_url": "https://samsung.com/p"
+        },
+        "headline": "Samsung.com via Rakuten with Chase Freedom Flex",
+        "why": "Stacking Samsung Military saves $300.00 + Rakuten gives 28.00 back + Chase Freedom Flex earns $14.00 in rewards beats the naive cheapest listing by $342.00.",
+        "alternatives": [],
+        "brand_direct_callout": {
+            "retailer_id": "samsung_direct",
+            "retailer_name": "Samsung.com",
+            "program_name": "Samsung Military",
+            "discount_value": 30.0,
+            "discount_type": "percentage",
+            "purchase_url_template": "https://www.samsung.com/us/shop/offer-program/military"
+        },
+        "has_stackable_value": true,
+        "compute_ms": 37,
+        "cached": false
+    }
+    """.data(using: .utf8)!
 }

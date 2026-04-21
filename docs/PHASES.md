@@ -97,9 +97,9 @@
 
 ## Phase 1: Foundation + Scraper Infrastructure + Core Loop (Weeks 1-8) — ✅ COMPLETE
 
-> **Goal:** User scans a barcode in-store and instantly sees prices from 11 retailers, all scraped via agent-browser containers. Prove the core value prop at scale.
+> **Goal:** User scans a barcode in-store and instantly sees prices across retailers, all scraped via agent-browser containers. Prove the core value prop at scale.
 > **Tag:** v0.1.0
-> **Retailers (11):** Amazon, Best Buy, Walmart, Target, Home Depot, Lowe's, eBay (new), eBay (used/refurb), Sam's Club, BackMarket, Facebook Marketplace
+> **Retailers (9 active — 11 originally shipped):** Amazon, Best Buy, Walmart, Target, Home Depot, eBay (new), eBay (used/refurb), BackMarket, Facebook Marketplace. Lowe's + Sam's Club retired 2026-04-18 (`is_active=False` rows retained for FK integrity; brand-direct `*_direct` retailers remain active as identity-discount redirect targets).
 > **Approach:** ALL retailers scraped via agent-browser containers. Free APIs (Best Buy, eBay Browse, Keepa) added as production speed optimization in a later phase.
 
 ### Steps
@@ -120,8 +120,8 @@
 - PostgreSQL on AWS RDS (dev: Docker) with full schema including discount/card/portal tables (empty, ready for Phase 2 seeding)
 - FastAPI backend with Clerk auth, rate limiting, structured error handling
 - Product resolution service (UPC → canonical product via Gemini API)
-- **agent-browser container infrastructure** — Docker container template, 11 retailer extraction scripts, health monitoring
-- Price aggregation from 11 retailers via parallel container dispatch with Redis caching
+- **agent-browser container infrastructure** — Docker container template, retailer extraction scripts (9 active in prod; lowes + sams_club retired 2026-04-18), health monitoring
+- Price aggregation from 9 active retailers via parallel container dispatch with Redis caching
 - iOS app with working barcode scanner, progressive loading price comparison display
 - CI pipeline (GitHub Actions) running pytest + XcodeBuild tests on every PR
 - Docker-based local development (PostgreSQL+TimescaleDB, Redis)
@@ -181,12 +181,12 @@
 | 3b | eBay Browse API adapter replacing `ebay_new` / `ebay_used` scraper legs (sub-second vs 70 s selector-drift timeouts); `client_credentials` token refresh cached in-process; Marketplace Account Deletion webhook (GDPR prerequisite for production API access); backend deployed on scraper EC2 via Caddy + systemd (`ebay-webhook.barkain.app` HTTPS) | ✅ |
 | 3c | M1 Search v2: 3-tier cascade (DB → BBY+UPCitemdb parallel → Gemini), brand-only routing, `force_gemini` deep-search, variant collapse, eBay affiliate URL fix; 3c-hardening (live-test bundle: Amazon platform-suffix accessory filter, Walmart/Best Buy retries, Redis device→UPC + scoped query caches, iOS sheet-anchor fix) | ✅ |
 | 3d | Autocomplete (vocab + iOS integration): on-device prefix suggestions via `actor AutocompleteService` + sorted-array binary search; Apple-native `.searchable + .searchSuggestions + .searchCompletion`; `RecentSearches` service (UserDefaults, legacy-key migrated); offline `scripts/generate_autocomplete_vocab.py` sweep of Amazon's autocomplete API → bundled JSON; submit-driven search replaces auto-debounce-search | ✅ |
-| 3e | M6 Recommendation Engine: synthesize all layers (prices + identity + cards + portals + secondary market + wait signal) into single recommendation via Claude Sonnet. Progressive updates as data streams in | ⬜ |
+| 3e | **M6 Recommendation Engine (deterministic stacking — reclassified from AI to T).** `POST /api/v1/recommend` gathers prices + identity + cards + portals in one `asyncio.gather` and stacks in pure Python (p95 < 150 ms, no LLM). Winner picked by `effective_cost` (base − identity, minus deferred card + portal rebates) with new>refurb>used + well-known-retailer tiebreaks. Brand-direct callout fires on ≥15 % identity programs at `*_direct` retailers (3j fold-in). Sentence templates build headline + "why" copy. iOS `RecommendationHero` renders **only** after SSE done + identity + cards all settle — three settle flags in `ScannerViewModel` gate `attemptFetchRecommendation()`. Silent fallback on any failure (no user-facing alerts). `scripts/seed_portal_bonuses_demo.py` seeds 13 portal rows pending 3g replacement | ✅ |
 | 3f | Card reward matching: query-time algorithm (pure SQL, < 50ms), purchase interstitial overlay UI ("Use your Chase Freedom Flex for 5% back"), portal instruction, activation reminder | ⬜ |
 | 3g | Portal bonus integration: portal stacking with card recommendations, "Open Rakuten first" guidance, portal vs. direct tracking for analytics | ⬜ |
 | 3h | M8 Image scanning: Claude Vision for product ID from photos (not just barcodes) | ⬜ |
 | 3i | M8+M10 Receipt scanning: on-device OCR (Vision framework) → structured text to backend → item extraction → savings calculation → dashboard | ⬜ |
-| 3j | Identity discount stacking in recommendations: brand-specific stacking rules, identity redirect opportunities (e.g., "Buy at Samsung.com with military discount for $450 less than Best Buy") | ⬜ |
+| ~~3j~~ | ~~Identity discount stacking in recommendations~~ — **folded into 3e brand-direct callout** 2026-04-22 | ✅ |
 | 3k | Savings dashboard populated with real receipt data | ⬜ |
 | 3l | Coupon discovery + validation: agent-browser batch scraping of coupon sites, on-demand validation, confidence scoring | ⬜ |
 | 3m | Hardening: AI integration tests with mock responses, tag v0.3.0 | ⬜ |
@@ -199,7 +199,7 @@
 |--------|------|--------|-------------|
 | POST | /api/v1/products/search | M1 | Text query → ranked product list (pg_trgm + Gemini grounding) |
 | POST | /api/v1/products/identify | M1 | Image → product (vision AI) |
-| POST | /api/v1/recommend | M6 | Full-stack recommendation |
+| POST | /api/v1/recommend | M6 | Full-stack recommendation (Step 3e — deterministic, 60/min rate limit, no LLM) |
 | POST | /api/v1/receipts/scan | M8+M10 | Receipt text → savings calc |
 | GET | /api/v1/savings | M10 | Savings dashboard data |
 | GET | /api/v1/card-match/{product_id} | M5 | Card recommendation for product |

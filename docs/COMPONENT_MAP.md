@@ -37,7 +37,7 @@
 
 | Category | Tool | Action | Reason | Status |
 |----------|------|--------|--------|--------|
-| **AI Primary** | Claude API (Sonnet + Opus) | KEEP | YC credits; Sonnet for tasks, Opus for Watchdog self-healing | ✅ Confirmed |
+| **AI Primary** | Claude API (Sonnet + Opus) | KEEP | YC credits; Opus for Watchdog self-healing. Sonnet was slated for M6 Recommendation synthesis but **Step 3e (2026-04-22) reclassified M6 AI → T** — deterministic stacking in pure Python covers the demo; a Sonnet narration polish pass stays Phase 4-optional. | ✅ Confirmed |
 | **AI Fallback** | OpenAI GPT-4o-mini | KEEP | YC credits; fallback when Claude fails | ✅ Confirmed |
 | **AI Structured Output** | Instructor library | KEEP | Pydantic model validation for LLM responses | ⬜ Phase 3 |
 | **Scraper AI (Watchdog)** | Claude Opus via `anthropic` SDK | ADD | Watchdog self-healing agent. Highest quality selector rediscovery; YC credits make cost viable. Nightly via `scripts/run_watchdog.py --check-all`; `backend/workers/watchdog.py::WatchdogSupervisor` dispatches heal prompts from `backend/ai/prompts/watchdog_heal.py` | ✅ Phase 2 (Step 2a) |

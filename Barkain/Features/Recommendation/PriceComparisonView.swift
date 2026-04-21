@@ -76,6 +76,35 @@ struct PriceComparisonView: View {
                     SniffingHeroSection(productName: product.name)
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 } else {
+                    // Step 3e: the Best Barkain hero renders ONLY after
+                    // SSE done + identity + cards have all settled (the
+                    // ViewModel only sets `recommendation` at that point).
+                    // It replaces neither the savings badge nor the
+                    // retailer list — both stay rendered beneath.
+                    if let recommendation = viewModel.recommendation {
+                        RecommendationHero(
+                            recommendation: recommendation,
+                            onOpen: { winner in
+                                Task {
+                                    if let url = await viewModel.resolveAffiliateURL(
+                                        for: winner
+                                    ) {
+                                        browserURL = IdentifiableURL(url: url)
+                                    }
+                                }
+                            },
+                            onOpenCallout: { callout in
+                                if let urlString = callout.purchaseUrlTemplate,
+                                   let url = URL(string: urlString) {
+                                    browserURL = IdentifiableURL(url: url)
+                                }
+                            },
+                            onSelectAlternative: { _ in
+                                // No-op for now. Phase 3f will add
+                                // scroll-to-row wiring.
+                            }
+                        )
+                    }
                     savingsSection
                     identityDiscountsSection
                 }
@@ -501,5 +530,8 @@ private struct PreviewAPIClient: APIClientProtocol {
     }
     func getAffiliateStats() async throws -> AffiliateStatsResponse {
         AffiliateStatsResponse(clicksByRetailer: [:], totalClicks: 0)
+    }
+    func fetchRecommendation(productId: UUID, forceRefresh: Bool) async throws -> Recommendation? {
+        nil
     }
 }
