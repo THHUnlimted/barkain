@@ -23,6 +23,10 @@ private struct RecentSearchesKey: EnvironmentKey {
     @MainActor static let defaultValue: RecentSearches = RecentSearches()
 }
 
+private struct RecentlyScannedKey: EnvironmentKey {
+    @MainActor static let defaultValue: RecentlyScannedStore = RecentlyScannedStore()
+}
+
 extension EnvironmentValues {
     var autocompleteService: any AutocompleteServiceProtocol {
         get { self[AutocompleteServiceKey.self] }
@@ -32,5 +36,10 @@ extension EnvironmentValues {
     var recentSearches: RecentSearches {
         get { self[RecentSearchesKey.self] }
         set { self[RecentSearchesKey.self] = newValue }
+    }
+
+    var recentlyScanned: RecentlyScannedStore {
+        get { self[RecentlyScannedKey.self] }
+        set { self[RecentlyScannedKey.self] = newValue }
     }
 }

@@ -8,6 +8,7 @@ struct ScannerView: View {
 
     @Environment(\.apiClient) private var apiClient
     @Environment(FeatureGateService.self) private var featureGate
+    @Environment(\.recentlyScanned) private var recentlyScanned
     @State private var viewModel: ScannerViewModel?
     @State private var scanner = BarcodeScanner()
     @State private var scannerError: BarcodeScannerError?
@@ -93,6 +94,19 @@ struct ScannerView: View {
             if newValue == nil {
                 scanner.clearLastScan()
             }
+        }
+        .onChange(of: viewModel?.product?.id) { _, newValue in
+            // Record every successful resolve into the Home tab's
+            // "Recently Scanned" rail. The store dedupes on id so
+            // re-scanning the same product just moves it to the front.
+            guard let product = viewModel?.product, product.id == newValue else { return }
+            recentlyScanned.record(
+                id: product.id,
+                upc: product.upc,
+                name: product.name,
+                brand: product.brand,
+                imageUrl: product.imageUrl
+            )
         }
         .onDisappear {
             scanner.stopScanning()
@@ -224,26 +238,98 @@ struct ScannerView: View {
             CameraPreviewView(session: scanner.captureSession)
                 .ignoresSafeArea()
 
+            // Subtle dark gradient over the raw camera feed so our overlay
+            // chrome reads clearly regardless of ambient brightness.
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.35),
+                    Color.black.opacity(0.10),
+                    Color.black.opacity(0.45)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
             scanOverlay
         }
     }
 
     private var scanOverlay: some View {
         VStack {
+            topHeroBanner
             Spacer()
-            VStack(spacing: Spacing.sm) {
-                Image(systemName: "barcode.viewfinder")
-                    .font(.system(size: 28))
-                    .foregroundStyle(Color.barkainPrimaryContainer)
-                Text("Point camera at a barcode")
-                    .font(.barkainBody)
-                    .foregroundStyle(.white)
-            }
-            .padding(Spacing.lg)
-            .background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadius))
-            .padding(.bottom, Spacing.xxl)
+            viewfinderFrame
+            Spacer()
+            helpChip
+                .padding(.bottom, Spacing.xxl)
         }
+        .padding(.horizontal, Spacing.lg)
+    }
+
+    /// Gradient capsule at the top of the preview: brand pawprint + tagline.
+    private var topHeroBanner: some View {
+        HStack(spacing: Spacing.sm) {
+            Image(systemName: "pawprint.fill")
+                .font(.headline)
+                .foregroundStyle(.white)
+            Text("Sniff out a barcode")
+                .font(.barkainHeadline)
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, Spacing.lg)
+        .padding(.vertical, Spacing.sm)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.barkainPrimaryGradient)
+        )
+        .barkainShadowGlow()
+        .padding(.top, Spacing.sm)
+    }
+
+    /// Corners-only rounded-rectangle viewfinder in brand gold. Gives the
+    /// user a clear "aim here" target without dimming the camera feed.
+    private var viewfinderFrame: some View {
+        GeometryReader { geo in
+            let side = min(geo.size.width, 320)
+            ZStack {
+                RoundedRectangle(cornerRadius: Spacing.cornerRadiusLarge, style: .continuous)
+                    .stroke(Color.barkainPrimaryContainer.opacity(0.85), lineWidth: 3)
+                    .frame(width: side, height: side * 0.58)
+                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                    .barkainShadowGlow()
+            }
+        }
+        .frame(height: 220)
+    }
+
+    /// Bottom hint chip — describes both camera + manual entry in one place.
+    private var helpChip: some View {
+        HStack(spacing: Spacing.xs) {
+            Image(systemName: "barcode.viewfinder")
+                .foregroundStyle(Color.barkainPrimaryContainer)
+            Text("Point the camera at a barcode")
+                .font(.barkainBody)
+                .foregroundStyle(.white)
+            Text("·")
+                .foregroundStyle(.white.opacity(0.6))
+            Text("or tap")
+                .font(.barkainCaption)
+                .foregroundStyle(.white.opacity(0.8))
+            Image(systemName: "keyboard")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.9))
+        }
+        .padding(.horizontal, Spacing.lg)
+        .padding(.vertical, Spacing.sm)
+        .background(
+            Capsule(style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+        )
     }
 
     // MARK: - Price Error

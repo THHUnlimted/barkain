@@ -2263,3 +2263,205 @@ iPhone 15.
   and timer-driven UI traditionally aren't unit-tested; the full flow
   got validated on sim + physical iPhone.
 
+### Step ui-refresh-v2 — whole-app makeover + Home tab + Kennel profile (2026-04-20)
+
+**Branch:** `phase-3/ui-refresh-v1` (same branch as ui-refresh-v1, since
+PR #37 was still open). Driven by Mike's note that ui-refresh-v1 had
+only touched the shared components + the search/comparison flow —
+Scanner, Profile, Savings, onboarding, and the overall tab chrome were
+all still on the older blue/flat style. Scope: bring every surface in
+line with the warm-gold palette, add the Home hero screen from the
+HTML prototype, and keep every feature wired to real data (no mock
+product rails, no fake analytics).
+
+**What landed.**
+
+1. **New Home tab + `RecentlyScannedStore`** (`Features/Home/HomeView.swift`,
+   `Services/RecentlyScanned/RecentlyScannedStore.swift`). App now
+   launches on Home. Three stacked sections:
+   - Hero card: "Sniff Out / a Deal" display headline (rounded black
+     + italic gold), subtitle explaining what Barkain does, faint
+     paw watermark overlaid top-right. Uses `barkainShadowSoft`.
+   - Quick-actions row: `Scan` (primary gradient card, glow shadow)
+     + `Search` (surface-lowest card, soft shadow). Both switch the
+     `TabView` selection via closures owned by `ContentView`.
+   - Recently sniffed rail: horizontal `ScrollView` of 140pt cards
+     reading from `RecentlyScannedStore.items`. Empty state is an
+     honest dashed-border card ("No trail yet — Scan or search…").
+     Each card shows `AsyncImage(imageUrl) + brand eyebrow + name`.
+     Tapping fires `onSelectRecent` which sets ContentView's
+     `pendingSearchSeed` state and flips the tab to Search.
+   - Identity nudge: only renders when `hasCompletedIdentityOnboarding
+     == false`, prompting the user to fill out the Kennel.
+
+   **RecentlyScannedStore** is an `@Observable` UserDefaults-backed
+   class mirroring the shape of `RecentSearches`: cap 12, id-based
+   dedup, newest-first. Recorded from **the view layer**, not the
+   view model — `ScannerView` and `SearchView` each add an
+   `.onChange(of: viewModel?.product?.id)` hook that fires
+   `store.record(...)`. Keeps VMs test-friendly (no store
+   dependency) and makes sure both scan-resolve and search-resolve
+   surface in the same rail.
+
+2. **HomeView → SearchView cross-tab handoff.** `ContentView` owns
+   `@State pendingSearchSeed: String?` and passes it as a `@Binding`
+   into `SearchView` (new optional init param, defaults to
+   `.constant(nil)` so existing preview/test call sites stay green).
+   When a Home rail card is tapped, ContentView sets the seed +
+   switches the tab; SearchView's new `.onChange(of: pendingSeed)`
+   fires `vm.onQueryChange(seed); vm.onSearchSubmitted(seed)` once
+   then clears the binding. Explicit one-shot — no lingering state.
+
+3. **Scanner overlay redesign** (`Features/Scanner/ScannerView.swift`).
+   The live camera feed now has:
+   - Top hero banner: gradient capsule + `pawprint.fill` + "Sniff out
+     a barcode". Uses `barkainPrimaryGradient` + `barkainShadowGlow`.
+   - Centered viewfinder frame: corners-only rounded rectangle
+     (`cornerRadiusLarge=32`) stroked in `barkainPrimaryContainer`.
+   - Bottom help chip: ultra-thin-material capsule carrying the
+     barcode-hint icon + "Point the camera at a barcode · or tap
+     [keyboard]" (referencing the existing manual-entry toolbar
+     button). Replaces the single flat-material bottom card.
+   - Subtle top-to-bottom dark gradient over the raw feed so the
+     overlay chrome reads cleanly regardless of ambient brightness.
+
+   All sheets + error states + price-comparison flow are unchanged.
+
+4. **Profile → "The Kennel"** (`Features/Profile/ProfileView.swift`).
+   - Nav title renamed "Profile" → "The Kennel".
+   - New `kennelHeader` card: "Welcome back" eyebrow + "The Kennel"
+     large title + tier-aware subtitle.
+   - New `scentTrailsCard`: gradient hero backed by **real
+     affiliate-click stats** from `GET /api/v1/affiliate/stats` (the
+     endpoint existed but was orphaned — ProfileView never called
+     it). Shows `totalClicks` as a 56pt display number + a subtitle
+     that either nudges the user to follow a trail ("Tap any
+     retailer in a price comparison…") or brags about their top
+     retailer ("Top trail: Amazon."). No fake loyalty points — the
+     prototype's "Barkain Points" card is replaced with this real
+     click-tracker.
+   - Identity / membership / verification chips restyled with
+     `barkainPrimaryFixed` capsule fill + `barkainPrimaryContainer`
+     stroke. Each chip section wrapped in a soft-shadow card.
+   - Subscription + Cards sections wrapped in matching soft-shadow
+     cards; tier badge for Pro users now uses the brand gradient
+     fill (free tier keeps the flat `primaryFixed` look).
+   - Cards section tile color lifted from muted-primary to
+     `primaryFixed` for readable chip contrast.
+   - Empty-profile CTA rewritten as a proper Kennel-themed card
+     (eyebrow + description + gradient button) instead of the
+     generic `EmptyState`.
+
+5. **Savings placeholder honest hero** (`Features/Savings/SavingsPlaceholderView.swift`).
+   Replaced the one-line EmptyState with a full-page scroll:
+   - Hero card: `GlowingPawLogo(140)` + "Your savings trail" display
+     headline + honest subtitle + "Coming soon" sparkles pill.
+   - Stat-preview row: three tiles (Lifetime savings / Receipts
+     scanned / Deals tracked) showing `—` as the value, plainly
+     signalling these are placeholders until M10 is wired.
+   - "What lands here" explainer card with three `icon + title +
+     subtitle` rows walking the user through the future flow.
+
+   No fabricated dollar amounts. M10 receipt OCR is still Phase 3e+
+   per `CLAUDE.md`'s What's Next.
+
+6. **Identity onboarding stepper**
+   (`Features/Profile/IdentityOnboardingView.swift`). Header replaced
+   with a `primaryFixed` card showing "Step N of 3" eyebrow + the
+   gradient-filled step indicator (was solid primary). Toggle rows
+   upgraded to 16pt-radius cards with `barkainShadowSoft` + a
+   dynamic stroke — thicker `primaryContainer` border when the
+   toggle is on, muted `outlineVariant` when off — so the user can
+   see at a glance which flags they've set.
+
+7. **Tab bar appearance** (`ContentView.swift`). Configured a shared
+   `UITabBarAppearance` at init-time: ultra-thin-material backdrop,
+   warm outline-variant shadow hairline, muted on-surface-variant
+   glyphs for unselected tabs. `.tint(.barkainPrimary)` still drives
+   the active glyph/label colour. Profile tab's label+icon swapped
+   from "Profile / person.circle" to "Kennel / house.fill" to match
+   the new naming. Home sits first so the app launches on the
+   brand hero.
+
+**Files.** New:
+- `Barkain/Features/Home/HomeView.swift`
+- `Barkain/Services/RecentlyScanned/RecentlyScannedStore.swift`
+
+Modified:
+- `Barkain/ContentView.swift` (Home tab + UITabBarAppearance +
+  `pendingSearchSeed` handoff + Profile renamed to Kennel)
+- `Barkain/BarkainApp.swift` (inject `RecentlyScannedStore`)
+- `Barkain/Features/Shared/Extensions/EnvironmentKeys.swift`
+  (`\.recentlyScanned` key)
+- `Barkain/Features/Scanner/ScannerView.swift` (overlay redesign +
+  record-on-resolve hook)
+- `Barkain/Features/Search/SearchView.swift` (record-on-resolve hook,
+  `pendingSeed` binding, new hero empty state + popular-sniffs card,
+  styled recents column)
+- `Barkain/Features/Profile/ProfileView.swift` (Kennel header +
+  Scent Trails gradient card + restyled sections + affiliate stats
+  load)
+- `Barkain/Features/Profile/IdentityOnboardingView.swift` (header
+  card + gradient step indicator + filled toggle rows)
+- `Barkain/Features/Savings/SavingsPlaceholderView.swift` (full hero
+  rewrite)
+
+**Tests.** None added — visual / layout-only pass. Existing suites
+stay green (`xcodebuild` clean on sim, same 100 iOS unit + 4 UI).
+`ruff check` untouched (backend not modified).
+
+**Key decisions.**
+
+- **Home tab sits first, launches the app.** The prototype clearly
+  treats Home as the brand surface; burying it behind Scan would
+  have defeated the point of the refresh. Cost: users who
+  previously landed on whichever tab they last used get a different
+  landing — but the Scan tab is one tap away and the Home hero
+  makes the product's value obvious.
+- **Record recently-scanned from the view, not the VM.** Threading
+  the store through every ViewModel init would have required
+  updating a dozen test call sites + the scanner/search vm
+  constructors. Instead, both views observe their VM's
+  `product?.id` and write to the store directly. Keeps VMs pure,
+  the store stays in the view layer.
+- **No fake loyalty points.** The prototype's "Barkain Points"
+  hero was tempting to mock up, but a real number — `totalClicks`
+  from `/affiliate/stats` — is more honest and already wired. Any
+  points-style gamification belongs in a later initiative with
+  real reward mechanics.
+- **Popular sniffs, not trending trails.** The prototype's search
+  home had a marquee + "Trending Trails" chips. We have no trending
+  analytics endpoint yet, so we'd be showing hand-picked static
+  chips. Swapped in "Popular sniffs" (four example queries known to
+  hit the bundled autocomplete vocab) so the UI is honest — those
+  terms actually work if the user taps them.
+- **`UITabBarAppearance`, not a custom tab bar.** The prototype has
+  a custom pill-style bar; rebuilding that as a SwiftUI custom bar
+  would have required intercepting tab selection everywhere. Tint
+  + blur backdrop + appearance proxy gets 80% of the feel with
+  zero risk to navigation semantics.
+- **Honest empty states everywhere.** Savings says "coming soon"
+  + `—` tiles, Home's recently-sniffed rail says "No trail yet",
+  Search empty-state lists example sniffs rather than pretending
+  to be a trending feed. No fabricated analytics anywhere.
+
+**Outstanding (not in scope for this step).**
+
+- Tap-to-rescan on Recently-sniffed cards re-routes via Search +
+  submit. An ideal flow would short-circuit straight into
+  PriceComparisonView using the stored UPC, but that requires
+  either a shared ScannerViewModel or a URL-like routing system.
+  Deferred until M6 or the next navigation refactor.
+- "Popular sniffs" chips are static (four entries). When product
+  search analytics exist (Phase 3e+), swap to server-side
+  recommendations or recent trending products.
+- ContentView's `UITabBarAppearance` is configured at init-time
+  and doesn't re-apply across dynamic-color-scheme changes. In
+  practice this is fine (tab bar uses `UIColor(dynamicProvider:)`)
+  but if we ever want per-tab theming, move this into a view
+  modifier tied to colorScheme.
+- No unit tests for `RecentlyScannedStore`. UserDefaults wrappers
+  traditionally get covered by a two-test min (add/dedup, cap).
+  Deferred to tighten scope; the pattern matches `RecentSearches`
+  which *does* have coverage.
+

@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** 2026-04-20 (v5.5 — ui-refresh-v1 entry + nav-bar-hide trick in iOS conventions)
+> **Last updated:** 2026-04-20 (v5.6 — ui-refresh-v2 entry: Home tab, Kennel profile, whole-app palette pass)
 
 ---
 
@@ -279,6 +279,7 @@ Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; 
 | 3d | Autocomplete: `actor AutocompleteService` (sorted-array binary search over bundled JSON) + `.searchable + .searchSuggestions + .searchCompletion` + `RecentSearches` (UserDefaults, legacy-key migrated) + `scripts/generate_autocomplete_vocab.py` Amazon sweep (4,448 terms / 128 KB). Removed 300 ms auto-debounce-search; submit-driven now | +23 | +34 / +1 UI | #34 |
 | 3d-noise-filter | Search cascade noise filter: `_is_tier2_noise` classifier (category + title denylist) escalates Tier 3 Gemini when only accessories / AppleCare / protection / monitors / games surface; merge drops noise on escalation so flagship hits aren't crowded out at `max_results`. Cost guard preserved (real ASUS RTX 5090 keeps Gemini quiet). 9/9 live probe queries fixed | +4 | — | #36 |
 | ui-refresh-v1 | HTML-style-guide design pass: warm-gold palette (dynamic light/dark), rounded system fonts, shadow/shimmer helpers. Price-loading hero with glowing paw (halo pulse + gradient sweep), rotating puns, "Checking your discounts & cards too" chip. Retailer rows stream in live with spring price-sort as they arrive (Best Barkain tracks current cheapest). Nav bar (search drawer + title) hides while streaming and returns on pull-down past 32pt or stream close. `SearchResultRow` moved to `Features/Shared/Components/` | — | — | TBD |
+| ui-refresh-v2 | Whole-app makeover: new Home tab (hero, Scan/Search quick-actions, "Recently sniffed" rail backed by new `RecentlyScannedStore` UserDefaults service). Scanner overlay swapped for gradient capsule + gold viewfinder frame. Profile tab restyled as "The Kennel" with real affiliate-click stats in a gradient points card (replaces unused `/affiliate/stats` orphan). Savings placeholder honest "coming soon" hero + stat-preview tiles. Identity onboarding gets gradient stepper + filled toggle rows. Shared `UITabBarAppearance` for a blurred surface-tinted bar. Cross-tab: HomeView → SearchView handoff via `pendingSeed` binding when tapping a Recently-sniffed card | — | — | TBD |
 
 **Test totals:** ~516 backend + 100 iOS unit + 4 iOS UI. `ruff check` clean. `xcodebuild` clean.
 
@@ -306,7 +307,7 @@ Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; 
 ## What's Next
 
 1. **Phase 2 CLOSED** — `v0.2.0` tagged (2026-04-16). Outstanding: revoke leaked PAT `gho_UUsp9ML7…` in GitHub UI (SP-L1-b, Mike).
-2. **Phase 3:** 3a–3c-hardening ✅, 3d ✅ autocomplete (#34), 3d-noise-filter ✅ Tier 2 noise classifier escalates Gemini (#36), ui-refresh-v1 ✅ glowing-paw loading hero + live price streaming (TBD PR). Next: 3e M6 Recommendation Engine (Claude Sonnet), then 3f cards, 3g portals, 3h image, 3i receipts, 3j identity stacking, 3k savings, 3l coupons, 3m hardening + `v0.3.0`. See `docs/CHANGELOG.md` + `docs/PHASES.md`.
+2. **Phase 3:** 3a–3c-hardening ✅, 3d ✅ autocomplete (#34), 3d-noise-filter ✅ Tier 2 noise classifier escalates Gemini (#36), ui-refresh-v1 ✅ glowing-paw loading hero + live price streaming, ui-refresh-v2 ✅ Home tab + Kennel profile + whole-app palette pass (both on PR #37). Next: 3e M6 Recommendation Engine (Claude Sonnet), then 3f cards, 3g portals, 3h image, 3i receipts, 3j identity stacking, 3k savings, 3l coupons, 3m hardening + `v0.3.0`. See `docs/CHANGELOG.md` + `docs/PHASES.md`.
 3. **Phase 4 — Production Optimization:** ~~Best Buy~~ (done via demo-prep bundle, PR #30), Keepa API adapter, App Store submission, Sentry error tracking
 4. **Phase 5 — Growth:** Push notifications (APNs), web dashboard, Android (KMP)
 
