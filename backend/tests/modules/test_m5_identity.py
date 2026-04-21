@@ -519,6 +519,83 @@ async def test_membership_fee_scope_surfaces_but_claims_no_product_savings(db_se
     assert disc.discount_value == 50.0
 
 
+async def test_student_profile_surfaces_all_tech_brands(db_session):
+    """Benefits Expansion: an is_student=true profile must surface programs at
+    all 10 tech brands (apple/samsung/hp/dell/lenovo/microsoft/acer/asus/razer/logitech)
+    in a product-less browse view (no relevance gate pruning).
+    """
+    await _seed_user(db_session)
+    tech_retailers = [
+        "apple_direct",
+        "samsung_direct",
+        "hp_direct",
+        "dell_direct",
+        "lenovo_direct",
+        "microsoft_direct",
+        "acer_direct",
+        "asus_direct",
+        "razer_direct",
+        "logitech_direct",
+    ]
+    for rid in tech_retailers:
+        await _seed_retailer(db_session, rid)
+        await _seed_program(
+            db_session,
+            rid,
+            f"{rid.replace('_direct', '').title()} Education",
+            "student",
+            discount_value=10,
+        )
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_student=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=None)
+
+    surfaced = {d.retailer_id for d in resp.eligible_discounts}
+    missing = set(tech_retailers) - surfaced
+    assert not missing, f"Student-tech brands missing from eligible list: {missing}"
+
+
+async def test_young_adult_profile_surfaces_amazon_prime(db_session):
+    """Benefits Expansion: an is_young_adult=true profile surfaces the Prime
+    Young Adult row and the service respects scope=membership_fee — no product
+    savings claim (mirrors 3f-hotfix Prime Student contract).
+    """
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "amazon")
+    product = await _seed_product_with_price(
+        db_session, "amazon", 2500.00, name="MacBook Pro", brand="Apple"
+    )
+    await _seed_program(
+        db_session,
+        "amazon",
+        "Prime Young Adult",
+        "young_adult",
+        discount_value=50,
+        scope="membership_fee",
+    )
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_young_adult=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=product.id)
+
+    assert len(resp.eligible_discounts) == 1
+    disc = resp.eligible_discounts[0]
+    assert disc.program_name == "Prime Young Adult"
+    assert disc.scope == "membership_fee"
+    assert disc.estimated_savings is None, (
+        "membership_fee scope must not claim product savings"
+    )
+    assert disc.discount_value == 50.0
+    assert "young_adult" in resp.identity_groups_active
+
+
 async def test_eligible_discounts_no_product_id_no_savings(db_session):
     """Without product_id, estimated_savings is always null."""
     await _seed_user(db_session)

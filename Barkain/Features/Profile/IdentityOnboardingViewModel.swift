@@ -24,7 +24,7 @@ final class IdentityOnboardingViewModel {
     // MARK: - Init
 
     /// Create a fresh onboarding draft. Pass `initial` to pre-populate for the
-    /// "Edit Profile" flow — all 16 flags are copied out of the stored profile.
+    /// "Edit Profile" flow — all 17 flags are copied out of the stored profile.
     init(apiClient: APIClientProtocol, initial: IdentityProfile? = nil) {
         self.apiClient = apiClient
         if let initial {

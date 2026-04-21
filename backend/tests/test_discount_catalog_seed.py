@@ -28,6 +28,7 @@ _VALID_VERIFICATION_METHODS = {
     "wesalute",
     "student_beans",
     "govx",
+    "age_verification",
     None,
 }
 _VALID_DISCOUNT_TYPES = {"percentage", "fixed_amount"}
@@ -54,9 +55,17 @@ def test_brand_retailers_all_direct_suffix():
 
 
 def test_brand_retailers_count():
-    assert len(BRAND_RETAILERS) == 8, (
-        f"Expected 8 brand-direct retailers, got {len(BRAND_RETAILERS)}"
+    assert len(BRAND_RETAILERS) == 12, (
+        f"Expected 12 brand-direct retailers (8 original + 4 Benefits Expansion), "
+        f"got {len(BRAND_RETAILERS)}"
     )
+
+
+def test_benefits_expansion_brand_retailers_present():
+    """Regression guard: acer/asus/razer/logitech direct retailers must be seeded."""
+    ids = {r["id"] for r in BRAND_RETAILERS}
+    for required in ("acer_direct", "asus_direct", "razer_direct", "logitech_direct"):
+        assert required in ids, f"{required} missing from BRAND_RETAILERS"
 
 
 def test_all_program_retailer_ids_are_known():
@@ -136,3 +145,40 @@ def test_military_covers_top_brands():
         assert required in retailers_with_military, (
             f"{required} missing a military program"
         )
+
+
+def test_student_covers_all_tech_brands():
+    """Benefits Expansion regression guard: students must match the 10 tech brands."""
+    student_retailers = {
+        p["retailer_id"] for p in DISCOUNT_PROGRAMS if p["eligibility_type"] == "student"
+    }
+    required = {
+        "apple_direct",
+        "samsung_direct",
+        "hp_direct",
+        "dell_direct",
+        "lenovo_direct",
+        "microsoft_direct",
+        "acer_direct",
+        "asus_direct",
+        "razer_direct",
+        "logitech_direct",
+    }
+    missing = required - student_retailers
+    assert not missing, f"Student tech brands missing from catalog: {missing}"
+
+
+def test_young_adult_amazon_row_exists():
+    """Prime Young Adult must be seeded with scope=membership_fee so identity
+    savings math doesn't claim a product-price dollar figure (same contract as
+    Prime Student post-3f-hotfix)."""
+    young_adult_rows = [
+        p for p in DISCOUNT_PROGRAMS if p["eligibility_type"] == "young_adult"
+    ]
+    assert len(young_adult_rows) >= 1, "No young_adult programs seeded"
+    amazon_rows = [p for p in young_adult_rows if p["retailer_id"] == "amazon"]
+    assert len(amazon_rows) == 1, "Prime Young Adult row missing from amazon"
+    assert amazon_rows[0]["scope"] == "membership_fee", (
+        "Prime Young Adult must have scope='membership_fee' — its 50% is off "
+        "the Prime fee, not off products"
+    )

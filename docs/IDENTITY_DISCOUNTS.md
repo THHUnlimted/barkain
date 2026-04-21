@@ -51,6 +51,39 @@ Ordered by breadth of available discounts and savings potential. These are the g
 
 ---
 
+## Student & Young Adult Tech — US Item-Focused Programs
+
+Barkain's student and young-adult audience skews heavily toward tech purchases (laptops, phones, tablets, peripherals). This table catalogs **US-available, item-focused brand programs** verifiable via ID.me, SheerID, UNiDAYS, or direct-brand `.edu` check. Streaming and SaaS programs (Spotify, Apple Music, YouTube Premium, Adobe CC, Microsoft 365 Edu, Autodesk Education) are deliberately excluded — Barkain's scope is physical items. Recent grads within 3–5 years of graduation should toggle `is_student=true`: UNiDAYS GRADLiFE (3 yr post-grad) and Student Beans GradBeans (5 yr post-grad) both operate as extended-student programs, and the catalog treats them under the existing `is_student` axis. A dedicated `is_recent_grad` flag is reserved for a future migration if demand surfaces.
+
+### Student Tech Programs (US)
+
+| Brand | Program | Discount | Verification | URL | Item Category | Stacking |
+|-------|---------|----------|--------------|-----|---------------|----------|
+| Apple | Apple Education (Student) | Flat $50–$100 off Mac/iPad; free AirPods with Mac during Back-to-School | UNiDAYS or Apple .edu check | apple.com/us-hed/shop | Macs, iPads, accessories | Cannot stack with Apple military or other Apple promos |
+| Samsung | Samsung Student | Up to 30 % off Galaxy phones, tablets, laptops | UNiDAYS | samsung.com/us/shop/offer-program/students/ | Phones, tablets, laptops | Per-product sale-price rules apply; TOS restricts external price sharing |
+| HP | HP Education | Up to 35 % off laptops, desktops, accessories | ID.me | hp.com/us-en/shop/cv/hp-education | Laptops, desktops, printers, accessories | Cannot stack with HP Frontline Heroes (healthcare) |
+| Dell | Dell University | 10 % off laptops + accessories (student tier) | Dell Advantage .edu | dell.com/en-us/lp/student | Laptops, monitors, peripherals | Stacks with some sale pricing, check per-SKU |
+| Lenovo | Lenovo Student | Up to 5 % off (stacks with select sale SKUs) | Direct .edu | lenovo.com/us/en/d/deals/student/ | Laptops, ThinkPads, accessories | Stackable with select sales |
+| Microsoft | Microsoft Education (Surface) | 10 % off Surface devices | Direct .edu / ID.me | microsoft.com/en-us/store/b/education | Surface laptops, tablets, accessories | Cannot stack with Microsoft military |
+| Acer | Acer Education Store | 10 % off laptops | Direct .edu | store.acer.com/en-us/education | Laptops, Chromebooks | Per-SKU exclusions |
+| ASUS | ASUS Education | Up to 10 % off laptops, ROG gear | Direct .edu | store.asus.com/us/b2b/education | Laptops, ROG gaming gear | — |
+| Razer | Razer Educate | Up to 15 % off peripherals, laptops | Direct .edu | razer.com/landingpg/education | Peripherals, gaming laptops, headsets | Cannot stack with Razer sale pricing |
+| Logitech | Logitech Education | Varies by SKU (typically 10–20 %) | Direct .edu | logitech.com/en-us/promotions/education.html | Peripherals, webcams, headsets | — |
+
+### Young Adult (18–24) Programs
+
+| Brand | Program | Discount | Verification | URL | Notes |
+|-------|---------|----------|--------------|-----|-------|
+| Amazon | Prime Young Adult | 6-mo free trial, then 50 % off Prime ($7.49/mo) | Age verification (not student) | amazon.com/amazon-prime-young-adult | Distinct from Prime Student. Does NOT require .edu. Does NOT stack with Prime Student — user picks one. **Membership-fee scope** (`discount_programs.scope = 'membership_fee'`), so Barkain surfaces the program but never claims a per-product dollar savings figure — mirrors the 3f-hotfix treatment of Prime Student. |
+
+### Aggregator notes
+
+- **UNiDAYS US** (`myunidays.com/US/en-US`) and **Student Beans US** (`studentbeans.com/us`) are the US regional subdomains. Scrape only these paths for US-specific brand percentages.
+- **GRADLiFE** (UNiDAYS, 3 yr post-grad) and **GradBeans** (Student Beans, 5 yr post-grad) extend student discount access. Barkain policy: `is_student=true` covers both current students and eligible recent grads; a dedicated `is_recent_grad` flag is reserved for a future migration.
+- **Employer-perks platforms** (PerkSpot, BenefitHub, Abenity, Perks at Work, Fond, LifeMart, Love My Credit Union Rewards) are OUT OF SCOPE for this expansion — they require a dedicated scraper step with up-front auth-gate percentage analysis.
+
+---
+
 ## Phase 1 Retailers — Identity Discount Matrix
 
 ### Best Buy
@@ -345,6 +378,11 @@ Most identity discounts **cannot be stacked** with each other or with other prom
 | Home Depot | 10% military applies to full-price items | Sale items, Lowe's price match, volume pricing |
 | Lowe's | 10% military on full-price only | Sale items, Lowe's credit 5% discount, other promos |
 | Best Buy | N/A (no identity discounts) | — |
+| Acer | Varies by SKU | Per-SKU exclusions listed on the Acer Education storefront |
+| ASUS | Varies by SKU | — |
+| Razer | — | Razer sale pricing (student discount applies to full-price SKUs only) |
+| Logitech | Varies by SKU | — |
+| Amazon (Prime Young Adult) | N/A — membership-fee discount only | Prime Student (users pick one) |
 
 **Portal bonuses are generally stackable** — a user can shop Samsung.com through Rakuten (cashback) AND use their military discount. This is where Barkain's multi-layer stacking creates the most value.
 

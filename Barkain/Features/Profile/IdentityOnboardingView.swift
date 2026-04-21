@@ -134,6 +134,10 @@ struct IdentityOnboardingView: View {
 
     private var membershipsContent: some View {
         VStack(spacing: Spacing.sm) {
+            toggleRow(
+                title: "18–24 (Young Adult)",
+                isOn: $viewModel.request.isYoungAdult
+            )
             toggleRow(title: "AAA member", isOn: $viewModel.request.isAaaMember)
             toggleRow(title: "AARP member", isOn: $viewModel.request.isAarpMember)
             toggleRow(title: "Costco member", isOn: $viewModel.request.isCostcoMember)
@@ -273,6 +277,7 @@ private final class PreviewOnboardingAPIClient: BarePreviewAPIClient, @unchecked
             isHealthcareWorker: request.isHealthcareWorker,
             isSenior: request.isSenior,
             isGovernment: request.isGovernment,
+            isYoungAdult: request.isYoungAdult,
             isAaaMember: request.isAaaMember,
             isAarpMember: request.isAarpMember,
             isCostcoMember: request.isCostcoMember,

@@ -625,6 +625,7 @@ private final class PreviewProfileAPIClient: BarePreviewAPIClient, @unchecked Se
             isHealthcareWorker: false,
             isSenior: false,
             isGovernment: false,
+            isYoungAdult: false,
             isAaaMember: false,
             isAarpMember: false,
             isCostcoMember: flagSet,

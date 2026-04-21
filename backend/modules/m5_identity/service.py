@@ -51,6 +51,11 @@ BRAND_SPECIFIC_RETAILERS: dict[str, str] = {
     "lg_direct": "lg",
     "sony_direct": "sony",
     "microsoft_direct": "microsoft",
+    # Benefits Expansion — student-tech brand-direct retailers.
+    "acer_direct": "acer",
+    "asus_direct": "asus",
+    "razer_direct": "razer",
+    "logitech_direct": "logitech",
 }
 
 # Substring keywords that must appear in Product.category (the
@@ -70,6 +75,11 @@ RETAILER_CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "dell_direct": ("electronics", "computer", "laptop", "monitor"),
     "lenovo_direct": ("electronics", "computer", "laptop", "tablet"),
     "microsoft_direct": ("electronics", "computer", "laptop", "tablet", "gaming"),
+    # Benefits Expansion — narrow to each brand's tech-product surface.
+    "acer_direct": ("electronics", "computer", "laptop", "chromebook", "monitor"),
+    "asus_direct": ("electronics", "computer", "laptop", "gaming", "monitor"),
+    "razer_direct": ("electronics", "computer", "laptop", "gaming", "audio", "peripheral"),
+    "logitech_direct": ("electronics", "audio", "peripheral", "computer", "gaming"),
 }
 
 
@@ -317,7 +327,7 @@ class IdentityService:
     def _active_eligibility_types(
         profile: UserDiscountProfile | None,
     ) -> list[str]:
-        """Map profile booleans to the 9-string eligibility_type vocabulary."""
+        """Map profile booleans to the 10-string eligibility_type vocabulary."""
         if profile is None:
             return []
         mapping = {
@@ -330,6 +340,7 @@ class IdentityService:
             "healthcare_worker": profile.is_healthcare_worker,
             "senior": profile.is_senior,
             "government": profile.is_government,
+            "young_adult": profile.is_young_adult,
         }
         return [k for k, v in mapping.items() if v]
 
