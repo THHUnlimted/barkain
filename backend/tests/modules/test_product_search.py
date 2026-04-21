@@ -772,6 +772,138 @@ async def test_tier2_pixel_collision_escalates_to_gemini(
     assert mock_gemini.call_count == 1
 
 
+# MARK: - Tier 2 noise filter (brand + model-code relevance)
+
+
+@pytest.mark.asyncio
+async def test_tier2_offbrand_fuzzy_match_escalates_to_gemini(
+    client, db_session, _stub_bestbuy_tier2, _stub_upcitemdb_tier2
+):
+    """`focal utopia 2022` → Panasonic lens + Kindle case + F1 game. None
+    share a brand token with the query, so the cascade must escalate."""
+    _stub_bestbuy_tier2.return_value = [
+        {
+            "device_name": "Panasonic - LUMIX S 26mm F8 Fixed Focal Length Pancake Lens",
+            "brand": "Panasonic", "model": "S-R26",
+            "category": "Camera Lenses",
+            "primary_upc": "885170430082", "confidence": 0.86,
+        },
+        {
+            "device_name": "SaharaCase - Venture Series Case for Amazon Kindle Paperwhite",
+            "brand": "SaharaCase", "category": "Tablet Accessories",
+            "primary_upc": "810091582671", "confidence": 0.74,
+        },
+    ]
+    gemini_rows = [{
+        "device_name": "Focal Utopia 2022 Open-Back Reference Headphones",
+        "brand": "Focal", "model": "Utopia (2022)",
+        "confidence": 0.95, "primary_upc": None,
+    }]
+    with patch(
+        "modules.m1_product.search_service.gemini_generate_json",
+        new_callable=AsyncMock, return_value=gemini_rows,
+    ) as mock_gemini:
+        response = await client.post(
+            SEARCH_URL, json={"query": "focal utopia 2022", "max_results": 5}
+        )
+
+    assert response.status_code == 200
+    assert mock_gemini.call_count == 1, "off-brand fuzzy matches must escalate"
+    sources = {r["source"] for r in response.json()["results"]}
+    assert "gemini" in sources
+
+
+@pytest.mark.asyncio
+async def test_tier2_missing_model_code_escalates_to_gemini(
+    client, db_session, _stub_bestbuy_tier2, _stub_upcitemdb_tier2
+):
+    """`lg 27gp950` → LG Q6 phone + Best Buy water filter. Brand matches on
+    one row, but neither contains the `27gp950` model code, so both must
+    flag as noise and the cascade escalates."""
+    _stub_bestbuy_tier2.return_value = [
+        {
+            "device_name": "LG - Geek Squad Certified Refurbished Q6 4G LTE with 32GB Memory",
+            "brand": "LG", "model": "LM-X220MA.AUSAPL",
+            "category": "Smartphones",
+            "primary_upc": "400062023366", "confidence": 0.86,
+        },
+        {
+            "device_name": "Best Buy essentials - NSF 42/53 Water Filter Replacement",
+            "brand": "Best Buy essentials", "category": "Water Filters",
+            "primary_upc": "600603321948", "confidence": 0.74,
+        },
+    ]
+    gemini_rows = [{
+        "device_name": "LG UltraGear 27GP950-B 27\" Nano IPS 4K Gaming Monitor",
+        "brand": "LG", "model": "27GP950-B",
+        "confidence": 0.95, "primary_upc": "719192640245",
+    }]
+    with patch(
+        "modules.m1_product.search_service.gemini_generate_json",
+        new_callable=AsyncMock, return_value=gemini_rows,
+    ) as mock_gemini:
+        response = await client.post(
+            SEARCH_URL, json={"query": "lg 27gp950", "max_results": 5}
+        )
+
+    assert response.status_code == 200
+    assert mock_gemini.call_count == 1, "model-code miss must escalate even when brand matches"
+
+
+@pytest.mark.asyncio
+async def test_tier2_brand_and_model_match_skips_gemini(
+    client, db_session, _stub_bestbuy_tier2, _stub_upcitemdb_tier2
+):
+    """`sony wh-1000xm5` → real Sony WH-1000XM5 rows → Gemini stays quiet.
+    Cost guard for the new relevance check."""
+    _stub_bestbuy_tier2.return_value = [
+        {
+            "device_name": "Sony - WH-1000XM5 Wireless Noise Cancelling Over-the-Ear Headphones - Black",
+            "brand": "Sony", "model": "WH-1000XM5",
+            "category": "Headphones",
+            "primary_upc": "027242923232", "confidence": 0.9,
+        },
+    ]
+    with patch(
+        "modules.m1_product.search_service.gemini_generate_json",
+        new_callable=AsyncMock, return_value=[],
+    ) as mock_gemini:
+        response = await client.post(
+            SEARCH_URL, json={"query": "sony wh-1000xm5", "max_results": 5}
+        )
+
+    assert response.status_code == 200
+    assert mock_gemini.call_count == 0, "real brand+model match keeps cascade quiet"
+
+
+@pytest.mark.asyncio
+async def test_tier2_rtx5090_title_matches_without_brand_token(
+    client, db_session, _stub_bestbuy_tier2, _stub_upcitemdb_tier2
+):
+    """`rtx 5090` has no brand token in the query (NVIDIA is implicit) —
+    the ASUS TUF row matches on title tokens, so it passes the relevance
+    check. Guards against the new filter being too aggressive on
+    model-family queries where the brand is implied."""
+    _stub_bestbuy_tier2.return_value = [
+        {
+            "device_name": "ASUS - TUF Gaming RTX 5090 32GB GDDR7 PCI Express 5.0 Graphics Card",
+            "brand": "ASUS", "model": "TUF-RTX5090-32G-GAMING",
+            "category": "GPUs / Video Graphics Cards",
+            "primary_upc": "192876962152", "confidence": 0.9,
+        },
+    ]
+    with patch(
+        "modules.m1_product.search_service.gemini_generate_json",
+        new_callable=AsyncMock, return_value=[],
+    ) as mock_gemini:
+        response = await client.post(
+            SEARCH_URL, json={"query": "rtx 5090", "max_results": 5}
+        )
+
+    assert response.status_code == 200
+    assert mock_gemini.call_count == 0, "title-level query match keeps cascade quiet"
+
+
 # MARK: - Deep search (force_gemini)
 
 

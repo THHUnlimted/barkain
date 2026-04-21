@@ -2465,3 +2465,139 @@ stay green (`xcodebuild` clean on sim, same 100 iOS unit + 4 UI).
   Deferred to tighten scope; the pattern matches `RecentSearches`
   which *does* have coverage.
 
+### Step ui-refresh-v2-fix — SearchView kick-out + Tier 2 off-brand matches (2026-04-21)
+
+**Branch:** `fix/search-presented-vm-dismiss`. Two live-test regressions
+surfaced on the sim + physical iPhone right after ui-refresh-v2 merged:
+both harmless on their own before v2, both obvious once v2 shipped.
+
+**Regression A — `PriceComparisonView` dismissed mid-stream.**
+
+User would search for a product, tap a result, briefly see
+`PriceLoadingHero` / `SniffingHeroSection`, then get bounced back to
+the results list. A second tap on the same result worked.
+
+Root cause: SwiftUI's `.searchable` text binding setter fires with
+**spurious values** on internal UI churn. In particular, when the nav
+bar hides (our `hideNavDuringStream` flips true as `isPriceLoading`
+goes true), the `.searchable` drawer detaches from layout and the
+binding setter gets called with `""` as part of the teardown. Our
+setter handler runs `SearchViewModel.onQueryChange(newValue)`, which
+unconditionally nilled `presentedProductViewModel` whenever it was
+non-nil — kicking the user out of the comparison view. The second
+tap worked because the flow re-ran the resolve from scratch.
+
+Fix (`Barkain/Features/Search/SearchViewModel.swift`): split the
+onQueryChange logic in two. The query / suggestions / error reset
+path still runs on every setter call (so the empty-query-populates-
+recents test stays green), but `presentedProductViewModel = nil`
+only fires when `!newValue.isEmpty && newValue != query`. Empty-
+value calls are treated as UI churn and ignored; same-value calls
+are no-ops. `query` itself is only updated on a real edit OR when
+the user legitimately clears the field while no comparison is
+presented — preventing a feedback loop where the `.searchable`
+getter reads back `""` on next render.
+
+Tradeoff: if a user taps the X in the search bar while looking at
+a PriceComparisonView, the field won't visually clear until they
+type something. Prioritized not bouncing them over that UX nit.
+
+**Regression B — "Can't open this result" flooded on obscure queries.**
+
+User reported tapping result after result only to get the
+`resolveFailureMessage` alert. Probe battery of 12 queries against
+the live backend confirmed it — Best Buy's search API was returning
+wildly off-topic rows that the Tier 2 noise filter let through:
+
+| Query | Tier 2 returned |
+|---|---|
+| `focal utopia 2022` | Panasonic Lumix lens, Kindle case, F1 2022 game |
+| `audeze lcd-x` | 3× XREAL AR glasses |
+| `framework laptop 16` | LG gram 16" laptops |
+| `leica q3` | KEF Q3 bookshelf speakers |
+| `lg 27gp950` / `lg 34gn850` | LG Q6 refurb phone + Best Buy water filter |
+
+Three UPCs (`F1 2022 digital`, `CanaKit Pi 5 kit`, `Blaze Pizza gift
+card`) also 404'd on resolve because Gemini's validation rejects
+digital / consumable SKUs — that's the source of the alert text.
+
+The old filter (`_TIER2_NOISE_CATEGORY_TOKENS` + `_TIER2_NOISE_TITLE_
+TOKENS`) only caught named accessory / warranty / gift-card patterns.
+It had no concept of "this row is unrelated to the user's query."
+
+Fix (`backend/modules/m1_product/search_service.py`): add brand +
+model-code relevance to `_is_tier2_noise`:
+
+```python
+def _is_tier2_noise(row: dict, *, query: str | None = None) -> bool:
+    # existing category + title denylist checks ...
+    if query is None:
+        return False
+    haystack = " ".join([title, brand, model]).lower()
+    # Hard: any query model-code (digit+letter, 4+ chars) must match verbatim.
+    for code in _query_model_codes(query):
+        if code not in haystack:
+            return True
+    # Soft: strict majority of meaningful tokens (len>=3, stopwords removed).
+    meaningful = _meaningful_query_tokens(query)
+    if meaningful and sum(1 for t in meaningful if t in haystack) * 2 <= len(meaningful):
+        return True
+    return False
+```
+
+Two callers at lines 321 + 333 updated to pass `query=normalized`.
+Signature kept `query`-keyword-optional so existing unit tests that
+call `_is_tier2_noise(row)` still compile.
+
+**Key decisions.**
+
+- **Model-code regex excludes pure-digit tokens.** `2022` as a "model
+  code" would match too many unrelated rows ("F1 2022 game" passes);
+  `5090` as a model code would reject legit ASUS RTX rows (no brand
+  token in the query either). So model codes require BOTH a digit
+  AND a letter, 4+ chars (e.g., `wh-1000xm5`, `27gp950`, `phn16s-71`).
+- **Strict-majority, not plurality.** A single lucky word match
+  ("Focal Length" shares the token `focal` with `focal utopia 2022`)
+  shouldn't rescue a clearly-unrelated row. Requiring >50% of
+  meaningful query tokens to appear catches these while leaving
+  genuine partial matches alone.
+- **Stopword list.** "pro", "max", "mini", "laptop", "phone", etc.
+  don't disambiguate brands and would let generic matches slip
+  through. Small focused list — add only when a pattern emerges.
+- **Keyword-only `query` param.** Lets existing tests like
+  `test_tier2_mixed_relevant_plus_noise_skips_gemini` keep their
+  positional call shape while production code passes the real query.
+
+**Probe results (before vs after).**
+
+| Query | Before | After |
+|---|---|---|
+| `focal utopia 2022` | Panasonic lens, Kindle case, F1 game | **Focal Utopia 2022 + Stellia + Clear Mg** |
+| `audeze lcd-x` | 3× XREAL glasses | **Audeze LCD-X + LCD-XC + LCD-2** |
+| `framework laptop 16` | LG gram 16" | **Framework Laptop 16 (DIY / Pre-built + generic)** |
+| `leica q3` | KEF Q3 speakers | **Leica Q3 + Q3 43 + Q2 cameras** |
+| `lg 27gp950` | LG Q6 phone + water filter | **LG 27GP950-B UltraGear** |
+| `sony wh-1000xm5` | Sony WH-1000XM5 (legit) | unchanged (Gemini stays quiet ✓) |
+| `acer aspire 5` | Acer Aspire rows (legit) | unchanged ✓ |
+| `iphone 15 pro` | DB hit + iPhone 15 Pro rows | unchanged ✓ |
+
+Cost guard intact — legit Tier 2 matches don't burn Gemini.
+
+**Tests.** +4 in `backend/tests/modules/test_product_search.py`:
+- `test_tier2_offbrand_fuzzy_match_escalates_to_gemini` (brand miss)
+- `test_tier2_missing_model_code_escalates_to_gemini` (model miss)
+- `test_tier2_brand_and_model_match_skips_gemini` (cost guard)
+- `test_tier2_rtx5090_title_matches_without_brand_token` (false-
+  positive guard — NVIDIA brand implicit, title-level match passes)
+
+33/33 pass in `test_product_search.py`. Full backend suite 478 pass
++ 6 pre-existing auth-test failures (verified by stashing my diff
+and re-running — they fail without my change too).
+
+**Deploy.** Local uvicorn restarted with `--reload`, Redis cache
+namespace `search:query:*` flushed (54 keys). iOS Debug build hits
+`192.168.1.208:8000` via LAN, so the sim + physical iPhone both
+see the fix on next search. EC2 deploy deferred — scraper box
+hosts eBay webhook + GDPR handler, not product search today.
+
+

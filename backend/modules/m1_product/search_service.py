@@ -112,14 +112,80 @@ _TIER2_NOISE_TITLE_TOKENS: tuple[str, ...] = (
     "skin case",
 )
 
+# Short, generic query tokens that carry no brand/model signal — excluding
+# them from the relevance check stops the filter from being fooled by
+# titles that happen to share a common English word. Bare keys only; we
+# tokenise lowercase before lookup.
+_RELEVANCE_STOPWORDS: frozenset[str] = frozenset({
+    "the", "and", "with", "for", "pro", "max", "mini", "plus", "ultra",
+    "new", "gen", "generation", "inch", "laptop", "desktop", "tablet",
+    "phone", "headphones", "earbuds", "tv", "smart", "case", "wireless",
+    "bluetooth", "series", "edition", "model", "version",
+})
 
-def _is_tier2_noise(row: dict) -> bool:
+# Model-code pattern: 4+ characters, contains both a digit and a letter.
+# Matches `wh-1000xm5`, `27gp950`, `phn16s-71`, `m2-ultra`, but intentionally
+# NOT pure-digit tokens (`2022`, `5090`) — those either refer to years or
+# get caught by the generic relevance check below.
+_MODEL_CODE_RE = re.compile(r"[a-z0-9][a-z0-9-]{3,}", re.IGNORECASE)
+
+
+def _meaningful_query_tokens(normalized_query: str) -> list[str]:
+    """Query tokens used to decide if a Tier 2 row is on-topic.
+
+    Lowercased, length >= 3, stripped of surrounding punctuation. Generic
+    stopwords ("pro", "max", "laptop", ...) are excluded so a row that
+    only matches on those words doesn't escape the noise filter.
+    """
+    tokens: list[str] = []
+    for raw in normalized_query.lower().split():
+        tok = _STRIP_PUNCT_RE.sub("", raw).strip()
+        if len(tok) < 3:
+            continue
+        if tok in _RELEVANCE_STOPWORDS:
+            continue
+        tokens.append(tok)
+    return tokens
+
+
+def _query_model_codes(normalized_query: str) -> list[str]:
+    """Model-code-like tokens from the query — digits+letters, 4+ chars.
+
+    These are the user's strongest relevance signal. If the query contains
+    one of these and the row's title/model doesn't echo it back, the row
+    is almost certainly wrong regardless of brand or category.
+    """
+    out: list[str] = []
+    for raw in normalized_query.lower().split():
+        tok = _STRIP_PUNCT_RE.sub("", raw).strip()
+        if len(tok) < 4:
+            continue
+        has_digit = any(c.isdigit() for c in tok)
+        has_alpha = any(c.isalpha() for c in tok)
+        if has_digit and has_alpha:
+            out.append(tok)
+    return out
+
+
+def _is_tier2_noise(row: dict, *, query: str | None = None) -> bool:
     """Classify a Tier 2 row as accessory/service/peripheral noise.
 
     Used to decide whether to escalate to Gemini even when Tier 2 returned
-    rows. Returning True here does NOT drop the row from the merged response —
-    it only contributes to the "no relevant Tier 2 hits" signal that gates
-    the Tier 3 fire.
+    rows. Returning True here does NOT drop the row from the merged response
+    on its own — it contributes to the "no relevant Tier 2 hits" signal
+    that gates the Tier 3 fire, and (when Gemini escalated and returned
+    something) also drops it from the merged results so flagship hits
+    aren't crowded out.
+
+    Two layers:
+
+    1. Category + title denylists (unchanged) — catches explicit accessory
+       / service / warranty / monitor / gift-card patterns.
+    2. Relevance check against the user's query — catches Best Buy's
+       famous off-topic fuzzy matches (e.g. `focal utopia 2022` → Panasonic
+       lens, `lg 27gp950` → LG Q6 phone, `leica q3` → KEF Q3 speakers).
+       Runs only when `query` is passed — existing unit tests that call
+       `_is_tier2_noise(row)` keep working.
     """
     category = (row.get("category") or "").lower()
     if any(token in category for token in _TIER2_NOISE_CATEGORY_TOKENS):
@@ -127,6 +193,37 @@ def _is_tier2_noise(row: dict) -> bool:
     title = (row.get("device_name") or row.get("name") or "").lower()
     if any(token in title for token in _TIER2_NOISE_TITLE_TOKENS):
         return True
+    if query is None:
+        return False
+
+    # Relevance bag: everything the row gives us that could echo back the
+    # user's query. Substring match is intentional — model codes live
+    # inside longer SKUs (`WH-1000XM5` inside `Sony WH-1000XM5 Wireless`).
+    haystack = " ".join([
+        title,
+        (row.get("brand") or "").lower(),
+        (row.get("model") or "").lower(),
+    ])
+
+    # Hard requirement: any user-provided model code must appear verbatim
+    # in the row's title/brand/model. Digit+letter tokens are too specific
+    # to tolerate a mismatch — if the user typed `27gp950`, a row without
+    # `27gp950` is the wrong product, full stop.
+    for code in _query_model_codes(query):
+        if code not in haystack:
+            return True
+
+    # Soft requirement: strict majority of meaningful query tokens must
+    # appear in the haystack. Catches `leica q3` → KEF Q3 (no `leica`) and
+    # `framework laptop 16` → LG gram (no `framework`), while leaving
+    # genuine matches like `sony wh-1000xm5` → Sony WH-1000XM5 intact.
+    meaningful = _meaningful_query_tokens(query)
+    if not meaningful:
+        return False
+    hits = sum(1 for tok in meaningful if tok in haystack)
+    if hits * 2 <= len(meaningful):
+        return True
+
     return False
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -318,20 +415,24 @@ class ProductSearchService:
                 # class of failures.
                 relevant_tier2 = [
                     row for row in (*bestbuy_rows, *upcitemdb_rows)
-                    if not _is_tier2_noise(row)
+                    if not _is_tier2_noise(row, query=normalized)
                 ]
                 escalate_to_gemini = force_gemini or not relevant_tier2
                 if escalate_to_gemini:
                     gemini_rows = await self._gemini_search(normalized, max_results)
                 # Noise suppression: if Gemini was escalated specifically
                 # because Tier 2 was all noise (cases / AppleCare / monitors
-                # named Pixel / games-for-Switch), the noise rows must NOT
-                # crowd out Gemini's real flagship hits at merge time.
-                # Skip suppression when Gemini itself returned nothing —
-                # half-noisy answer beats none.
+                # named Pixel / games-for-Switch / off-brand fuzzy hits),
+                # the noise rows must NOT crowd out Gemini's real flagship
+                # hits at merge time. Skip suppression when Gemini itself
+                # returned nothing — half-noisy answer beats none.
                 if escalate_to_gemini and not force_gemini and gemini_rows:
-                    bestbuy_rows = [r for r in bestbuy_rows if not _is_tier2_noise(r)]
-                    upcitemdb_rows = [r for r in upcitemdb_rows if not _is_tier2_noise(r)]
+                    bestbuy_rows = [
+                        r for r in bestbuy_rows if not _is_tier2_noise(r, query=normalized)
+                    ]
+                    upcitemdb_rows = [
+                        r for r in upcitemdb_rows if not _is_tier2_noise(r, query=normalized)
+                    ]
 
         merged = self._merge(
             db_rows, bestbuy_rows, upcitemdb_rows, gemini_rows, max_results,
