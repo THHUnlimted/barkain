@@ -33,6 +33,11 @@ protocol APIClientProtocol: Sendable {
         productURL: String
     ) async throws -> AffiliateURLResponse
     func getAffiliateStats() async throws -> AffiliateStatsResponse
+    // Step 3e — Deterministic Recommendation Engine
+    func fetchRecommendation(
+        productId: UUID,
+        forceRefresh: Bool
+    ) async throws -> Recommendation?
 }
 
 // MARK: - APIClient
@@ -198,6 +203,24 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
 
     func getAffiliateStats() async throws -> AffiliateStatsResponse {
         try await request(endpoint: .getAffiliateStats)
+    }
+
+    // MARK: - Recommendation (Step 3e)
+
+    /// Deterministic recommendation post-close. Returns `nil` when the
+    /// backend reports 422 `RECOMMEND_INSUFFICIENT_DATA` — the iOS caller
+    /// interprets that as "not enough prices to say anything meaningful"
+    /// and silently leaves the hero unrendered. All other errors propagate.
+    func fetchRecommendation(
+        productId: UUID,
+        forceRefresh: Bool = false
+    ) async throws -> Recommendation? {
+        let body = RecommendationRequest(productId: productId, forceRefresh: forceRefresh)
+        do {
+            return try await request(endpoint: .getRecommendation(body)) as Recommendation
+        } catch APIError.validation {
+            return nil
+        }
     }
 
     // MARK: - Streaming (Step 2c)

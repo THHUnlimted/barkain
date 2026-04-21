@@ -93,6 +93,20 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     var getAffiliateURLLastProductURL: String?
     var getAffiliateStatsCallCount = 0
 
+    // MARK: - Recommendation (Step 3e)
+
+    /// `.success(nil)` mirrors the 422 `RECOMMEND_INSUFFICIENT_DATA`
+    /// branch — the APIClient maps that status to a nil return so the
+    /// ViewModel leaves the hero unrendered. Real errors are surfaced
+    /// as `.failure`.
+    var fetchRecommendationResult: Result<Recommendation?, APIError> = .success(nil)
+    var fetchRecommendationCallCount = 0
+    var fetchRecommendationLastProductId: UUID?
+    var fetchRecommendationLastForceRefresh: Bool?
+    /// Optional delay so tests can verify the fetch fires AFTER all three
+    /// settle flags have flipped.
+    var fetchRecommendationDelay: TimeInterval = 0
+
     // MARK: - Delay simulation
 
     var resolveProductDelay: TimeInterval = 0
@@ -239,6 +253,18 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     func getAffiliateStats() async throws -> AffiliateStatsResponse {
         getAffiliateStatsCallCount += 1
         return try getAffiliateStatsResult.get()
+    }
+
+    func fetchRecommendation(
+        productId: UUID, forceRefresh: Bool
+    ) async throws -> Recommendation? {
+        fetchRecommendationCallCount += 1
+        fetchRecommendationLastProductId = productId
+        fetchRecommendationLastForceRefresh = forceRefresh
+        if fetchRecommendationDelay > 0 {
+            try? await Task.sleep(for: .seconds(fetchRecommendationDelay))
+        }
+        return try fetchRecommendationResult.get()
     }
 
     var streamPricesLastQueryOverride: String?

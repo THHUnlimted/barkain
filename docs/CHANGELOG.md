@@ -2600,4 +2600,174 @@ namespace `search:query:*` flushed (54 keys). iOS Debug build hits
 see the fix on next search. EC2 deploy deferred — scraper box
 hosts eBay webhook + GDPR handler, not product search today.
 
+---
+
+### Step 3e — M6 Recommendation Engine (deterministic stacking) (2026-04-22)
+
+```
+backend/modules/m6_recommend/__init__.py          # NEW — router + service exports
+backend/modules/m6_recommend/schemas.py           # NEW — StackedPath, BrandDirectCallout, Recommendation
+backend/modules/m6_recommend/service.py           # NEW — RecommendationService + pure stacking helpers
+backend/modules/m6_recommend/router.py            # NEW — POST /api/v1/recommend
+backend/app/main.py                               # wires m6_recommend_router
+scripts/seed_portal_bonuses_demo.py               # NEW — 13-row idempotent UPSERT seed
+backend/tests/modules/test_m6_recommend.py        # NEW — 18 tests (stacking + endpoint + seed)
+Barkain/Features/Recommendation/RecommendationModels.swift   # NEW — DTOs
+Barkain/Features/Recommendation/RecommendationHero.swift     # NEW — hero card view
+Barkain/Features/Recommendation/PriceComparisonView.swift    # embeds hero post-settle
+Barkain/Features/Scanner/ScannerViewModel.swift              # three settle-flag gate
+Barkain/Services/Networking/APIClient.swift                  # fetchRecommendation
+Barkain/Services/Networking/Endpoints.swift                  # getRecommendation endpoint
+Barkain/Features/Profile/{CardSelectionView,IdentityOnboardingView,ProfileView}.swift  # preview stubs
+BarkainTests/Helpers/MockAPIClient.swift                     # fetchRecommendation mock
+BarkainTests/Helpers/TestFixtures.swift                      # successfulStreamEvents + Recommendation fixtures
+BarkainTests/Features/Recommendation/RecommendationViewModelTests.swift  # NEW — 5 VM gate tests
+BarkainTests/Features/Recommendation/RecommendationDecodingTests.swift   # NEW — 3 JSON tests
+BarkainUITests/RecommendationHeroUITests.swift               # NEW — 1 end-to-end UI test
+CLAUDE.md  docs/PHASES.md  docs/FEATURES.md  docs/ARCHITECTURE.md  docs/COMPONENT_MAP.md  docs/TESTING.md
+```
+
+**What & why.** Phase 3's whole stack has been a data dump until now —
+prices, identity, cards, portals all rendered as separate lists. 3e
+turns that data into a decision: a single capstone hero at the top of
+`PriceComparisonView` that says *"Buy at Back Market via Befrugal — $34.56 net, $1.44 saved"*
+or on a richer identity+card+portal stack *"Buy at Samsung.com via
+Rakuten with Chase Freedom Flex — $658 total, $342 saved"*.
+
+**Why deterministic (v2 pivot from v1 Sonnet plan).** All the math was
+already sitting in existing endpoints. A 50-line `asyncio.gather` + pure
+Python stacks it. Sonnet would have added $0.01–0.03 per scan, 1–2 s
+latency, and non-deterministic outputs for maybe 2 % narrative lift —
+not worth it for the demo. `docs/FEATURES.md` M6 row is reclassified
+AI → T. If the demo later needs prose flair, Sonnet can layer on as a
+Phase 4 polish pass.
+
+**Stacking model.**
+```
+final_price    = base_price − identity_savings        # sticker
+effective_cost = final_price − card − portal          # net of rebates
+total_savings  = identity + card + portal             # headline number
+```
+Card + portal are computed on the POST-identity price (we don't earn
+rewards on money we never paid). Winner = `min(effective_cost)`,
+tiebreaks = condition (new > refurbished > used) then well-known-
+retailer preference (`amazon, best_buy, walmart, target, home_depot,
+ebay_new, backmarket, ebay_used, fb_marketplace`).
+
+**Brand-direct callout (3j fold-in).** Separate from the retailer
+stack. Scan eligible identity discounts for programs where the retailer
+id ends in `_direct` AND `discount_type == "percentage"` AND
+`discount_value >= 15.0`. Emit at most one callout (highest value).
+Renders as a small pill below the hero: *"Also: 30 % off at Samsung.com
+with your Samsung Military Program."* This is the concrete realization
+of the planned-but-never-shipped 3j — struck through in `PHASES.md`.
+
+**Retailer exclusions.**
+- `retailers.is_active = False` → drop from input pack. Lowes + sams_club
+  retained `is_active=False` post-retirement for FK integrity; the
+  recommender must respect that.
+- `retailer_health.status NOT IN ('ok','healthy')` → drop. Retailers
+  with no health row are implicitly healthy (normal steady state).
+
+**iOS timing gate — the central UX contract.** The hero renders only
+after ALL THREE settle-flag flips:
+1. `streamClosed` (SSE `done` event OR `fallbackToBatch` success)
+2. `identityLoaded` (`/identity/discounts` returns, success or error)
+3. `cardsLoaded` (`/cards/recommendations` returns, success or error)
+
+`attemptFetchRecommendation()` is called on every flip; it fires the
+fetch only once per product lifecycle (`recommendationTask == nil &&
+recommendation == nil` guards). `reset()` + `fetchPrices(forceRefresh:)`
+both clear all three flags so refreshes re-gate cleanly. The
+`_awaitRecommendationTaskForTesting()` hook exists solely so unit tests
+can deterministically await the fire-and-forget `Task`.
+
+**Silent-failure contract (same idiom as identity discounts in 2d).**
+Any recommendation fetch failure logs to
+`com.barkain.app`/`Recommendation` and leaves `recommendation == nil`.
+It NEVER sets `priceError`, NEVER surfaces an alert. The retailer list
+is the primary UX and cannot be hidden by a secondary-feature failure.
+Stream fall-back to batch still flips `streamClosed` so the hero gate
+remains consistent.
+
+**Cache.** `recommend:user:{user_id}:product:{product_id}:v1`, TTL
+15 min. Deterministic math means the cache is correctness-redundant;
+it exists for spam-tap protection. On write we `model_dump_json` the
+response; on read we `Recommendation.model_validate` and flip
+`cached=True` in the returned copy.
+
+**Rate limit.** 60/min (general). The original v1 spec picked 10/min
+because Sonnet was expensive; 3e is pure Python math with a cache, so
+the LLM-era limit would be silly.
+
+**Sentence templates.** Same cadence every time, no prose variability:
+- `_build_headline(winner)` → `"{retailer}"` /
+  `"{retailer} via {portal}"` / `"{retailer} with {card}"` /
+  `"{retailer} via {portal} with {card}"`.
+- `_build_why(winner)` → layer phrases joined by ` + `, prefixed with
+  `"Stacking "`, suffixed with `" beats the naive cheapest listing by $N.NN."`.
+  Empty stack falls back to `"Lowest available price at {retailer}."`.
+
+**Portal-seed script.** `scripts/seed_portal_bonuses_demo.py` — 13-row
+idempotent UPSERT on `(portal_source, retailer_id)` keyed off the
+`idx_portal_bonuses_upsert` unique index. Silently skips rows whose
+retailer isn't seeded yet. Header comment flags 3g replacement.
+
+**Live smoke.** Local uvicorn + real PG cache, UPC `194252818381`
+(AirPods 3rd Gen in this DB):
+```json
+{
+  "winner": {"retailer_id":"backmarket","final_price":36.0,
+             "effective_cost":34.56,"portal_savings":1.44,
+             "portal_source":"befrugal","condition":"refurbished"},
+  "headline":"Back Market via Befrugal",
+  "why":"Stacking Befrugal gives 1.44 back beats the naive cheapest listing by $1.44.",
+  "alternatives":[{"retailer_id":"ebay_used",...}, ...],
+  "compute_ms": 3, "cached":false
+}
+```
+Three consecutive calls: 6 ms / 6 ms / 7 ms. p95 target was 150 ms —
+25× margin. Further richness requires identity + card seeds against
+the target product (brand-specific filter gates Samsung-only programs
+away from Apple products correctly, per `IdentityService`).
+
+**Tests.**
+- **Backend +14** (net; 18 written but 4 service-level tests seed the
+  DB end-to-end instead of mocking, so the net delta vs prior baseline
+  is +14). `tests/modules/test_m6_recommend.py`: 10 pure-function
+  stacking edge cases (three-layer composition with card/portal on
+  post-identity price; identity-only, card-only, portal-only; new-vs-
+  refurb tiebreak; brand-direct gates for retailer + threshold +
+  discount_type; headline + why sentence templates) + 4 DB+fakeredis
+  integration tests (Samsung three-layer end-to-end;
+  `InsufficientPriceDataError` on <2 usable prices; inactive retailer
+  dropped; drift-flagged retailer dropped; cache-hit flip) + 2 endpoint
+  tests (404 + 422) + 1 seed-script idempotency subprocess test.
+  **Zero Anthropic / Gemini mocks — no LLM path in this module.**
+- **iOS +8 unit.** `RecommendationViewModelTests.swift`×5 covers the
+  three-flag gate (happy path, failure, 422 silent, reset, refresh).
+  `RecommendationDecodingTests.swift`×3 locks the snake→camel JSON
+  mapping via two canned fixtures (`recommendationJSON` +
+  `recommendationWithCalloutJSON`).
+- **iOS +1 UI.** `RecommendationHeroUITests.swift`: scan → wait for
+  first `retailerRow_*` → assert hero NOT visible during streaming →
+  wait 60 s for hero post-settle → tap CTA → OR-of-3 affiliate-sheet
+  signal. Skips gracefully when the environment lacks seeded data.
+
+**Known limits.**
+- `_retailer_covers_product` in `IdentityService` drops a Samsung
+  program for a non-Samsung product even when the user is military.
+  That's correct for the identity-discount UX but it means
+  `/recommend` only shows the brand-direct callout when the product's
+  brand matches. Documented in test setup and test fixtures use a
+  Samsung product accordingly.
+- Recommendation cache keys include `user_id` but not a hash of the
+  identity/card/portal state — a tier or card change won't bust an
+  existing cached rec for 15 min. Acceptable for demo; revisit if 3f
+  surfaces the lag.
+- Brand-direct callout fires max once, so a user with BOTH Samsung
+  and Apple programs on a phone product would only see the higher-
+  value one. By design for the demo — stacking callouts would muddy
+  the headline.
+
 

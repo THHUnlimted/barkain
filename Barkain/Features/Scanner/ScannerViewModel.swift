@@ -36,6 +36,28 @@ final class ScannerViewModel {
     // the daily scan cap; ScannerView observes this and presents PaywallHost.
     var showPaywall: Bool = false
 
+    // MARK: - Step 3e: Recommendation hero (post-close gate)
+    //
+    // Recommendation fires only after ALL THREE have settled:
+    //   • SSE stream closes (or fallback-to-batch succeeds)
+    //   • /identity/discounts returns (success OR error)
+    //   • /cards/recommendations returns (success OR error)
+    // Tracked via three flags that flip true on each completion branch.
+    // Flags reset on every new scan so a refresh starts clean.
+    var recommendation: Recommendation?
+    private var streamClosed = false
+    private var identityLoaded = false
+    private var cardsLoaded = false
+    private var recommendationTask: Task<Void, Never>?
+
+    /// Test-only hook to await the in-flight recommendation fetch. Production
+    /// call sites should never need this — the observable `recommendation`
+    /// property drives the UI. Used by RecommendationViewModelTests so the
+    /// fire-and-forget Task can be awaited deterministically.
+    func _awaitRecommendationTaskForTesting() async {
+        await recommendationTask?.value
+    }
+
     // MARK: - Dependencies
 
     private let apiClient: any APIClientProtocol
@@ -70,6 +92,12 @@ final class ScannerViewModel {
         priceError = nil
         identityDiscounts = []
         cardRecommendations = []
+        recommendation = nil
+        streamClosed = false
+        identityLoaded = false
+        cardsLoaded = false
+        recommendationTask?.cancel()
+        recommendationTask = nil
         isLoading = true
 
         do {
@@ -101,6 +129,13 @@ final class ScannerViewModel {
         guard let product else { return }
         priceComparison = nil
         priceError = nil
+        // Reset settle-flag state so a refresh re-gates the hero cleanly.
+        recommendation = nil
+        streamClosed = false
+        identityLoaded = false
+        cardsLoaded = false
+        recommendationTask?.cancel()
+        recommendationTask = nil
         isPriceLoading = true
 
         // Step 2c: consume the SSE stream. Each retailer_result event mutates
@@ -163,6 +198,8 @@ final class ScannerViewModel {
         }
 
         sseLog.info("fetchPrices: stream completed successfully")
+        streamClosed = true
+        attemptFetchRecommendation()
         await fetchIdentityDiscounts(productId: product.id)
         isPriceLoading = false
     }
@@ -185,6 +222,8 @@ final class ScannerViewModel {
             sseLog.warning("fetchIdentityDiscounts failed: \(error.localizedDescription, privacy: .public)")
             identityDiscounts = []
         }
+        identityLoaded = true
+        attemptFetchRecommendation()
         await fetchCardRecommendations(productId: productId)
     }
 
@@ -203,6 +242,43 @@ final class ScannerViewModel {
         } catch {
             sseLog.warning("fetchCardRecommendations failed: \(error.localizedDescription, privacy: .public)")
             cardRecommendations = []
+        }
+        cardsLoaded = true
+        attemptFetchRecommendation()
+    }
+
+    // MARK: - Step 3e: Recommendation gate
+
+    /// Called on every settle-flag flip. Fires the recommendation fetch only
+    /// once per product lifecycle — hero never renders during streaming or
+    /// while identity/cards are in flight.
+    private func attemptFetchRecommendation() {
+        guard streamClosed, identityLoaded, cardsLoaded else { return }
+        guard recommendationTask == nil, recommendation == nil else { return }
+        guard let product else { return }
+        recommendationTask = Task { [weak self] in
+            await self?.fetchRecommendation(productId: product.id)
+        }
+    }
+
+    /// Non-fatal: any failure logs to `com.barkain.app`/`Recommendation`
+    /// and leaves `recommendation == nil`. Never surfaces an alert — the
+    /// retailer list is the primary UX and must not be hidden by a
+    /// secondary-feature failure. Same contract as identity discounts.
+    private func fetchRecommendation(productId: UUID) async {
+        let log = Logger(subsystem: "com.barkain.app", category: "Recommendation")
+        do {
+            let result = try await apiClient.fetchRecommendation(
+                productId: productId, forceRefresh: false
+            )
+            if let result {
+                recommendation = result
+                log.info("recommend: winner=\(result.winner.retailerId, privacy: .public) savings=\(result.winner.totalSavings, privacy: .public) compute_ms=\(result.computeMs, privacy: .public) cached=\(result.cached, privacy: .public)")
+            } else {
+                log.info("recommend: insufficient data — hero stays hidden")
+            }
+        } catch {
+            log.warning("recommend fetch failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -272,6 +348,9 @@ final class ScannerViewModel {
             sseLog.info("fallbackToBatch: batch returned \(batch.prices.count, privacy: .public) prices, \(batch.retailerResults.count, privacy: .public) retailer results")
             priceComparison = batch
             priceError = nil
+            // Batch success is equivalent to SSE `done` for the hero gate.
+            streamClosed = true
+            attemptFetchRecommendation()
             await fetchIdentityDiscounts(productId: product.id)
         } catch let apiError as APIError {
             // Clear any partial seed so callers see a clean failure state.
@@ -299,6 +378,12 @@ final class ScannerViewModel {
         identityDiscounts = []
         cardRecommendations = []
         userHasCards = false
+        recommendation = nil
+        streamClosed = false
+        identityLoaded = false
+        cardsLoaded = false
+        recommendationTask?.cancel()
+        recommendationTask = nil
     }
 
     // MARK: - Step 2g: Affiliate URL resolution
@@ -312,12 +397,29 @@ final class ScannerViewModel {
         guard let rawUrlString = retailerPrice.url, !rawUrlString.isEmpty else {
             return nil
         }
-        let fallback = URL(string: rawUrlString)
+        return await resolveAffiliateURL(
+            retailerId: retailerPrice.retailerId, rawUrlString: rawUrlString
+        )
+    }
 
+    /// Step 3e — same round-trip for the hero's winner button.
+    func resolveAffiliateURL(for path: StackedPath) async -> URL? {
+        guard let rawUrlString = path.productUrl, !rawUrlString.isEmpty else {
+            return nil
+        }
+        return await resolveAffiliateURL(
+            retailerId: path.retailerId, rawUrlString: rawUrlString
+        )
+    }
+
+    private func resolveAffiliateURL(
+        retailerId: String, rawUrlString: String
+    ) async -> URL? {
+        let fallback = URL(string: rawUrlString)
         do {
             let response = try await apiClient.getAffiliateURL(
                 productId: priceComparison?.productId,
-                retailerId: retailerPrice.retailerId,
+                retailerId: retailerId,
                 productURL: rawUrlString
             )
             return URL(string: response.affiliateUrl) ?? fallback
