@@ -2,6 +2,7 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
@@ -15,6 +16,12 @@ os.environ.setdefault("ENVIRONMENT", "test")
 
 from app.database import Base
 from fastapi import Depends
+
+# Step 3f — import the full model registry so Base.metadata knows about every
+# table (AffiliateClick in particular is only imported from app.models, not
+# from any router/service). Without this, running the m12 tests in isolation
+# skipped the affiliate_clicks table in create_all.
+import app.models  # noqa: F401
 
 from app.dependencies import get_current_user, get_db, get_rate_limiter, get_redis
 from app.main import app
@@ -48,7 +55,7 @@ async def _ensure_schema(engine):
     if _schema_ready:
         return
 
-    # Drift marker: idx_products_name_trgm from migration 0007.
+    # Drift marker: affiliate_clicks.metadata column from migration 0008.
     # Update this query when adding new migrations that introduce
     # constraints, columns, or indexes to existing tables.
     async with engine.begin() as conn:
@@ -56,7 +63,8 @@ async def _ensure_schema(engine):
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         marker = await conn.execute(
             text(
-                "SELECT 1 FROM pg_indexes WHERE indexname = 'idx_products_name_trgm'"
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'affiliate_clicks' AND column_name = 'metadata'"
             )
         )
         schema_current = marker.scalar() is not None
@@ -109,6 +117,25 @@ async def fake_redis():
     yield r
     await r.flushall()
     await r.aclose()
+
+
+# MARK: - Demo mode toggle (Step 3f Pre-Fix #4)
+
+@pytest.fixture
+def without_demo_mode(monkeypatch):
+    """Force DEMO_MODE=False for tests that verify real auth rejection.
+
+    `.env` leaves DEMO_MODE=1 for local runs. Tests asserting "unauthed
+    request returns 401" must flip it off, otherwise `get_current_user`
+    short-circuits to `demo_user` and the 401 never fires.
+
+    Patches the module-level `settings` instance directly because
+    `get_current_user` reads `settings.DEMO_MODE` at call time.
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "DEMO_MODE", False)
+    yield
 
 
 # MARK: - Mock Auth

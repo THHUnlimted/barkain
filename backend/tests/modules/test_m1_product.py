@@ -56,7 +56,7 @@ async def test_resolve_rejects_missing_upc(client):
 
 
 @pytest.mark.asyncio
-async def test_resolve_requires_auth(unauthed_client):
+async def test_resolve_requires_auth(unauthed_client, without_demo_mode):
     """Request without auth returns 401."""
     response = await unauthed_client.post(
         RESOLVE_URL, json={"upc": VALID_UPC}

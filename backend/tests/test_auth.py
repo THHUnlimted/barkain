@@ -4,7 +4,9 @@ from tests.conftest import MOCK_USER_ID
 
 
 @pytest.mark.asyncio
-async def test_protected_endpoint_without_token_returns_401(unauthed_client):
+async def test_protected_endpoint_without_token_returns_401(
+    unauthed_client, without_demo_mode
+):
     response = await unauthed_client.get("/api/v1/test-auth")
     assert response.status_code == 401
     data = response.json()
