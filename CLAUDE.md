@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** 2026-04-20 (v5.6 — ui-refresh-v2 entry: Home tab, Kennel profile, whole-app palette pass)
+> **Last updated:** 2026-04-21 (v5.7 — ui-refresh-v2-fix + Key Decisions Log recompact, 27.8k / 28k budget)
 
 ---
 
@@ -275,11 +275,12 @@ Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; 
 | demo-prep | Walmart `decodo_http` default + CHALLENGE retry + SP-decodo-scoping (fb_marketplace bandwidth fix) + scraper timing trim + SP-samsclub-decodo + Best Buy Products API adapter | +113 | — | #25–#30 |
 | post-demo-prep | Walmart bare-host fix + lowes/sams_club retired + Decodo Scraper API adapter for Amazon (~3 s vs ~53 s) | +14 | — | #31 |
 | 3c | M1 Search v2: 3-tier cascade (DB → [BBY+UPCitemdb parallel] → Gemini), brand-only routing, `force_gemini` deep-search, variant collapse w/ synthetic generic row, price-stream `?query=` override, eBay affiliate URL fix (rover pixel → EPN params) | +14 | +5 | #32 |
-| 3c-hardening | Live-test bundle: Amazon platform-suffix accessory filter, service/repair filter, Walmart 5× CHALLENGE retry + back-off, Best Buy 429/5xx retry + query sanitizer, Redis device→UPC cache (24h), Redis scoped cache for `query_override` runs, iOS sheet-anchoring fix | +26 | — | #32 |
+| 3c-hardening | Amazon platform-suffix + service/repair filter; Walmart 5× CHALLENGE retry; Best Buy 429/5xx retry + `_sanitize_query`; Redis device→UPC 24h + scoped query cache 30 min; iOS sheet-anchoring fix | +26 | — | #32 |
 | 3d | Autocomplete: `actor AutocompleteService` (sorted-array binary search over bundled JSON) + `.searchable + .searchSuggestions + .searchCompletion` + `RecentSearches` (UserDefaults, legacy-key migrated) + `scripts/generate_autocomplete_vocab.py` Amazon sweep (4,448 terms / 128 KB). Removed 300 ms auto-debounce-search; submit-driven now | +23 | +34 / +1 UI | #34 |
-| 3d-noise-filter | Search cascade noise filter: `_is_tier2_noise` classifier (category + title denylist) escalates Tier 3 Gemini when only accessories / AppleCare / protection / monitors / games surface; merge drops noise on escalation so flagship hits aren't crowded out at `max_results`. Cost guard preserved (real ASUS RTX 5090 keeps Gemini quiet). 9/9 live probe queries fixed | +4 | — | #36 |
-| ui-refresh-v1 | HTML-style-guide design pass: warm-gold palette (dynamic light/dark), rounded system fonts, shadow/shimmer helpers. Price-loading hero with glowing paw (halo pulse + gradient sweep), rotating puns, "Checking your discounts & cards too" chip. Retailer rows stream in live with spring price-sort as they arrive (Best Barkain tracks current cheapest). Nav bar (search drawer + title) hides while streaming and returns on pull-down past 32pt or stream close. `SearchResultRow` moved to `Features/Shared/Components/` | — | — | TBD |
-| ui-refresh-v2 | Whole-app makeover: new Home tab (hero, Scan/Search quick-actions, "Recently sniffed" rail backed by new `RecentlyScannedStore` UserDefaults service). Scanner overlay swapped for gradient capsule + gold viewfinder frame. Profile tab restyled as "The Kennel" with real affiliate-click stats in a gradient points card (replaces unused `/affiliate/stats` orphan). Savings placeholder honest "coming soon" hero + stat-preview tiles. Identity onboarding gets gradient stepper + filled toggle rows. Shared `UITabBarAppearance` for a blurred surface-tinted bar. Cross-tab: HomeView → SearchView handoff via `pendingSeed` binding when tapping a Recently-sniffed card | — | — | TBD |
+| 3d-noise-filter | `_is_tier2_noise` category+title denylist escalates Gemini when Tier 2 returns only accessories / AppleCare / protection / monitors / games. Noise dropped on escalation. Cost guard: RTX 5090 keeps Gemini quiet. (Extended in ui-refresh-v2-fix with brand+model relevance) | +4 | — | #36 |
+| ui-refresh-v1 | HTML-style-guide design pass: warm-gold palette (dynamic light/dark), rounded system fonts, shadow/shimmer helpers. Glowing-paw `SniffingHeroSection` during price loading (halo pulse + gradient sweep + rotating puns). Retailer rows stream in live with spring price-sort (Best Barkain tracks current cheapest). Nav bar hides during streaming, returns on pull-down past 32pt. `SearchResultRow` moved to `Features/Shared/Components/` | — | — | #37 |
+| ui-refresh-v2 | Whole-app makeover: new Home tab (hero + Scan/Search quick-actions + "Recently sniffed" rail backed by new `RecentlyScannedStore`). Scanner overlay: gradient capsule + gold viewfinder. Profile → "The Kennel" with real `/affiliate/stats` numbers in a gradient card. Savings honest "coming soon" hero. Onboarding gradient stepper. Shared `UITabBarAppearance` blur. HomeView → SearchView handoff via `pendingSeed` binding | — | — | #38 |
+| ui-refresh-v2-fix | Live-test regressions: (a) SearchView kicked users out of `PriceComparisonView` mid-stream — SwiftUI's `.searchable` setter fires `""` when nav bar hides, nilling `presentedProductViewModel` via `onQueryChange`. Guarded: only dismiss on non-empty, actually-changed queries. (b) Tier 2 let Best Buy off-brand fuzzy matches through (`focal utopia` → Panasonic lens, `leica q3` → KEF speakers, `lg 27gp950` → LG Q6 phone) → "Can't open result" on tap. `_is_tier2_noise` extended: query tokens len≥3 strict majority must appear in row title+brand+model; any query model-code (digit+letter, 4+ chars) must match verbatim | +4 | — | #39 |
 
 **Test totals:** ~516 backend + 100 iOS unit + 4 iOS UI. `ruff check` clean. `xcodebuild` clean.
 
@@ -307,7 +308,7 @@ Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; 
 ## What's Next
 
 1. **Phase 2 CLOSED** — `v0.2.0` tagged (2026-04-16). Outstanding: revoke leaked PAT `gho_UUsp9ML7…` in GitHub UI (SP-L1-b, Mike).
-2. **Phase 3:** 3a–3c-hardening ✅, 3d ✅ autocomplete (#34), 3d-noise-filter ✅ Tier 2 noise classifier escalates Gemini (#36), ui-refresh-v1 ✅ glowing-paw loading hero + live price streaming, ui-refresh-v2 ✅ Home tab + Kennel profile + whole-app palette pass (both on PR #37). Next: 3e M6 Recommendation Engine (Claude Sonnet), then 3f cards, 3g portals, 3h image, 3i receipts, 3j identity stacking, 3k savings, 3l coupons, 3m hardening + `v0.3.0`. See `docs/CHANGELOG.md` + `docs/PHASES.md`.
+2. **Phase 3:** 3a–3d ✅, 3d-noise-filter ✅ (#36), ui-refresh-v1 ✅ (#37), ui-refresh-v2 ✅ (#38), ui-refresh-v2-fix ✅ (#39). Next: 3e M6 Recommendation Engine (Claude Sonnet), then 3f cards, 3g portals, 3h image, 3i receipts, 3j identity stacking, 3k savings, 3l coupons, 3m hardening + `v0.3.0`. See `docs/CHANGELOG.md` + `docs/PHASES.md`.
 3. **Phase 4 — Production Optimization:** ~~Best Buy~~ (done via demo-prep bundle, PR #30), Keepa API adapter, App Store submission, Sentry error tracking
 4. **Phase 5 — Growth:** Push notifications (APNs), web dashboard, Android (KMP)
 
@@ -350,58 +351,30 @@ ssh -i ~/.ssh/barkain-scrapers.pem ubuntu@54.197.27.219 'sudo systemctl restart 
 > Quick-ref index only. Full rationale + code pointers live in `docs/CHANGELOG.md` (Key Decisions Log + per-step entries).
 
 ### Phase 1
-- Container auth: VPC-only, no bearer tokens
-- `WALMART_ADAPTER` env routes to `container` / `firecrawl` / `decodo_http`
-- fd-3 stdout convention: every `extract.sh` does `exec 3>&1; exec 1>&2` then emits final JSON via `>&3`
-- `EXTRACT_TIMEOUT=180` (was 60) for Best Buy on `t3.xlarge`
-- Relevance: model-number hard gate + variant-token equality + ordinal equality + brand match + 0.4 token overlap
-- UPCitemdb cross-validation always runs alongside Gemini; brand agreement picks winner
-- Gemini output: `device_name` + `model` (shortest unambiguous identifier); `model` stored in `products.source_raw.gemini_model`, feeds M2 scoring
+- Container auth VPC-only; `WALMART_ADAPTER={container,firecrawl,decodo_http}`; fd-3 stdout convention (`exec 3>&1; exec 1>&2` + emit JSON via `>&3`); `EXTRACT_TIMEOUT=180`
+- Relevance: model-number hard gate + variant-token + ordinal + brand match + 0.4 token overlap; UPCitemdb cross-val runs alongside Gemini, brand agreement picks winner; Gemini emits `device_name` + `model` (shortest unambiguous)
 
 ### Phase 2 (see CHANGELOG 2a–2i-d for full rationale)
 - SSE: `asyncio.as_completed`; iOS manual byte splitter; fall back to batch on error (2c/2c-fix)
-- Identity discounts: zero-LLM SQL match < 150 ms; fetched post-SSE-loop; failure non-fatal (2d)
-- Card priority: rotating > user-selected > static > base; rotating-cat resolves via `user_category_selections` (2e)
-- Billing — two sources of truth: iOS RC SDK for UI; backend `users.subscription_tier` for rate limit; ≤60 s drift. `DEMO_MODE` read at call-time (2f/2i-b)
-- Webhook idempotency: SETNX `revenuecat:processed:{event.id}` 7d + SET-not-delta math (2f)
-- Tier rate limit: `tier:{user_id}` 60 s cache; pro = base × `RATE_LIMIT_PRO_MULTIPLIER`; falls open to free (2f)
+- Identity discounts: zero-LLM SQL join < 150 ms, post-SSE, non-fatal (2d). Card priority: rotating > user-selected > static > base (2e)
+- Billing two sources: iOS RC SDK for UI, backend `users.subscription_tier` for rate limit, ≤60 s drift. Webhook idempotency via SETNX 7d. Tier cache `tier:{user_id}` 60 s, fail-open (2f)
 - Migrations 0004/0006 mirrored on `__table_args__` so test `create_all` matches alembic (2f/2i-b)
-- Affiliate URLs: backend `AffiliateService.build_affiliate_url`; `SFSafariViewController`; fail-open (2g)
-- Workers: LocalStack SQS dev / `moto[sqs]` tests; boto3 via `asyncio.to_thread`; reuse services; `_UNSET` sentinel (2h)
-- Portal rates use `httpx` + BS4 (anchor on `aria-label`/semantic classes); Rakuten "was X%" refreshes `normal_value` (2h)
-- `is_elevated` is `GENERATED ALWAYS STORED` (2h)
-- Discount verification three-state: `verified` / `flagged_missing_mention` / `hard_failed` (3 strikes → `is_active=False`) (2h)
-- `_classify_retailer_result` = single classification authority for batch + stream (2i-b)
-- `device_name` → `product_name` rename deferred (26 call sites incl. Gemini system instruction) (2i-b)
-- Worker CLI scripts MUST `from app import models` for cross-module FK flush (2i-c)
+- Affiliate: backend-built URLs + `SFSafariViewController`; fail-open (2g). Workers: LocalStack SQS dev / `moto[sqs]` tests; boto3 via `asyncio.to_thread`; `_UNSET` sentinel (2h)
+- Portal rates: `httpx`+BS4, anchor on `aria-label`/semantic classes; `is_elevated` is `GENERATED ALWAYS STORED` (2h). Discount verify three-state: `verified`/`flagged_missing_mention`/`hard_failed` 3-strikes (2h)
+- `_classify_retailer_result` = single classification authority for batch + stream (2i-b). Worker CLI scripts MUST `from app import models` for cross-module FK flush (2i-c)
 - Test DB drift auto-detected in `conftest.py:_ensure_schema` via marker probe; update each migration (2i-c/3a)
-- Watchdog `CONTAINERS_ROOT = parents[2]` (was `parents[1]`); unit mocks hid the bug (2i-d)
-- XCUITest affiliate-sheet uses OR-of-3 signals (iOS 26 SFSafari chrome outside host a11y tree); DB row is ground truth (2i-d)
-- Deploy via `rsync` + inline Phase C/D when GitHub auth broken (2i-d)
-- fb_marketplace + sams_club need Decodo residential with **scoped routing** (telemetry kill-flags + `--proxy-bypass-list`) — global `--proxy-server` burns paid bytes. Guards: `test_fb_marketplace_extract_flags.py`, `test_sams_club_extract_flags.py`. `docs/SCRAPING_AGENT_ARCHITECTURE.md` §C.11–§C.12
+- Watchdog `CONTAINERS_ROOT = parents[2]` — unit mocks hid the bug. XCUITest affiliate-sheet uses OR-of-3 signals (iOS 26 SFSafari chrome outside host a11y tree). Deploy via `rsync` + inline Phase C/D when GitHub auth broken (2i-d)
+- fb_marketplace + sams_club need Decodo residential with **scoped routing** (telemetry kill-flags + `--proxy-bypass-list`) — global `--proxy-server` burns paid bytes. `docs/SCRAPING_AGENT_ARCHITECTURE.md` §C.11
 
-### Phase 3 (see CHANGELOG 3a–3c-hardening for full rationale)
-- eBay Browse API adapter auto-prefers on `EBAY_APP_ID`+`EBAY_CERT_ID`. `client_credentials` token, 2 hr TTL, asyncio-locked refresh; 401 invalidates (3b)
-- eBay filter DSL uses `|` not `,`: `conditionIds:{1000|1500}` (`,` silently no-ops); always numeric `conditionIds` (3b)
-- eBay Marketplace Account Deletion webhook = GDPR prerequisite. GET = `SHA-256(challenge + token + endpoint)`; POST = log-and-204 (3b)
+### Phase 3 (see CHANGELOG 3a–ui-refresh-v2 for full rationale)
+- eBay Browse API auto-prefers on `EBAY_APP_ID`+`EBAY_CERT_ID`; `client_credentials` 2 hr TTL, asyncio-locked. Filter DSL uses `|` not `,`: `conditionIds:{1000|1500}`. Marketplace Account Deletion webhook = GDPR prereq: GET `SHA-256(challenge+token+endpoint)`, POST log-and-204 (3b)
 - Backend co-deployed on scraper EC2 via Caddy + systemd uvicorn (single-host; ECS later) (3b)
-- Best Buy Products API adapter auto-prefers on `BESTBUY_API_KEY` (~150 ms vs ~80 s, resolves 2b-val-L2). Query `%20`-encoded inside `(search=...)`; `regularPrice → original_price` only when markdown present (demo-prep)
-- Two Decodo env conventions must agree: `proxy_relay.py` reads HOST+PORT separately; `walmart_http._build_proxy_url` appends `:7000` when HOST bare. Default port 7000 (post-demo-prep)
-- Decodo Scraper API adapter for Amazon auto-prefers on `DECODO_SCRAPER_API_AUTH` (~3 s vs ~53 s). Payload MUST be exactly `{target, query, parse}`. Listings at `content.results.results.organic[]` (post-demo-prep)
-- lowes + sams_club retired 2026-04-18; kept as `is_active=False` retailer rows so FKs survive; `seed_retailers.py` upserts `is_active`. 9 retailers in prod
-- Search v2 cascade: normalize → Redis → DB pg_trgm@0.3 → if `<3 OR top_sim<0.5` fire Tier 2 `gather(BBY, UPCitemdb)` → Tier 3 Gemini only when Tier 2 = 0 OR `force_gemini`. Merge: DB > BBY > UPCitemdb > Gemini → `_collapse_variants` (3c)
-- Brand-only `_BRAND_ONLY_TERMS` (~40 names) routes single-token brand queries straight to Gemini (Tier 2 floods with accessories) (3c)
-- Deep search via `force_gemini=true` on iOS Enter: bypasses Redis, runs Gemini, flips merge order. iOS `showDeepSearchHint` paw-print banner; tracks `lastDeepSearchedQuery` (3c)
-- `_collapse_variants` strips spec tokens (color/storage/carrier/parens/model-codes) user didn't type; 2+ variants → synthetic `source="generic"` row with `primary_upc=None`. UPC scan path skips (3c)
-- Container `query` override on `/prices/{id}/stream` replaces retailer query + per-container `product_name` hint; cache skipped on bare path (scoped cache covers it) (3c)
-- UPCitemdb keyword fallback in `resolve_from_search` when Gemini device→UPC returns null; brand match + ≥4-char token overlap filter (3c)
-- eBay affiliate: legacy `rover.ebay.com/...?mpre=` is a 42-byte pixel (NOT redirect). Modern EPN params on item URL: `?mkcid=1&mkrid=711-53200-19255-0&siteid=0&campid=<id>&toolid=10001&mkevt=1`. Pinned (3c)
-- Amazon-only platform-suffix accessory filter: rejects listings where identifier appears AFTER a separator in the title's second half. Bundles preserved via `_HARDWARE_INTENT_TOKENS = {bundle, console, system, hardware, edition}` (3c-hardening)
-- `_ACCESSORY_KEYWORDS += {service, services, repair, repairs, modding, modded, refurbishment}` (NOT `refurbished` — valid condition) (3c-hardening)
-- Walmart `CHALLENGE_MAX_ATTEMPTS=5` + `_CHALLENGE_BACKOFF_RANGE_S=(0.2, 0.6)` jittered; tests monkeypatch to `(0, 0)` (3c-hardening)
-- Best Buy retry: `BESTBUY_MAX_ATTEMPTS=2`, retryable `{429, 500, 502, 503, 504}`; `_parse_retry_after` capped at `_RETRY_MAX_DELAY_S=2.0` (3c-hardening)
-- Best Buy `_sanitize_query` replaces `( ) , + / * : & \` with spaces BEFORE `quote()` (DSL breaks even URL-encoded); hyphens preserved (3c-hardening)
-- Redis device→UPC: `product:devupc:<sha1(name|brand)>` 24h TTL; short-circuits Gemini + UPCitemdb in `resolve_from_search`; Redis failure non-fatal (3c-hardening)
-- Redis scoped query cache: `prices:product:{id}:q:<sha1(query)>` 30min TTL, namespace-disjoint from `prices:product:{id}`; DB-freshness skipped on override (3c-hardening)
-- iOS sheet-anchoring: `browserURL @State` + `.sheet(item:)` lifted from inline `PriceComparisonView` to stable parents (`SearchView`, `ScannerView`) as `@Binding` so SFSafari survives parent re-renders (3c-hardening)
-- Search Tier 2 noise filter: `_is_tier2_noise(row)` classifier with category denylist (`case / warrant / applecare / subscription / gift card / specialty gift / protection / monitor / physical video game / service / digital signage / charger / screen protector`) + title denylist (`applecare / protection plan / best buy protection / gift card / warranty / subscription / membership card / belt clip / skin case`). Cascade escalates Gemini when `relevant_tier2 == []` (was: raw count 0). On escalation, noise rows are dropped from merge so they don't crowd out Gemini's hits at `max_results`. Carve-outs: `force_gemini` keeps Tier 2 visible (deep search asked for both); empty-Gemini guard keeps noisy rows on screen if Gemini also returned empty. Cost guard: real RTX 5090 cards (category `GPUs / Video Graphics Cards`) keep cascade quiet — no Gemini call. 9/9 live probe queries fixed; 4 tests in `test_product_search.py` (3d-noise-filter)
+- Best Buy Products API auto-prefers on `BESTBUY_API_KEY` (~150 ms vs ~80 s). Query `%20`-encoded inside `(search=...)`; `regularPrice → original_price` only with markdown (demo-prep)
+- Decodo two env conventions: `proxy_relay.py` reads HOST+PORT separately; `walmart_http` appends `:7000` when bare. Scraper API for Amazon auto-prefers on `DECODO_SCRAPER_API_AUTH` (~3 s). Payload MUST be `{target, query, parse}`; listings at `content.results.results.organic[]`
+- lowes + sams_club retired 2026-04-18; kept `is_active=False` so FKs survive. 9 retailers in prod
+- Search v2 cascade: normalize → Redis → DB pg_trgm@0.3 → Tier 2 `gather(BBY, UPCitemdb)` → Tier 3 Gemini only when Tier 2 irrelevant OR `force_gemini`. Merge: DB > BBY > UPCitemdb > Gemini → `_collapse_variants`. Brand-only queries skip Tier 2 (3c)
+- `_collapse_variants` strips spec tokens the user didn't type; 2+ variants → synthetic `source="generic"` row (3c). `query` override on `/prices/{id}/stream` swaps retailer query + per-container `product_name` hint (3c)
+- eBay affiliate: modern EPN params on item URL (`?mkcid=1&mkrid=...&campid=...&toolid=10001&mkevt=1`); legacy `rover.ebay.com` is a 42-byte pixel (3c)
+- 3c-hardening: Amazon platform-suffix accessory filter, Walmart 5× CHALLENGE retry w/ jitter, Best Buy `_sanitize_query` + 429/5xx retry, Redis device→UPC 24h + scoped query cache 30min, iOS sheet-anchoring via `browserURL @Binding`
+- 3d-noise-filter: `_is_tier2_noise(row, *, query=None)` — category+title denylist PLUS (ui-refresh-v2-fix) brand+model relevance. Query tokens len≥3 must form strict majority in title+brand+model; any query model-code (digit+letter, 4+ chars) must appear verbatim. Rescues `focal utopia`, `leica q3`, `audeze lcd-x`, `lg 27gp950`. Cost guard: real RTX 5090 stays quiet
+- ui-refresh-v2 iOS kick-out fix: `SearchViewModel.onQueryChange` only dismisses `presentedProductViewModel` on a non-empty, changed query — SwiftUI's `.searchable` setter fires `""` when nav bar hides during streaming, which was nilling the presented view mid-stream

@@ -73,26 +73,38 @@ final class SearchViewModel {
     /// observable suggestions — the actual search is now submit-driven
     /// (via `.searchCompletion` taps or the return key) per Step 3d.
     func onQueryChange(_ newValue: String) async {
-        // SwiftUI's `.searchable` binding setter can fire with the same
-        // value on internal UI churn — e.g. when the nav bar hides or
-        // shows as `hideNavDuringStream` flips during an SSE stream.
-        // Only treat a non-identity call as a real user edit; spurious
-        // same-value calls must not wipe `presentedProductViewModel`
-        // (bug surfaced in ui-refresh-v2: the PriceComparisonView +
-        // SniffingHero got dismissed mid-stream, leaving the user on
-        // the results list with no prices).
-        let isActualEdit = newValue != query
+        // SwiftUI's `.searchable` binding setter fires with spurious
+        // values on internal UI churn: same-value calls on re-render,
+        // *empty-value* calls when the nav bar hides (the `.searchable`
+        // UI detaches from layout and the binding's setter gets called
+        // with "" as part of teardown). Both have been observed to kick
+        // users out of PriceComparisonView mid-stream in ui-refresh-v2.
+        //
+        // Heuristic: a real user edit produces a non-empty query that
+        // differs from the current value. Empty-value calls and no-op
+        // same-value calls never dismiss the presented comparison view.
+        // Users who genuinely want to clear the field keep the
+        // comparison view visible until they actually type again.
+        let isRealEdit = !newValue.isEmpty && newValue != query
 
         if newValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             != (lastDeepSearchedQuery?.lowercased() ?? "") {
             lastDeepSearchedQuery = nil
         }
-        query = newValue
+        // Don't clobber `query` on spurious empty-value calls either —
+        // if we set query="" here, the .searchable binding's getter
+        // will read it back as "" on the next render, which can create
+        // a feedback loop. Only update query when the edit is real or
+        // when we're legitimately resetting to empty (user cleared the
+        // field while no comparison view is presented).
+        if isRealEdit || (newValue.isEmpty && presentedProductViewModel == nil) {
+            query = newValue
+        }
         error = nil
 
         // Editing the query dismisses any presented PriceComparisonView so
         // the suggestions list isn't hidden behind it.
-        if isActualEdit, presentedProductViewModel != nil {
+        if isRealEdit, presentedProductViewModel != nil {
             presentedProductViewModel = nil
         }
 
