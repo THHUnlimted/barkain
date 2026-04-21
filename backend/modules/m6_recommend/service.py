@@ -31,7 +31,7 @@ from modules.m1_product.models import Product
 from modules.m2_prices.service import PriceAggregationService
 from modules.m5_identity.card_schemas import CardRecommendation
 from modules.m5_identity.card_service import CardService
-from modules.m5_identity.models import PortalBonus
+from modules.m5_identity.models import PortalBonus, UserCard, UserDiscountProfile
 from modules.m5_identity.schemas import EligibleDiscount
 from modules.m5_identity.service import IdentityService
 from modules.m6_recommend.schemas import (
@@ -105,8 +105,16 @@ class RecommendationService:
         """Build the full recommendation. Raises on insufficient data."""
         started = time.perf_counter()
 
+        # Step 3f Pre-Fix #6: cache key includes user-state hashes so adding
+        # a card or flipping an identity flag busts stale recommendations.
+        # These lookups are cheap (~5 ms combined, both indexed by user_id).
+        user_card_hash = await self._user_card_hash(user_id)
+        identity_hash = await self._identity_flag_hash(user_id)
+
         if not force_refresh:
-            cached = await self._read_cache(user_id, product_id)
+            cached = await self._read_cache(
+                user_id, product_id, user_card_hash, identity_hash
+            )
             if cached is not None:
                 return cached.model_copy(update={"cached": True})
 
@@ -181,7 +189,9 @@ class RecommendationService:
             cached=False,
         )
 
-        await self._write_cache(user_id, product_id, rec)
+        await self._write_cache(
+            user_id, product_id, rec, user_card_hash, identity_hash
+        )
         return rec
 
     # MARK: - Input gathering
@@ -284,14 +294,75 @@ class RecommendationService:
     # MARK: - Cache
 
     @staticmethod
-    def _cache_key(user_id: str, product_id: UUID) -> str:
-        return f"{_CACHE_KEY_PREFIX}{user_id}:product:{product_id}:v1"
+    def _cache_key(
+        user_id: str,
+        product_id: UUID,
+        user_card_hash: str,
+        identity_hash: str,
+    ) -> str:
+        """Cache key scoped to user + product + card portfolio + identity flags.
+
+        Version bumped to v2 in Step 3f — v1 keys (without user-state hashes)
+        are not read and will expire on their 15-min TTL.
+        """
+        return (
+            f"{_CACHE_KEY_PREFIX}{user_id}:product:{product_id}"
+            f":c{user_card_hash}:i{identity_hash}:v2"
+        )
+
+    async def _user_card_hash(self, user_id: str) -> str:
+        """Short SHA-1 over the user's active card IDs (sorted, comma-joined).
+
+        Empty portfolio → hash of empty string. Any add/remove shifts the
+        hash, busting the cache.
+        """
+        stmt = select(UserCard.id).where(
+            and_(UserCard.user_id == user_id, UserCard.is_active.is_(True))
+        )
+        rows = await self.db.execute(stmt)
+        ids = sorted(str(row) for row in rows.scalars().all())
+        return _stable_hash(",".join(ids))[:8]
+
+    async def _identity_flag_hash(self, user_id: str) -> str:
+        """Short SHA-1 over the user's identity boolean flags.
+
+        No profile row → hash of empty JSON. Flipping any flag shifts the
+        hash, busting the cache.
+        """
+        profile = await self.db.get(UserDiscountProfile, user_id)
+        if profile is None:
+            return _stable_hash("{}")[:8]
+        flags = {
+            "mil": profile.is_military,
+            "vet": profile.is_veteran,
+            "stu": profile.is_student,
+            "tea": profile.is_teacher,
+            "fir": profile.is_first_responder,
+            "nur": profile.is_nurse,
+            "hea": profile.is_healthcare_worker,
+            "sen": profile.is_senior,
+            "gov": profile.is_government,
+            "aaa": profile.is_aaa_member,
+            "arp": profile.is_aarp_member,
+            "cos": profile.is_costco_member,
+            "pri": profile.is_prime_member,
+            "sam": profile.is_sams_member,
+            "idm": profile.id_me_verified,
+            "shr": profile.sheer_id_verified,
+        }
+        return _stable_hash(json.dumps(flags, sort_keys=True))[:8]
 
     async def _read_cache(
-        self, user_id: str, product_id: UUID
+        self,
+        user_id: str,
+        product_id: UUID,
+        user_card_hash: str,
+        identity_hash: str,
     ) -> Recommendation | None:
         try:
-            raw = await self.redis.get(self._cache_key(user_id, product_id))
+            raw = await self.redis.get(
+                self._cache_key(user_id, product_id, user_card_hash, identity_hash)
+            )
             if raw is None:
                 return None
             payload = json.loads(
@@ -303,11 +374,16 @@ class RecommendationService:
             return None
 
     async def _write_cache(
-        self, user_id: str, product_id: UUID, rec: Recommendation
+        self,
+        user_id: str,
+        product_id: UUID,
+        rec: Recommendation,
+        user_card_hash: str,
+        identity_hash: str,
     ) -> None:
         try:
             await self.redis.setex(
-                self._cache_key(user_id, product_id),
+                self._cache_key(user_id, product_id, user_card_hash, identity_hash),
                 _CACHE_TTL_SECONDS,
                 rec.model_dump_json(),
             )

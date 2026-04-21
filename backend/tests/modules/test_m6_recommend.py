@@ -613,6 +613,71 @@ async def test_recommendation_cache_hit_on_repeat_call(db_session, fake_redis):
     assert second.cached is True
 
 
+async def test_recommendation_cache_busts_on_card_portfolio_change(
+    db_session, fake_redis
+):
+    """Adding a user card flips the cache key suffix so the next call re-computes.
+
+    Step 3f Pre-Fix #6 — the `:c<hash>` suffix hashes the sorted set of
+    user_card ids. A new card shifts the hash; the v1 entry is unreachable
+    via the new key and the caller sees cached=False.
+    """
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "amazon")
+    await _seed_retailer(db_session, "best_buy")
+    await _seed_health(db_session, "amazon")
+    await _seed_health(db_session, "best_buy")
+    product = await _seed_product(db_session)
+    await db_session.flush()
+
+    import json as _json
+    payload = {
+        "product_id": str(product.id),
+        "product_name": product.name,
+        "prices": [
+            _wire_price("amazon", 100.0), _wire_price("best_buy", 110.0),
+        ],
+        "retailer_results": [],
+        "total_retailers": 2, "retailers_succeeded": 2, "retailers_failed": 0,
+        "cached": True, "fetched_at": datetime.now(UTC).isoformat(),
+    }
+    await fake_redis.setex(f"prices:product:{product.id}", 600, _json.dumps(payload))
+
+    service = RecommendationService(db_session, fake_redis)
+    first = await service.get_recommendation(MOCK_USER_ID, product.id)
+    assert first.cached is False
+
+    # Hit again — should be cached.
+    second = await service.get_recommendation(MOCK_USER_ID, product.id)
+    assert second.cached is True
+
+    # Add a card — the cache key suffix changes.
+    program = CardRewardProgram(
+        card_network="visa",
+        card_issuer="chase",
+        card_product="freedom_flex",
+        card_display_name="Chase Freedom Flex",
+        base_reward_rate=Decimal("1.0"),
+        reward_currency="ultimate_rewards",
+        point_value_cents=Decimal("1.25"),
+        has_shopping_portal=True,
+        annual_fee=Decimal("0.0"),
+    )
+    db_session.add(program)
+    await db_session.flush()
+    db_session.add(
+        UserCard(
+            user_id=MOCK_USER_ID,
+            card_program_id=program.id,
+            is_preferred=True,
+        )
+    )
+    await db_session.flush()
+
+    third = await service.get_recommendation(MOCK_USER_ID, product.id)
+    assert third.cached is False
+
+
 # MARK: - Endpoint-level tests
 
 
