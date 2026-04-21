@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-20 (Step ui-refresh-v1 — HTML-style-guide UI pass + live-streaming price comparison)
+> Last updated: 2026-04-21 (Step 3f — Purchase Interstitial + Activation Reminder + 4 pre-fixes, killed 6-test auth carry-forward)
 
 ---
 
@@ -2769,5 +2769,88 @@ away from Apple products correctly, per `IdentityService`).
   and Apple programs on a phone product would only see the higher-
   value one. By design for the demo — stacking callouts would muddy
   the headline.
+
+### Step 3f — Purchase Interstitial + Activation Reminder (2026-04-21)
+
+```
+backend/modules/m12_affiliate/schemas.py                    # activation_skipped on AffiliateClickRequest
+backend/modules/m12_affiliate/service.py                    # log_click persists JSONB metadata
+backend/modules/m12_affiliate/models.py                     # click_metadata column (attr name vs `metadata` collision)
+backend/modules/m6_recommend/service.py                     # cache key gains :c<sha1>:i<sha1>:v2
+infrastructure/migrations/versions/0008_affiliate_click_metadata.py  # NEW
+backend/tests/conftest.py                                   # without_demo_mode fixture + app.models import + drift marker update
+backend/tests/modules/test_m12_affiliate.py                 # +3 activation_skipped tests
+backend/tests/modules/test_m6_recommend.py                  # +1 cache bust test
+backend/tests/modules/test_container_client.py              # respx BBY/Decodo scoping
+backend/tests/test_auth.py / test_integration.py
+backend/tests/modules/test_m1_product.py / test_m2_prices.py  # without_demo_mode applied to 4 auth tests
+scripts/_db_url.py                                          # NEW — get_dev_db_url() helper
+scripts/seed_*.py (all 5)                                   # use _db_url.get_dev_db_url()
+Barkain/Features/Shared/Previews/BarePreviewAPIClient.swift # NEW — base class for preview clients
+Barkain/Features/Profile/{CardSelectionView,IdentityOnboardingView,ProfileView}.swift  # preview clients inherit base
+Barkain/Features/Purchase/PurchaseInterstitialModels.swift  # NEW — PurchaseInterstitialContext value type
+Barkain/Features/Purchase/PurchaseInterstitialSheet.swift   # NEW — @Observable VM + sheet view
+Barkain/Features/Recommendation/PriceComparisonView.swift   # sheet presentation + ScrollViewReader + scroll-to
+Barkain/Features/Scanner/ScannerViewModel.swift             # apiClientForInterstitial accessor
+Barkain/Features/Shared/Models/AffiliateURL.swift           # AffiliateClickRequest gains activationSkipped
+Barkain/Services/Networking/APIClient.swift                 # protocol +activationSkipped + 3-arg extension
+BarkainTests/Helpers/MockAPIClient.swift                    # getAffiliateURLLastActivationSkipped spy
+BarkainTests/Features/Purchase/PurchaseInterstitialViewModelTests.swift  # NEW — 5 VM + 4 render tests
+BarkainUITests/PurchaseInterstitialUITests.swift            # NEW — end-to-end scaffold
+BarkainUITests/RecommendationHeroUITests.swift              # updated — expect interstitial before SFSafari
+CLAUDE.md  docs/PHASES.md  docs/FEATURES.md  docs/ARCHITECTURE.md  docs/CARD_REWARDS.md  docs/TESTING.md
+```
+
+**What & why.** 3e delivered the decision; 3f delivers the moment of purchase. When the user taps the hero CTA (or any retailer row), instead of opening Safari directly we slide up `PurchaseInterstitialSheet` that restates *"Use your Chase Freedom Flex — 5% back this quarter, = $24.95 cashback"* plus a conditional activation reminder when the winning card's category bonus needs quarterly activation. Tapping Activate opens the issuer URL in SFSafari; tapping Continue hands off to the retailer's tagged affiliate URL. The sheet closes the loop between "we told you the best card" and "you actually used it."
+
+**Scope boundary.** Portal guidance (*"Open Rakuten first"*) is explicitly NOT in 3f — it lands in 3g when live portal-worker data replaces the demo seed. The mock in `docs/CARD_REWARDS.md §UX` shows a portal row; 3f ships everything above that row.
+
+**Reuses `/api/v1/recommend`; no parallel stacking endpoint.** The hero already has a fully-stacked `Recommendation.winner` with `card_source` + `card_savings`. The sheet receives those values plus the matching `CardRecommendation` (which carries `activation_required` + `activation_url`) via one `PurchaseInterstitialContext` value type built at the call site. No sheet-level fetch, no new backend endpoint.
+
+**Two entry paths, one sheet.** Hero CTA (primary) and any retailer row tap (secondary) both set `@State interstitialContext` on `PriceComparisonView`, which drives `.sheet(item: $interstitialContext)`. The sheet doesn't know which path triggered it — same presentation, same code path.
+
+**Activation UX is optimistic + session-scoped.** Tapping Activate flips `activationAcknowledged = true` in the VM. We don't poll the issuer's site to verify the user actually clicked through; rotating categories change quarterly and Barkain doesn't fake authoritative state. No persistence table. If the PM later wants "remember I activated", the surgical addition is `user_card_activations (user_card_id, quarter, acknowledged_at)` — not this step.
+
+**`activation_skipped` telemetry.** When the user taps Continue without tapping Activate first (on a rotating-bonus card), the affiliate click logs `activation_skipped=true` in `affiliate_clicks.metadata`. Migration 0008 adds the JSONB column; `AffiliateClickRequest` schema gains the field (defaults `False`), `service.log_click` serializes via `CAST(:metadata AS jsonb)` to sidestep asyncpg's dict-as-JSONB quirk. The Python model attr is `click_metadata` because `metadata` is reserved on SQLA's declarative Base.
+
+**iOS protocol compatibility dance.** `APIClientProtocol.getAffiliateURL` gains `activationSkipped: Bool` (non-optional). Existing call sites calling through the protocol (ScannerViewModel's retailer-row path) would break, so a protocol extension provides a 3-arg forwarding overload defaulting to `false`. `MockAPIClient`, `BarePreviewAPIClient`, and the concrete `APIClient` all implement the 4-arg form; callers get either shape transparently.
+
+**Recommendation cache bust (Pre-Fix #6).** Cache key extended from `:v1` to `:c<sha1(sorted active card_ids)>:i<sha1(identity_flags_json)>:v2`. Two new 5-ms lookups (both index-hit on `user_id`) run before the cache read so the key composition is deterministic. Adding a card or flipping an identity flag immediately invalidates stale recs — matters for the interstitial because it's the first surface where a user notices *"wait, I don't have that card"* and goes off to add one.
+
+**Alternatives rail scroll-to (Pre-Fix #5).** Hero's alternative pills were no-ops in 3e. Now wrapped the body in `ScrollViewReader`; each retailer row carries `.id(retailerId)`; tapping a pill does `proxy.scrollTo(alt.retailerId, anchor: .top)` + flips `@State highlightedRetailerId` for a 400 ms background-pulse. Alternatives = "explore the list", NOT "buy this other thing" — tapping a pill does not open the interstitial.
+
+**Baseline comparison = hardcoded 1%.** The sheet renders *"vs. $X with default card (1%)"* as a rough savings anchor. Real per-user default-card delta math (comparing to the user's actual lowest-tier card) is low-value complexity for the demo. If later surfaces show users wanting the real delta, add a `default_card_rate` to IdentityProfile and wire through.
+
+**Pre-Fix #2 — `BarePreviewAPIClient`.** Four `private struct Preview*APIClient: APIClientProtocol` blocks across CardSelectionView / IdentityOnboardingView / ProfileView / PriceComparisonView each had 20+ lines of `fatalError("Preview only")` stubs. Consolidated into `Barkain/Features/Shared/Previews/BarePreviewAPIClient.swift` (internal `class`, not `open` — open would trip "method cannot be declared open because its result uses an internal type" since DTOs are internal). Each preview client now overrides only the 1–2 methods it actually invokes. Future protocol additions touch the base class + any preview that meaningfully exercises the new method.
+
+**Pre-Fix #3 — seed DB URL helper.** 1 of 5 seed scripts (`seed_portal_bonuses_demo.py`) defaulted to `postgresql+asyncpg://app:app@...` while docker-compose uses `app:localdev`. Fixed once in `scripts/_db_url.py::get_dev_db_url()` — honors `DATABASE_URL` from env, falls back to the docker-compose default. All 5 scripts updated.
+
+**Pre-Fix #4 — killed the 6 pre-existing test failures (8-step carry-forward dead).** Root causes split:
+- **4 auth tests (test_auth, test_integration, test_m1_product, test_m2_prices):** `.env` sets `DEMO_MODE=1` for local runs; `get_current_user` short-circuits to `demo_user` so `assert status == 401` never fires. New `without_demo_mode` fixture in `conftest.py` uses `monkeypatch.setattr(settings, "DEMO_MODE", False)` — `settings` is module-level (not `lru_cache`-wrapped), so direct attribute patching targets the exact instance `get_current_user` reads at call time.
+- **2 container_client tests (`test_extract_all_all_succeed`, `test_extract_all_partial_failure`):** demo-prep added `_resolve_best_buy_adapter` which auto-prefers the Best Buy Products API when `BESTBUY_API_KEY` is set. `.env` sets it, so `extract_all` routes best_buy to `api.bestbuy.com` (unmocked by respx) instead of the port-8082 mock. Fix: `_setup_client` fixture now monkeypatches `BESTBUY_API_KEY=""` and `DECODO_SCRAPER_API_AUTH=""` to force container dispatch.
+- **Bonus fix for test isolation:** `conftest.py` now `import app.models` so `Base.metadata` is complete even when pytest runs a single module file (previously `AffiliateClick` only registered if `tests/test_retailers_seed.py` or `tests/test_migrations.py` ran first).
+
+**Drift marker updated.** `_ensure_schema` marker query changed from `idx_products_name_trgm` (migration 0007) to `affiliate_clicks.metadata` (migration 0008). Standard parity pattern.
+
+**Live smoke.** Migration 0008 applied to dev PG via `DATABASE_URL=... alembic upgrade head`:
+```
+INFO  Running upgrade 0007 -> 0008, Add JSONB `metadata` column to affiliate_clicks.
+```
+Sample curl with the new field round-trips correctly:
+```json
+POST /api/v1/affiliate/click
+{"retailer_id":"amazon","product_url":"https://...","activation_skipped":true}
+→ metadata column: {"activation_skipped": true}
+```
+
+**Tests.**
+- **Backend +4 net.** 3 new `test_m12_affiliate.py` (default-false, persists-true, stats-unchanged) + 1 new `test_m6_recommend.py` cache-bust. 6 pre-existing failures deleted from the perennial accounting. Total: 506 passed / 0 failed / 7 skipped (baseline was 496 / 6 / 7). `ruff check` clean.
+- **iOS +9 unit.** `PurchaseInterstitialViewModelTests.swift` — 5 VM tests (activation flip, 3 activation_skipped permutations, baseline-1% math) + 4 render-model tests (activation block visibility, direct-purchase variant, Continue label). Uses Swift Testing (`@Suite` / `@Test`), not XCTest. No ViewInspector dep.
+- **iOS +1 UI (scaffolded).** `PurchaseInterstitialUITests::testHeroTapToInterstitialToAffiliateSheet` follows the same scan→hero→affiliate shape as 3e with an interstitial-assertion layer in the middle. `RecommendationHeroUITests` updated to expect the interstitial before SFSafari. Both skip gracefully when demo data is insufficient. `build-for-testing` SUCCEEDED; live run requires backend + demo card with `activation_required=true`.
+
+**Known limits / 3g carryovers.**
+- Portal row in the mock is explicitly deferred to 3g.
+- `activation_skipped` is telemetry only — no dashboard renders it yet.
+- Live smoke on physical device + PR screenshots deferred to post-merge (Mike).
 
 

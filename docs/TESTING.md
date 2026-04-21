@@ -2,7 +2,7 @@
 
 > Source: Architecture sessions, March–April 2026
 > Scope: Backend (pytest) + iOS (XCTest) test conventions, CI configuration, coverage targets
-> Last updated: April 2026 (v2.4 — 302 backend / 66 iOS unit / 2 iOS UI at end of Step 2i-d; BarkainUITests target wired with `testManualUPCEntryToAffiliateSheet` E2E smoke test; `CONTAINERS_ROOT` watchdog path bug caught by live `--check-all`)
+> Last updated: 2026-04-21 (v2.5 — Step 3f: 506 backend / 117 iOS unit / 6 iOS UI. **0 pre-existing failures** — 8-step auth-test carry-forward killed via `without_demo_mode` fixture + respx BBY route. `BarePreviewAPIClient` base class consolidates preview-client stubs. `PurchaseInterstitialViewModelTests` adopts Swift Testing (`@Suite`/`@Test`) alongside XCTest. Drift marker in `_ensure_schema` now checks `affiliate_clicks.metadata` (migration 0008). `import app.models` added to `conftest.py` so Base.metadata is complete even when running a single module test file in isolation)
 
 ---
 

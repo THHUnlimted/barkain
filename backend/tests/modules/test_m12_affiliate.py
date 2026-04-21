@@ -286,6 +286,89 @@ async def test_stats_endpoint_groups_by_retailer(
     assert body["clicks_by_retailer"] == {"amazon": 2, "best_buy": 1}
 
 
+# MARK: - Step 3f — activation_skipped metadata
+
+
+async def test_click_endpoint_defaults_activation_skipped_false(
+    client, db_session
+):
+    """Omitting activation_skipped persists `{activation_skipped: false}`."""
+    await _seed_retailer(db_session, "best_buy")
+
+    resp = await client.post(
+        "/api/v1/affiliate/click",
+        json={
+            "retailer_id": "best_buy",
+            "product_url": "https://www.bestbuy.com/site/product/123.p",
+        },
+    )
+    assert resp.status_code == 200
+
+    row = (
+        await db_session.execute(
+            text(
+                "SELECT metadata FROM affiliate_clicks "
+                "WHERE user_id = :uid ORDER BY clicked_at DESC LIMIT 1"
+            ),
+            {"uid": MOCK_USER_ID},
+        )
+    ).first()
+    assert row is not None
+    assert row[0] == {"activation_skipped": False}
+
+
+async def test_click_endpoint_persists_activation_skipped_true(
+    client, db_session
+):
+    """Interstitial's Continue-without-activating path persists skipped=true."""
+    await _seed_retailer(db_session, "amazon")
+
+    resp = await client.post(
+        "/api/v1/affiliate/click",
+        json={
+            "retailer_id": "amazon",
+            "product_url": "https://www.amazon.com/dp/B0B2FCT81R",
+            "activation_skipped": True,
+        },
+    )
+    assert resp.status_code == 200
+
+    row = (
+        await db_session.execute(
+            text(
+                "SELECT metadata FROM affiliate_clicks "
+                "WHERE user_id = :uid ORDER BY clicked_at DESC LIMIT 1"
+            ),
+            {"uid": MOCK_USER_ID},
+        )
+    ).first()
+    assert row is not None
+    assert row[0] == {"activation_skipped": True}
+
+
+async def test_stats_endpoint_unchanged_by_metadata_field(
+    client, db_session
+):
+    """Existing /stats shape doesn't regress when metadata rows exist."""
+    await _seed_retailer(db_session, "amazon")
+    # Log one click with activation_skipped=true, one with it omitted.
+    for body in (
+        {
+            "retailer_id": "amazon",
+            "product_url": "https://www.amazon.com/dp/A1",
+            "activation_skipped": True,
+        },
+        {"retailer_id": "amazon", "product_url": "https://www.amazon.com/dp/A2"},
+    ):
+        await client.post("/api/v1/affiliate/click", json=body)
+
+    resp = await client.get("/api/v1/affiliate/stats")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_clicks"] == 2
+    assert body["clicks_by_retailer"] == {"amazon": 2}
+
+
 # MARK: - Conversion webhook (placeholder)
 
 

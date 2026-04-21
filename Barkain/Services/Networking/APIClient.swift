@@ -26,11 +26,12 @@ protocol APIClientProtocol: Sendable {
     func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse
     // Step 2f — Billing
     func getBillingStatus() async throws -> BillingStatus
-    // Step 2g — Affiliate
+    // Step 2g — Affiliate. Step 3f adds `activationSkipped`.
     func getAffiliateURL(
         productId: UUID?,
         retailerId: String,
-        productURL: String
+        productURL: String,
+        activationSkipped: Bool
     ) async throws -> AffiliateURLResponse
     func getAffiliateStats() async throws -> AffiliateStatsResponse
     // Step 3e — Deterministic Recommendation Engine
@@ -38,6 +39,24 @@ protocol APIClientProtocol: Sendable {
         productId: UUID,
         forceRefresh: Bool
     ) async throws -> Recommendation?
+}
+
+// Default `activationSkipped=false` for callers that don't care about the
+// purchase-interstitial telemetry (ScannerViewModel's retailer-row tap path
+// from 2g). The interstitial itself always passes a value explicitly.
+nonisolated extension APIClientProtocol {
+    func getAffiliateURL(
+        productId: UUID?,
+        retailerId: String,
+        productURL: String
+    ) async throws -> AffiliateURLResponse {
+        try await getAffiliateURL(
+            productId: productId,
+            retailerId: retailerId,
+            productURL: productURL,
+            activationSkipped: false
+        )
+    }
 }
 
 // MARK: - APIClient
@@ -191,12 +210,14 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
     func getAffiliateURL(
         productId: UUID?,
         retailerId: String,
-        productURL: String
+        productURL: String,
+        activationSkipped: Bool = false
     ) async throws -> AffiliateURLResponse {
         let clickRequest = AffiliateClickRequest(
             productId: productId,
             retailerId: retailerId,
-            productUrl: productURL
+            productUrl: productURL,
+            activationSkipped: activationSkipped
         )
         return try await request(endpoint: .getAffiliateURL(clickRequest))
     }

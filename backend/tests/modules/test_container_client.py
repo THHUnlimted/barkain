@@ -29,7 +29,7 @@ def client() -> ContainerClient:
 
 
 @pytest.fixture(autouse=True)
-def _setup_client(client: ContainerClient):
+def _setup_client(client: ContainerClient, monkeypatch):
     client.url_pattern = "http://localhost:{port}"
     client.timeout = 5
     client.retry_count = 1
@@ -39,6 +39,14 @@ def _setup_client(client: ContainerClient):
     # test_walmart_firecrawl_adapter.py.
     client.walmart_adapter_mode = "container"
     client._cfg = None
+    # Step 3f Pre-Fix #4: the BBY / Amazon API adapters auto-prefer when
+    # their keys are set. `.env` populates both for dev runs, which means
+    # `extract_all` routes best_buy away from the port-8082 mock and hits
+    # `api.bestbuy.com` (unmocked by respx, test fails). Force keys empty
+    # so these tests exercise the container dispatch they're written for.
+    from app.config import settings
+    monkeypatch.setattr(settings, "BESTBUY_API_KEY", "")
+    monkeypatch.setattr(settings, "DECODO_SCRAPER_API_AUTH", "")
 
 
 # MARK: - URL Resolution

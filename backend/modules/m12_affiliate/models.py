@@ -1,10 +1,10 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Numeric, Text, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -34,6 +34,16 @@ class AffiliateClick(Base):
     commission: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
     conversion_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # Step 3f / migration 0008 — JSONB bag for post-hoc click metadata
+    # (e.g., `activation_skipped` from the purchase interstitial).
+    # Python attr renamed because `metadata` is reserved on the
+    # declarative Base. DB column stays `metadata`.
+    click_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata",
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
     )
 
     __table_args__ = (

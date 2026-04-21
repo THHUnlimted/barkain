@@ -91,6 +91,7 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     var getAffiliateURLLastProductId: UUID?
     var getAffiliateURLLastRetailerId: String?
     var getAffiliateURLLastProductURL: String?
+    var getAffiliateURLLastActivationSkipped: Bool?
     var getAffiliateStatsCallCount = 0
 
     // MARK: - Recommendation (Step 3e)
@@ -241,12 +242,14 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     func getAffiliateURL(
         productId: UUID?,
         retailerId: String,
-        productURL: String
+        productURL: String,
+        activationSkipped: Bool
     ) async throws -> AffiliateURLResponse {
         getAffiliateURLCallCount += 1
         getAffiliateURLLastProductId = productId
         getAffiliateURLLastRetailerId = retailerId
         getAffiliateURLLastProductURL = productURL
+        getAffiliateURLLastActivationSkipped = activationSkipped
         return try getAffiliateURLResult.get()
     }
 

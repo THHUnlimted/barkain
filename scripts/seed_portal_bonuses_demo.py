@@ -18,7 +18,6 @@ Usage:
 """
 
 import asyncio
-import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -111,11 +110,9 @@ async def seed(session: AsyncSession) -> dict[str, int]:
 
 
 async def main() -> None:
-    database_url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql+asyncpg://app:app@localhost:5432/barkain",
-    )
-    engine = create_async_engine(database_url)
+    from _db_url import get_dev_db_url
+
+    engine = create_async_engine(get_dev_db_url())
     Session = async_sessionmaker(engine, expire_on_commit=False)
 
     async with Session() as session:

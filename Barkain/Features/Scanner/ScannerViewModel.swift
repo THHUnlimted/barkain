@@ -63,6 +63,11 @@ final class ScannerViewModel {
     private let apiClient: any APIClientProtocol
     private let featureGate: FeatureGateService
 
+    /// Step 3f: PriceComparisonView's PurchaseInterstitialSheet needs the
+    /// same client for its affiliate-click call. Exposing this avoids
+    /// injecting APIClient into the view env from two directions.
+    var apiClientForInterstitial: any APIClientProtocol { apiClient }
+
     // MARK: - Init
 
     /// `featureGate` is optional so existing test call sites

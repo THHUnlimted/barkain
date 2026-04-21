@@ -2,7 +2,7 @@
 
 > Source: Project Planning Questionnaire + Architecture Sessions, March–April 2026
 > Scope: All planned phases, current position, infrastructure dependencies
-> Last updated: April 2026 (v3.3 — Phase 2 COMPLETE through Step 2i-d; awaiting `v0.2.0` tag from Mike)
+> Last updated: 2026-04-21 (v3.4 — Phase 3 through Step 3f; Purchase Interstitial + Activation Reminder; migration 0008)
 >
 > For per-step file inventories and decision rationale, see `docs/CHANGELOG.md`.
 
@@ -182,8 +182,8 @@
 | 3c | M1 Search v2: 3-tier cascade (DB → BBY+UPCitemdb parallel → Gemini), brand-only routing, `force_gemini` deep-search, variant collapse, eBay affiliate URL fix; 3c-hardening (live-test bundle: Amazon platform-suffix accessory filter, Walmart/Best Buy retries, Redis device→UPC + scoped query caches, iOS sheet-anchor fix) | ✅ |
 | 3d | Autocomplete (vocab + iOS integration): on-device prefix suggestions via `actor AutocompleteService` + sorted-array binary search; Apple-native `.searchable + .searchSuggestions + .searchCompletion`; `RecentSearches` service (UserDefaults, legacy-key migrated); offline `scripts/generate_autocomplete_vocab.py` sweep of Amazon's autocomplete API → bundled JSON; submit-driven search replaces auto-debounce-search | ✅ |
 | 3e | **M6 Recommendation Engine (deterministic stacking — reclassified from AI to T).** `POST /api/v1/recommend` gathers prices + identity + cards + portals in one `asyncio.gather` and stacks in pure Python (p95 < 150 ms, no LLM). Winner picked by `effective_cost` (base − identity, minus deferred card + portal rebates) with new>refurb>used + well-known-retailer tiebreaks. Brand-direct callout fires on ≥15 % identity programs at `*_direct` retailers (3j fold-in). Sentence templates build headline + "why" copy. iOS `RecommendationHero` renders **only** after SSE done + identity + cards all settle — three settle flags in `ScannerViewModel` gate `attemptFetchRecommendation()`. Silent fallback on any failure (no user-facing alerts). `scripts/seed_portal_bonuses_demo.py` seeds 13 portal rows pending 3g replacement | ✅ |
-| 3f | Card reward matching: query-time algorithm (pure SQL, < 50ms), purchase interstitial overlay UI ("Use your Chase Freedom Flex for 5% back"), portal instruction, activation reminder | ⬜ |
-| 3g | Portal bonus integration: portal stacking with card recommendations, "Open Rakuten first" guidance, portal vs. direct tracking for analytics | ⬜ |
+| 3f | **Purchase Interstitial + Activation Reminder.** `PurchaseInterstitialSheet` presents from both the `RecommendationHero` CTA and any retailer row tap — restates the winning card, conditional rotating-bonus activation block (opens issuer URL in SFSafari), primary Continue button opens the tagged affiliate URL. Reuses 3e `/api/v1/recommend` + `CardRecommendation`; no parallel stacking endpoint. Migration 0008 adds `affiliate_clicks.metadata` JSONB; `POST /affiliate/click` gains `activation_skipped` telemetry. M6 cache key extended with `:c<sha1(card_ids)>:i<sha1(identity_flags)>:v2` so adding a card busts stale recs. Alternatives rail now scrolls the list via `ScrollViewReader` (Pre-Fix #5). Pre-fixes: `BarePreviewAPIClient` base class, `scripts/_db_url.py` helper, `without_demo_mode` fixture + respx BBY route — killed 6 pre-existing auth test failures (8-step carry-forward). Portal guidance ("Open Rakuten first") explicitly deferred to 3g | ✅ |
+| 3g | Portal bonus integration: portal worker goes live (replaces `seed_portal_bonuses_demo.py`); "Open Rakuten first" guided flow extends the 3f interstitial; portal vs. direct tracking for analytics | ⬜ |
 | 3h | M8 Image scanning: Claude Vision for product ID from photos (not just barcodes) | ⬜ |
 | 3i | M8+M10 Receipt scanning: on-device OCR (Vision framework) → structured text to backend → item extraction → savings calculation → dashboard | ⬜ |
 | ~~3j~~ | ~~Identity discount stacking in recommendations~~ — **folded into 3e brand-direct callout** 2026-04-22 | ✅ |

@@ -258,18 +258,10 @@ struct IdentityOnboardingView: View {
     )
 }
 
-private struct PreviewOnboardingAPIClient: APIClientProtocol {
-    func resolveProduct(upc: String) async throws -> Product { fatalError("Preview only") }
-    func resolveProductFromSearch(deviceName: String, brand: String?, model: String?) async throws -> Product { fatalError("Preview only") }
-    func searchProducts(query: String, maxResults: Int, forceGemini: Bool) async throws -> ProductSearchResponse {
-        ProductSearchResponse(query: query, results: [], totalResults: 0, cached: false)
-    }
-    func getPrices(productId: UUID, forceRefresh: Bool) async throws -> PriceComparison { fatalError("Preview only") }
-    func streamPrices(productId: UUID, forceRefresh: Bool, queryOverride: String?) -> AsyncThrowingStream<RetailerStreamEvent, Error> {
-        AsyncThrowingStream { $0.finish() }
-    }
-    func getIdentityProfile() async throws -> IdentityProfile { fatalError("Preview only") }
-    func updateIdentityProfile(_ request: IdentityProfileRequest) async throws -> IdentityProfile {
+private final class PreviewOnboardingAPIClient: BarePreviewAPIClient, @unchecked Sendable {
+    override func updateIdentityProfile(
+        _ request: IdentityProfileRequest
+    ) async throws -> IdentityProfile {
         IdentityProfile(
             userId: "preview",
             isMilitary: request.isMilitary,
@@ -292,35 +284,4 @@ private struct PreviewOnboardingAPIClient: APIClientProtocol {
             updatedAt: Date()
         )
     }
-    func getEligibleDiscounts(productId: UUID?) async throws -> IdentityDiscountsResponse {
-        IdentityDiscountsResponse(eligibleDiscounts: [], identityGroupsActive: [])
-    }
-    func getCardCatalog() async throws -> [CardRewardProgram] { [] }
-    func getUserCards() async throws -> [UserCardSummary] { [] }
-    func addCard(_ request: AddCardRequest) async throws -> UserCardSummary { fatalError("Preview only") }
-    func removeCard(userCardId: UUID) async throws {}
-    func setPreferredCard(userCardId: UUID) async throws -> UserCardSummary { fatalError("Preview only") }
-    func setCardCategories(userCardId: UUID, request: SetCategoriesRequest) async throws {}
-    func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse {
-        CardRecommendationsResponse(recommendations: [], userHasCards: false)
-    }
-    func getBillingStatus() async throws -> BillingStatus {
-        BillingStatus(tier: "free", expiresAt: nil, isActive: false, entitlementId: nil)
-    }
-    func getAffiliateURL(
-        productId: UUID?,
-        retailerId: String,
-        productURL: String
-    ) async throws -> AffiliateURLResponse {
-        AffiliateURLResponse(
-            affiliateUrl: productURL,
-            isAffiliated: false,
-            network: nil,
-            retailerId: retailerId
-        )
-    }
-    func getAffiliateStats() async throws -> AffiliateStatsResponse {
-        AffiliateStatsResponse(clicksByRetailer: [:], totalClicks: 0)
-    }
-    func fetchRecommendation(productId: UUID, forceRefresh: Bool) async throws -> Recommendation? { nil }
 }

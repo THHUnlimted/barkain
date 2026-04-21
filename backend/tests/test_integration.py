@@ -451,7 +451,7 @@ async def test_error_format_health_no_auth(unauthed_client):
     assert "status" in data
 
 
-async def test_error_format_401_unauthorized(unauthed_client):
+async def test_error_format_401_unauthorized(unauthed_client, without_demo_mode):
     """GET /prices without auth returns 401 with structured error."""
     fake_id = uuid.uuid4()
     resp = await unauthed_client.get(f"/api/v1/prices/{fake_id}")

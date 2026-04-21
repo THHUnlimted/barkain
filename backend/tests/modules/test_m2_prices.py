@@ -443,7 +443,7 @@ async def test_malformed_uuid_returns_422(client):
     assert resp.status_code == 422
 
 
-async def test_auth_required_returns_401(unauthed_client):
+async def test_auth_required_returns_401(unauthed_client, without_demo_mode):
     """Request without auth returns 401."""
     fake_id = uuid.uuid4()
     resp = await unauthed_client.get(f"/api/v1/prices/{fake_id}")

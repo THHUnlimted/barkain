@@ -235,6 +235,8 @@ RETURN card with highest dollar_value, with breakdown:
 
 ## UX: Purchase Interstitial Card Recommendation
 
+**Status:** ✅ Shipped Step 3f (2026-04-21) — card block + activation reminder + Continue.  **Portal guidance row** (*"Open Rakuten first (3%)"* etc.) in the mock below is deferred to Step 3g alongside live portal-worker data; 3f's Continue button goes directly to the retailer's tagged affiliate URL.
+
 When a user finds a product and taps to purchase, Barkain shows a card recommendation overlay before redirecting to the affiliate link.
 
 **Screen flow:**
