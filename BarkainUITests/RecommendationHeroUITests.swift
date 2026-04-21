@@ -87,18 +87,29 @@ final class RecommendationHeroUITests: XCTestCase {
             throw XCTSkip("recommendationHero never appeared — likely insufficient data for this user")
         }
 
-        // Tap the primary CTA and verify the affiliate sheet presents.
+        // Tap the primary CTA. Step 3f — the hero now presents the purchase
+        // interstitial BEFORE the affiliate sheet. Verify the interstitial
+        // appears first, then tap Continue, then verify the affiliate sheet.
         let cta = app.buttons["recommendationActionButton"]
         XCTAssertTrue(cta.waitForExistence(timeout: 5),
                       "recommendationActionButton missing under recommendationHero")
         cta.tap()
 
+        let interstitial = app.otherElements["purchaseInterstitialSheet"]
+        XCTAssertTrue(interstitial.waitForExistence(timeout: 5),
+                      "purchaseInterstitialSheet did not present after hero tap")
+
+        let continueButton = app.buttons["purchaseInterstitialContinueButton"]
+        XCTAssertTrue(continueButton.waitForExistence(timeout: 3),
+                      "Continue button missing on interstitial")
+        continueButton.tap()
+
         let webView = app.webViews.firstMatch
         let doneButton = app.buttons["Done"]
         let sheetAppeared = webView.waitForExistence(timeout: 10)
             || doneButton.waitForExistence(timeout: 2)
-            || !cta.isHittable
+            || !continueButton.isHittable
         XCTAssertTrue(sheetAppeared,
-                      "Affiliate sheet did not present after tapping the hero CTA")
+                      "Affiliate sheet did not present after tapping Continue on interstitial")
     }
 }

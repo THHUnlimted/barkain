@@ -46,9 +46,46 @@ struct PriceComparisonView: View {
     @AppStorage("hasCompletedIdentityOnboarding")
     private var hasCompletedOnboarding: Bool = false
 
+    // MARK: - Step 3f interstitial state
+    //
+    // Both entry paths — hero action button and any retailer row's buy tap
+    // — route through `.sheet(item: $interstitialContext)`. Nil means no
+    // sheet; setting a context slides the sheet up.
+    @State private var interstitialContext: PurchaseInterstitialContext?
+
+    /// Retailer id to briefly highlight after the alternatives-rail
+    /// scroll-to (Pre-Fix #5). Reset on a 400 ms delay.
+    @State private var highlightedRetailerId: String?
+
     // MARK: - Body
 
     var body: some View {
+        ScrollViewReader { proxy in
+            bodyContent(proxy: proxy)
+        }
+        .sheet(item: $interstitialContext) { ctx in
+            PurchaseInterstitialSheet(
+                context: ctx,
+                apiClient: viewModel.apiClientForInterstitial,
+                onDismiss: { interstitialContext = nil },
+                onOpenActivation: { url in
+                    // Close the sheet and open the issuer's activation URL
+                    // via the shared browser sheet. The interstitial's
+                    // onDismiss flow doesn't fire here — we drop the sheet
+                    // ourselves before handing off to the browser.
+                    interstitialContext = nil
+                    browserURL = IdentifiableURL(url: url)
+                },
+                onContinue: { url in
+                    interstitialContext = nil
+                    browserURL = IdentifiableURL(url: url)
+                }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func bodyContent(proxy: ScrollViewProxy) -> some View {
         ScrollView {
             VStack(spacing: Spacing.lg) {
                 // Invisible pull-down probe. When content is dragged past
@@ -85,13 +122,15 @@ struct PriceComparisonView: View {
                         RecommendationHero(
                             recommendation: recommendation,
                             onOpen: { winner in
-                                Task {
-                                    if let url = await viewModel.resolveAffiliateURL(
-                                        for: winner
-                                    ) {
-                                        browserURL = IdentifiableURL(url: url)
-                                    }
-                                }
+                                // Step 3f — present the purchase interstitial
+                                // instead of opening the browser directly. The
+                                // sheet handles the affiliate-click round-trip.
+                                interstitialContext = PurchaseInterstitialContext(
+                                    winner: winner,
+                                    productId: product.id,
+                                    productName: product.name,
+                                    cards: viewModel.cardRecommendations
+                                )
                             },
                             onOpenCallout: { callout in
                                 if let urlString = callout.purchaseUrlTemplate,
@@ -99,9 +138,19 @@ struct PriceComparisonView: View {
                                     browserURL = IdentifiableURL(url: url)
                                 }
                             },
-                            onSelectAlternative: { _ in
-                                // No-op for now. Phase 3f will add
-                                // scroll-to-row wiring.
+                            onSelectAlternative: { alt in
+                                // Step 3f Pre-Fix #5 — scroll to the tapped
+                                // retailer's row, brief highlight pulse.
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                                    proxy.scrollTo(alt.retailerId, anchor: .top)
+                                }
+                                highlightedRetailerId = alt.retailerId
+                                Task {
+                                    try? await Task.sleep(for: .milliseconds(400))
+                                    await MainActor.run {
+                                        highlightedRetailerId = nil
+                                    }
+                                }
                             }
                         )
                     }
@@ -299,28 +348,36 @@ struct PriceComparisonView: View {
                 Group {
                     switch row {
                     case .success(let retailerPrice):
+                        let card: CardRecommendation? = featureGate.canAccess(.cardRecommendations)
+                            ? viewModel.cardRecommendations.first { $0.retailerId == retailerPrice.retailerId }
+                            : nil
                         Button {
-                            Task {
-                                if let url = await viewModel.resolveAffiliateURL(for: retailerPrice) {
-                                    browserURL = IdentifiableURL(url: url)
-                                }
-                            }
+                            // Step 3f — retailer row tap now presents the
+                            // interstitial (even on uncovered rows; the sheet
+                            // just shows the direct-purchase variant).
+                            interstitialContext = PurchaseInterstitialContext(
+                                price: retailerPrice,
+                                productId: product.id,
+                                productName: product.name,
+                                card: card
+                            )
                         } label: {
                             PriceRow(
                                 retailerPrice: retailerPrice,
-                                // Step 2f: hide card subtitle for free users.
-                                // The cardUpgradeBanner above the list points
-                                // them at the paywall instead of repeating an
-                                // upgrade nudge on every row.
-                                cardRecommendation: featureGate.canAccess(.cardRecommendations)
-                                    ? viewModel.cardRecommendations.first { $0.retailerId == retailerPrice.retailerId }
-                                    : nil,
+                                cardRecommendation: card,
                                 // Top row is always the current cheapest —
                                 // it's accurate during streaming too.
                                 isBest: index == 0
                             )
+                            .background(
+                                highlightedRetailerId == retailerPrice.retailerId
+                                    ? Color.barkainPrimary.opacity(0.12)
+                                    : Color.clear
+                            )
+                            .animation(.easeInOut(duration: 0.2), value: highlightedRetailerId)
                         }
                         .buttonStyle(.plain)
+                        .id(retailerPrice.retailerId)
                         .accessibilityIdentifier("retailerRow_\(retailerPrice.retailerId)")
                     case .noMatch(let result):
                         inactiveRow(name: result.retailerName, label: "Not found")
@@ -481,57 +538,4 @@ struct PriceComparisonView: View {
 
 // MARK: - Preview Helper
 
-private struct PreviewAPIClient: APIClientProtocol {
-    func resolveProduct(upc: String) async throws -> Product {
-        fatalError("Preview only")
-    }
-    func resolveProductFromSearch(deviceName: String, brand: String?, model: String?) async throws -> Product { fatalError("Preview only") }
-    func searchProducts(query: String, maxResults: Int, forceGemini: Bool) async throws -> ProductSearchResponse {
-        ProductSearchResponse(query: query, results: [], totalResults: 0, cached: false)
-    }
-    func getPrices(productId: UUID, forceRefresh: Bool) async throws -> PriceComparison {
-        fatalError("Preview only")
-    }
-    func streamPrices(productId: UUID, forceRefresh: Bool, queryOverride: String?) -> AsyncThrowingStream<RetailerStreamEvent, Error> {
-        AsyncThrowingStream { $0.finish() }
-    }
-    func getIdentityProfile() async throws -> IdentityProfile {
-        fatalError("Preview only")
-    }
-    func updateIdentityProfile(_ request: IdentityProfileRequest) async throws -> IdentityProfile {
-        fatalError("Preview only")
-    }
-    func getEligibleDiscounts(productId: UUID?) async throws -> IdentityDiscountsResponse {
-        IdentityDiscountsResponse(eligibleDiscounts: [], identityGroupsActive: [])
-    }
-    func getCardCatalog() async throws -> [CardRewardProgram] { [] }
-    func getUserCards() async throws -> [UserCardSummary] { [] }
-    func addCard(_ request: AddCardRequest) async throws -> UserCardSummary { fatalError("Preview only") }
-    func removeCard(userCardId: UUID) async throws {}
-    func setPreferredCard(userCardId: UUID) async throws -> UserCardSummary { fatalError("Preview only") }
-    func setCardCategories(userCardId: UUID, request: SetCategoriesRequest) async throws {}
-    func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse {
-        CardRecommendationsResponse(recommendations: [], userHasCards: false)
-    }
-    func getBillingStatus() async throws -> BillingStatus {
-        BillingStatus(tier: "free", expiresAt: nil, isActive: false, entitlementId: nil)
-    }
-    func getAffiliateURL(
-        productId: UUID?,
-        retailerId: String,
-        productURL: String
-    ) async throws -> AffiliateURLResponse {
-        AffiliateURLResponse(
-            affiliateUrl: productURL,
-            isAffiliated: false,
-            network: nil,
-            retailerId: retailerId
-        )
-    }
-    func getAffiliateStats() async throws -> AffiliateStatsResponse {
-        AffiliateStatsResponse(clicksByRetailer: [:], totalClicks: 0)
-    }
-    func fetchRecommendation(productId: UUID, forceRefresh: Bool) async throws -> Recommendation? {
-        nil
-    }
-}
+private final class PreviewAPIClient: BarePreviewAPIClient, @unchecked Sendable {}
