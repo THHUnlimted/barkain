@@ -58,6 +58,30 @@ BRAND_SPECIFIC_RETAILERS: dict[str, str] = {
     "logitech_direct": "logitech",
 }
 
+# Sub-brand / product-line aliases that should count as a brand match when
+# product.brand is missing or uses a submark (Gemini sometimes returns
+# "ThinkPad" or "MacBook" as the brand instead of the parent). When gating a
+# brand-direct retailer, we search both product.brand AND product.name for
+# ANY alias; a hit keeps the card. A miss combined with a competing-brand hit
+# fails the gate closed — that's what stops Lenovo ThinkPad from surfacing
+# Asus/Razer/Acer Education cards. Conservative alias lists — only
+# unambiguous, widely-used submarks to avoid false positives.
+BRAND_ALIASES: dict[str, tuple[str, ...]] = {
+    "apple": ("apple", "macbook", "iphone", "ipad", "imac", "airpods"),
+    "samsung": ("samsung", "galaxy"),
+    "hp": ("hp", "omen", "pavilion", "spectre", "envy", "elitebook", "probook"),
+    "dell": ("dell", "alienware", "xps", "inspiron", "latitude", "precision"),
+    "lenovo": ("lenovo", "thinkpad", "legion", "ideapad", "yoga", "thinkbook"),
+    "lg": ("lg", "lg gram"),
+    "sony": ("sony", "playstation", "bravia", "walkman"),
+    "microsoft": ("microsoft", "surface", "xbox"),
+    "acer": ("acer", "predator", "aspire", "chromebook spin"),
+    "asus": ("asus", "rog", "zenbook", "vivobook", "tuf"),
+    "razer": ("razer", "razer blade"),
+    "logitech": ("logitech",),
+}
+
+
 # Substring keywords that must appear in Product.category (the
 # verbose Google product taxonomy string: "Electronics > Communications >
 # Telephony > Mobile Phones"). A retailer not in this dict is unbounded.
@@ -92,18 +116,36 @@ def _retailer_covers_product(
     """Return True if ``retailer_id`` plausibly sells a product of this
     brand/category — applied post-identity-match to prune irrelevant rows.
 
-    Fails open on missing data EXCEPT when there's strong disconfirming
-    evidence: for a category-gated retailer (Lowe's/Home Depot), if the
-    category is null we fall back to matching the ``product_name`` against
-    the same keyword set. Many products arrive without a category (Gemini
-    rows, UPCitemdb misses) but always have a name, so keyword-matching
-    the name is the only way to keep "iPhone 17" out of Lowe's results.
+    Brand gate (for brand-direct retailers listed in BRAND_SPECIFIC_RETAILERS):
+    searches product.brand + product.name for any alias of the required brand
+    (see BRAND_ALIASES). If no alias matches AND a competing brand's alias IS
+    present, fails closed — that's what stops Lenovo ThinkPad from surfacing
+    Asus/Razer/Acer cards. If neither this nor any competing brand is present,
+    fails open (truly generic product).
+
+    Category gate: for the retailers listed in RETAILER_CATEGORY_KEYWORDS, at
+    least one keyword must appear in product.category (falling back to name).
+    Home-improvement stores use this to keep phones out of their results.
     """
     # Brand gate.
     required_brand = BRAND_SPECIFIC_RETAILERS.get(retailer_id)
-    if required_brand is not None and product_brand:
-        if required_brand != product_brand.strip().lower():
-            return False
+    if required_brand is not None:
+        haystack = f"{product_brand or ''} {product_name or ''}".lower()
+        if haystack.strip():
+            required_aliases = BRAND_ALIASES.get(required_brand, (required_brand,))
+            if any(alias in haystack for alias in required_aliases):
+                pass  # required brand matched — keep this retailer
+            else:
+                # No match for required brand. If a competing tech brand IS in
+                # the haystack, we know the product is for that other brand —
+                # fail closed. If no competing brand is present either, the
+                # product is generic (case, cable, etc.) — fail open.
+                for other_id, other_brand in BRAND_SPECIFIC_RETAILERS.items():
+                    if other_id == retailer_id:
+                        continue
+                    other_aliases = BRAND_ALIASES.get(other_brand, (other_brand,))
+                    if any(alias in haystack for alias in other_aliases):
+                        return False
 
     # Category gate — try category first, name as fallback.
     keywords = RETAILER_CATEGORY_KEYWORDS.get(retailer_id)

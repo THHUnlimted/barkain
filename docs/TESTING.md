@@ -2,7 +2,7 @@
 
 > Source: Architecture sessions, March–April 2026
 > Scope: Backend (pytest) + iOS (XCTest) test conventions, CI configuration, coverage targets
-> Last updated: 2026-04-21 (v2.8 — Benefits Expansion follow-ups: **518 backend** / 124 iOS unit / 6 iOS UI. **0 pre-existing failures**. +3 backend — `test_membership_program_type_retired` (BE-L1), `test_per_retailer_scope_dedup_keeps_best` + `test_per_retailer_scope_dedup_preserves_different_scopes` (BE-L2). +6 iOS — 3 `scopeBadge_*` + 3 `savingsText_*` in `IdentityDiscountCardTests` (BE-L9). `test_eligible_discounts_multi_group_union` expected set updated to reflect dedup — Apple mil 10% wins over edu 5%. Drift marker unchanged: follow-ups added no schema.)
+> Last updated: 2026-04-21 (v2.9 — Benefits Expansion follow-ups (both rounds): **520 backend** / 124 iOS unit / 6 iOS UI. **0 pre-existing failures**. Round 1 (+3 backend / +6 iOS): `test_membership_program_type_retired` (BE-L1); `test_per_retailer_scope_dedup_keeps_best` + `test_per_retailer_scope_dedup_preserves_different_scopes` (BE-L2); 3 `scopeBadge_*` + 3 `savingsText_*` in `IdentityDiscountCardTests` (BE-L9); `test_eligible_discounts_multi_group_union` expected set tightened (Apple mil 10% wins over edu 5%). Round 2 (+2 backend): `test_eligible_discounts_lenovo_hides_competing_tech_brands` + `test_eligible_discounts_generic_product_stays_fail_open` (BE-L2 extension — `BRAND_ALIASES` name-gate). Drift marker unchanged: follow-ups added no schema.)
 
 ---
 

@@ -724,6 +724,77 @@ async def test_eligible_discounts_filters_brand_mismatched_retailer(db_session):
     assert "samsung_direct" not in retailer_ids
 
 
+async def test_eligible_discounts_lenovo_hides_competing_tech_brands(db_session):
+    """Lenovo ThinkPad X1 Carbon must NOT surface Acer/Asus/Razer/Logitech
+    Education cards for a student. Root cause: Gemini often returns brand=null
+    or brand='ThinkPad' (submark), so the original brand gate fell open and
+    the category gate (laptop) passed for every tech brand. New behavior:
+    name-alias fallback matches 'thinkpad' → lenovo, and competing-brand
+    presence in the haystack closes the gate on other retailers.
+    """
+    await _seed_user(db_session)
+    for rid in ("lenovo_direct", "acer_direct", "asus_direct", "razer_direct",
+                "logitech_direct", "apple_direct", "dell_direct", "hp_direct",
+                "walmart_test"):
+        await _seed_retailer(db_session, rid)
+    product = await _seed_product_with_price(
+        db_session,
+        "walmart_test",
+        1800.00,
+        name="Lenovo ThinkPad X1 Carbon Gen 12 Laptop",
+        brand=None,  # Gemini miss — name carries the only brand signal
+        category="Electronics > Computers > Laptops",
+    )
+    for rid in ("lenovo_direct", "acer_direct", "asus_direct", "razer_direct",
+                "logitech_direct", "apple_direct", "dell_direct", "hp_direct"):
+        await _seed_program(
+            db_session, rid, f"{rid} Student", "student", discount_value=10
+        )
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_student=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=product.id)
+
+    retailer_ids = {d.retailer_id for d in resp.eligible_discounts}
+    assert retailer_ids == {"lenovo_direct"}, (
+        f"Expected only lenovo_direct, got {retailer_ids}"
+    )
+
+
+async def test_eligible_discounts_generic_product_stays_fail_open(db_session):
+    """When the product mentions NO brand at all (cable, generic case), the
+    brand gate must remain fail-open — don't suddenly hide every identity
+    discount on ambiguous products.
+    """
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "lenovo_direct")
+    await _seed_retailer(db_session, "walmart_test")
+    product = await _seed_product_with_price(
+        db_session,
+        "walmart_test",
+        20.00,
+        name="USB-C to HDMI Cable",
+        brand=None,
+        category="Electronics > Computers > Accessories",
+    )
+    await _seed_program(
+        db_session, "lenovo_direct", "Lenovo Student", "student", discount_value=5
+    )
+
+    profile = UserDiscountProfile(user_id=MOCK_USER_ID, is_student=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    service = IdentityService(db_session)
+    resp = await service.get_eligible_discounts(MOCK_USER_ID, product_id=product.id)
+
+    # No competing brand either → fail open → card surfaces.
+    assert {d.retailer_id for d in resp.eligible_discounts} == {"lenovo_direct"}
+
+
 async def test_eligible_discounts_filters_category_mismatched_retailer(db_session):
     """Phone product → Lowe's discount is hidden (category gate via name fallback)."""
     await _seed_user(db_session)

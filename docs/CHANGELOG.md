@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-21 (Benefits Expansion Follow-ups — BE-L1 `program_type='membership'` retired, BE-L2 per-retailer scope dedup, BE-L9 iOS scope badge + honest membership-fee phrasing)
+> Last updated: 2026-04-21 (Benefits Expansion Follow-ups — both rounds: BE-L1 membership retired; BE-L2 per-retailer scope dedup + `BRAND_ALIASES` name-gate; BE-L9 iOS scope badge + price/pill layout polish; search `/resolve` → `/resolve-from-search` fallback on Gemini UPC hallucination)
 
 ---
 
@@ -2770,11 +2770,11 @@ away from Apple products correctly, per `IdentityService`).
   value one. By design for the demo — stacking callouts would muddy
   the headline.
 
-### Benefits Expansion Follow-ups — BE-L1 / BE-L2 / BE-L9 (2026-04-21)
+### Benefits Expansion Follow-ups — BE-L1 / BE-L2 / BE-L9 + Round 2 (2026-04-21)
 
-**Branch:** `chore/benefits-expansion-followups` → `main`
+**Branch:** `chore/benefits-expansion-followups` → `main` (PR #46)
 
-**Motivation.** Three issues surfaced in the Benefits Expansion error report:
+**Motivation (round 1).** Three issues surfaced in the Benefits Expansion error report:
 
 - **BE-L1.** `program_type='membership'` was a single-use value carried only by
   Prime Student; Prime Young Adult used `program_type='identity'` + new
@@ -2849,10 +2849,9 @@ CLAUDE.md                                              # bump last-updated + tes
    intent into the copy ("50% off fee") closes the loop. "Free shipping" is
    the matching shape for shipping scope.
 
-**Test counts (this step).** +3 backend (BE-L1 retirement + 2 BE-L2 dedup), +6 iOS.
-Running totals: 518 backend + 124 iOS unit + 6 iOS UI.
+**Test counts (round 1).** +3 backend (BE-L1 retirement + 2 BE-L2 dedup), +6 iOS.
 
-**Known limits.**
+**Known limits (round 1).**
 - The multi-group-union test was updated to reflect the new dedup outcome
   (Apple Military 10% wins over Education 5% when a user has both flags).
   This is a real behavior change, not just a test update — a student+military
@@ -2860,6 +2859,118 @@ Running totals: 518 backend + 124 iOS unit + 6 iOS UI.
   real-world terms.
 - `BE-L3–L8`, `BE-L10`, `BE-L11` (from the original error report) remain
   open. None block this cleanup.
+
+---
+
+#### Round 2 — same session, after live sim testing (2026-04-21)
+
+**Motivation.** Manual testing of round 1 surfaced three more issues the
+seed-only cleanup didn't catch:
+
+- **Relevance gate fail-open.** A Lenovo ThinkPad X1 Carbon search surfaced
+  Acer / Asus / Razer / Logitech Education cards. Root cause: the brand gate
+  in `_retailer_covers_product` only fired when `product.brand` was truthy.
+  Gemini (Tier 3 search result) frequently returns `brand=null` or a submark
+  like "ThinkPad"; the category gate (all 12 tech retailers accept "laptop")
+  couldn't disambiguate. Every tech brand's Student card surfaced.
+- **iOS layout polish.** "$2,249.99" wrapped "9" to a second line on
+  eBay-high-price rows (no `lineLimit(1)` on `PriceRow.priceInfo`). The
+  round-1 `scopeBadge` and `verificationBadge` pills got crushed into
+  3-line vertical stacks inside the identity card's left column (too narrow
+  to share horizontally).
+- **Gemini UPC hallucination.** Tapping a Gemini-sourced search result
+  triggered "Couldn't find a barcode for this — try scanning instead."
+  Backend log: `UPCitemdb lookup failed … httpx.HTTPStatusError: 400 Bad
+  Request` → `POST /api/v1/products/resolve 404 Not Found`. Gemini invented
+  UPCs that don't exist in UPCitemdb AND Gemini itself can't reverse-lookup
+  them. The iOS code always preferred the UPC path when `primaryUpc` was
+  non-empty, so every hallucinated UPC errored out.
+
+**Scope (round 2).**
+- `backend/modules/m5_identity/service.py`:
+  - New `BRAND_ALIASES` dict keyed by the same 12 brand strings as
+    `BRAND_SPECIFIC_RETAILERS`. Each value is a tuple of submarks widely
+    associated with that brand (`lenovo`: `thinkpad/legion/ideapad/yoga/thinkbook`;
+    `asus`: `rog/zenbook/vivobook/tuf`; `hp`: `omen/pavilion/spectre/envy`; etc.).
+    Conservative — only unambiguous submarks.
+  - `_retailer_covers_product` rewritten to search `product.brand + product.name`
+    for any alias of the *required* brand. If no alias matches AND a
+    *competing* brand's alias is present in the haystack, the gate fails
+    closed. If neither matches, it fails open (truly generic product like a
+    USB-C cable). Category gate unchanged.
+- `Barkain/Features/Shared/Components/PriceRow.swift`: `priceInfo` price
+  `Text` gains `lineLimit(1)` + `minimumScaleFactor(0.7)`, and the block
+  gains `layoutPriority(1)` so the price wins width negotiation against
+  the retailer-info column. Original-price strike-through text also gets
+  `lineLimit(1)`.
+- `Barkain/Features/Recommendation/IdentityDiscountsSection.swift`: pills
+  container switches from `HStack` to `VStack(alignment: .leading)`. Each
+  pill `Text` gains `lineLimit(1)` + `fixedSize(horizontal: true, vertical: false)`
+  so capsules never wrap inside themselves.
+- `Barkain/Features/Search/SearchViewModel.swift`: `handleResultTap` extracts
+  the UPC-then-description cascade into a private `resolveTappedResult`
+  helper. If `/resolve(upc)` throws `APIError.notFound`, the helper silently
+  falls back to `/resolve-from-search(deviceName, brand, model)`. Only if
+  *both* fail does the user see the error alert.
+- `Barkain/Features/Search/SearchView.swift`: alert title + message copy
+  rewritten ("Couldn't open this result", "We couldn't pull details for
+  this result. Try a different search term, or scan the barcode directly.")
+  — the old "try scanning instead" suggestion was a non-sequitur in a
+  text-search flow.
+
+**Files changed (round 2).**
+```
+backend/modules/m5_identity/service.py                 # +BRAND_ALIASES + _retailer_covers_product rewrite
+backend/tests/modules/test_m5_identity.py              # +test_eligible_discounts_lenovo_hides_competing_tech_brands,
+                                                       # +test_eligible_discounts_generic_product_stays_fail_open
+Barkain/Features/Shared/Components/PriceRow.swift      # price lineLimit(1) + minimumScaleFactor + layoutPriority
+Barkain/Features/Recommendation/IdentityDiscountsSection.swift  # pills VStack + fixedSize
+Barkain/Features/Search/SearchViewModel.swift          # resolveTappedResult fallback
+Barkain/Features/Search/SearchView.swift               # alert copy
+docs/CHANGELOG.md                                      # this sub-section
+CLAUDE.md                                              # bump
+```
+
+**Key decisions (round 2).**
+1. **Aliases, not sub-brand DB columns.** Hard-coded submark lists in a Python
+   dict are fine at 12 entries. Moving them to the DB would add a round-trip
+   for every identity match without meaningfully changing the data. Revisit
+   when the retailer catalog exceeds ~30 rows (see existing tech-debt note
+   above `BRAND_SPECIFIC_RETAILERS`).
+2. **Fail closed on competing-brand match; fail open on no match.** A
+   product that says "Asus ROG" in its name is obviously not for
+   lenovo_direct. A product that says "USB-C Cable" with no brand hints is
+   ambiguous — show whatever the user is eligible for. This preserves the
+   existing fail-open contract while closing the specific leak.
+3. **Reuse `/resolve-from-search` (3c).** That endpoint was built for search
+   results with `primary_upc=null`. It works equally well for hallucinated
+   UPCs — the backend re-derives a real UPC from device_name. No new
+   endpoint, no backend changes.
+4. **Silent fallback, not a second error alert.** If `/resolve-from-search`
+   also fails, the user sees one alert. Surfacing the intermediate 404
+   would be noise.
+5. **`layoutPriority(1)` on priceInfo, not on retailerInfo.** Reversing the
+   priority would've worked too, but the intent here is "price is the
+   headline; retailer name can truncate first." Setting priority on the
+   winner is the SwiftUI idiom.
+
+**Test counts (round 2).** +2 backend (Lenovo alias hide, generic cable
+fail-open), 0 iOS (layout params aren't easily unit-testable; visual
+verification via sim).
+
+**Running totals (both rounds).** 520 backend + 124 iOS unit + 6 iOS UI.
+
+**Known limits (round 2).**
+- `BRAND_ALIASES` must stay hand-synchronized with `BRAND_SPECIFIC_RETAILERS`.
+  A helper test that asserts "every key in BRAND_SPECIFIC_RETAILERS has an
+  entry in BRAND_ALIASES" would be cheap insurance — deferred.
+- Short alias tokens like "hp" are substring-matched, not word-boundary
+  matched. "SharpEdge" or "php" won't trigger (no "hp" substring in common
+  non-HP product names we've seen), but monitor for false positives as the
+  catalog expands.
+- The `/resolve-from-search` fallback still burns a Gemini call per failed
+  UPC. Consider caching failed-UPC → description in Redis to avoid
+  duplicate Gemini burn on rapid re-taps.
 
 ---
 

@@ -53,11 +53,18 @@ struct IdentityDiscountCard: View {
                         .font(.barkainCaption)
                         .foregroundStyle(Color.barkainOnSurfaceVariant)
                         .lineLimit(2)
-                    HStack(spacing: Spacing.xxs) {
+                    // Stack pills vertically — the left column is too narrow
+                    // to share its width between two pills side by side
+                    // (they were wrapping "Membership fee" / "Verify with
+                    // UNiDAYS" into 3-line crushed stacks). lineLimit + fixedSize
+                    // keeps each pill on a single row regardless of label length.
+                    VStack(alignment: .leading, spacing: Spacing.xxs) {
                         if let scope = scopeBadge {
                             Text(scope)
                                 .font(.barkainCaption)
                                 .foregroundStyle(Color.barkainOnSurface)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                                 .padding(.horizontal, Spacing.xs)
                                 .padding(.vertical, 2)
                                 .background(Color.barkainOutlineVariant.opacity(0.35))
@@ -67,6 +74,8 @@ struct IdentityDiscountCard: View {
                             Text(badge)
                                 .font(.barkainCaption)
                                 .foregroundStyle(Color.barkainPrimary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                                 .padding(.horizontal, Spacing.xs)
                                 .padding(.vertical, 2)
                                 .background(Color.barkainPrimaryFixed.opacity(0.6))
