@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from datetime import UTC, datetime
 from urllib.parse import quote_plus
@@ -133,6 +134,37 @@ def _clear_token_cache() -> None:
     """Test helper — invalidate the in-process token cache."""
     _token_cache["token"] = None
     _token_cache["expires_at"] = 0.0
+
+
+# MARK: - Partial-listing filter (gated by M2_EBAY_DROP_PARTIAL_LISTINGS)
+#
+# eBay sellers list empty boxes, parts, and lone accessories under the same
+# search keywords as the real product. On used categories (laptops, phones)
+# this dominates the cheap end of the price stream, making the rec engine
+# pick a $20 box as the "best deal." This filter drops the obvious offenders
+# by title pattern. Order matters less than completeness — false positives on
+# real listings are worse than letting one box through, so phrases are kept
+# specific (e.g. "box only", not "box").
+
+_EBAY_PARTIAL_RE = re.compile(
+    r"\b("
+    r"box\s+only|empty\s+box|original\s+box\s+only|retail\s+box(?:\s+only)?|"
+    r"packaging\s+only|just\s+the\s+box|"
+    r"for\s+parts(?:\s+(?:or|&)\s+(?:not|repair))?|"
+    r"not\s+working|as[- ]is|broken|cracked\s+screen|"
+    r"charger\s+only|cable\s+only|adapter\s+only|power\s+(?:cord|brick)\s+only|"
+    r"replacement\s+(?:parts|screen|battery|charger)|"
+    r"manual\s+only|paperwork\s+only|stand\s+only|case\s+only|cover\s+only|"
+    r"sticker(?:s)?\s+only|decal(?:s)?\s+only|"
+    r"screen\s+protector(?:s)?$|"
+    r"no\s+(?:battery|charger|hdd|ssd|os|hard\s+drive)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _is_partial_listing(title: str) -> bool:
+    return bool(_EBAY_PARTIAL_RE.search(title or ""))
 
 
 # MARK: - Response mapping
@@ -300,10 +332,24 @@ async def fetch_ebay(
 
     summaries = data.get("itemSummaries") or []
     listings: list[ContainerListing] = []
-    for item in summaries[:max_listings]:
+    dropped_partial = 0
+    for item in summaries:
+        if len(listings) >= max_listings:
+            break
+        if (
+            default_settings.M2_EBAY_DROP_PARTIAL_LISTINGS
+            and _is_partial_listing(item.get("title") or "")
+        ):
+            dropped_partial += 1
+            continue
         listing = _map_item_to_listing(item)
         if listing is not None:
             listings.append(listing)
+    if dropped_partial:
+        logger.info(
+            "ebay.search retailer=%s q=%r dropped_partial=%d",
+            retailer_id, query, dropped_partial,
+        )
 
     logger.info(
         "ebay.search retailer=%s q=%r total=%s returned=%d in %dms",

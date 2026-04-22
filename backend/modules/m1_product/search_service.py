@@ -130,6 +130,52 @@ _RELEVANCE_STOPWORDS: frozenset[str] = frozenset({
 _MODEL_CODE_RE = re.compile(r"[a-z0-9][a-z0-9-]{3,}", re.IGNORECASE)
 
 
+# EXPERIMENT: eBay seller-noise scrubbing. Browse API titles are seller-crafted
+# and often packed with emojis, markdown, "FREE SHIPPING" annotations, etc.
+# Clean them so /resolve-from-search has a tight signal to derive a UPC from.
+_EBAY_EMOJI_RE = re.compile(
+    "["                              # broad emoji + symbol ranges
+    "\U0001F300-\U0001FAFF"
+    "\U00002600-\U000027BF"
+    "\U0001F000-\U0001F2FF"
+    "]+",
+    re.UNICODE,
+)
+_EBAY_NOISE_PHRASES_RE = re.compile(
+    r"\b("
+    r"free\s+shipping|fast\s+shipping|same[- ]day\s+shipping|"
+    r"brand\s+new(?:\s+sealed)?|new\s+in\s+box|new\s+sealed|sealed\s+in\s+box|"
+    r"factory\s+sealed|open\s+box|outer\s+box\s+imperfections?|"
+    r"trusted\s+seller|us\s+seller|ships?\s+(?:from\s+usa|today|fast)|"
+    r"100%\s+authentic|authentic\s+oem|w(?:ith)?\s+warranty"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_ebay_title(title: str) -> str:
+    s = title
+    s = _EBAY_EMOJI_RE.sub(" ", s)
+    s = s.replace("**", " ").replace("__", " ")
+    # Smart quotes / fancy hyphens → ascii equivalents.
+    s = (s.replace("‘", "'").replace("’", "'")
+           .replace("“", '"').replace("”", '"')
+           .replace("–", "-").replace("—", "-")
+           .replace("‑", "-").replace("‐", "-")
+           .replace("′", "'"))
+    # Drop seller-pitch noise.
+    s = _EBAY_NOISE_PHRASES_RE.sub(" ", s)
+    # Drop trailing seller annotations after a long dash or pipe.
+    for sep in (" - ", " | ", " — "):
+        if sep in s:
+            head, tail = s.split(sep, 1)
+            # Only chop the tail if it looks like fluff (no model digits).
+            if not any(ch.isdigit() for ch in tail) or len(tail) < 10:
+                s = head
+    s = re.sub(r"\s+", " ", s).strip(" -|·,•")
+    return s
+
+
 def _meaningful_query_tokens(normalized_query: str) -> list[str]:
     """Query tokens used to decide if a Tier 2 row is on-topic.
 
@@ -402,9 +448,16 @@ class ProductSearchService:
                 # Tier 2: fire Best Buy Products API + UPCitemdb keyword
                 # search in parallel — total wall time = max(BBY, UPC) ~150-300 ms.
                 # Both ephemeral, no DB writes.
+                # EXPERIMENT: SEARCH_TIER2_USE_EBAY swaps the second leg to
+                # eBay Browse API. Revert by unsetting the env var.
+                second_leg = (
+                    self._ebay_search(normalized, max_results)
+                    if settings.SEARCH_TIER2_USE_EBAY
+                    else self._upcitemdb_search(normalized, max_results)
+                )
                 bestbuy_rows, upcitemdb_rows = await asyncio.gather(
                     self._best_buy_search(normalized, max_results),
-                    self._upcitemdb_search(normalized, max_results),
+                    second_leg,
                 )
                 # Unconditional Tier 2 noise filter (fix/search-merge-noise).
                 #
@@ -598,6 +651,116 @@ class ProductSearchService:
         first, so any duplicate UPCitemdb row is dropped silently.
         """
         return await upcitemdb.search_keyword(normalized_query, max_results)
+
+    # MARK: - eBay Browse keyword search (EXPERIMENTAL Tier 2 swap)
+    #
+    # Gated by SEARCH_TIER2_USE_EBAY. Hits the same Browse API the M2 eBay
+    # adapter uses, but in the product-picker role (keyword → candidate list).
+    # Returns dicts shaped like _upcitemdb_search so _merge stays unchanged.
+
+    async def _ebay_search(
+        self, normalized_query: str, max_results: int
+    ) -> list[dict]:
+        from modules.m2_prices.adapters import ebay_browse_api as ebay
+        if not ebay.is_configured():
+            return []
+        try:
+            token = await ebay._get_app_token(settings)
+        except Exception:
+            logger.warning("ebay tier2 token fetch failed for %r", normalized_query, exc_info=True)
+            return []
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+            "Accept": "application/json",
+        }
+        params = {
+            "q": normalized_query,
+            "limit": max(1, min(max_results, 25)),
+            # Condition filter kept broad — we want picker candidates, not
+            # price-filtered buy listings. Price comes from M2 later.
+            "filter": "conditionIds:{1000|1500|2000|2500|3000}",
+        }
+        # EXTENDED fieldgroup exposes gtin/epid/mpn on item_summary; only
+        # ask for it when the GTIN experiment is on (small latency cost).
+        if settings.SEARCH_TIER2_EBAY_USE_GTIN and not settings.SEARCH_TIER2_EBAY_SKIP_UPC:
+            params["fieldgroups"] = "EXTENDED"
+        t0 = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    "https://api.ebay.com/buy/browse/v1/item_summary/search",
+                    params=params,
+                    headers=headers,
+                )
+        except httpx.HTTPError as e:
+            logger.warning("ebay tier2 search failed for %r: %s", normalized_query, e)
+            return []
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        if resp.status_code >= 400:
+            logger.warning("ebay tier2 HTTP %d for %r body=%s",
+                           resp.status_code, normalized_query, resp.text[:200])
+            return []
+        try:
+            items = (resp.json() or {}).get("itemSummaries") or []
+        except ValueError:
+            return []
+
+        # Dedup by (brand, title) — eBay returns many near-duplicate listings
+        # from different sellers. The picker only needs one row per product.
+        seen: set[tuple[str, str]] = set()
+        rows: list[dict] = []
+        for item in items:
+            raw_title = (item.get("title") or "").strip()
+            if not raw_title:
+                continue
+            title = _sanitize_ebay_title(raw_title)
+            if not title:
+                continue
+            brand = None
+            for asp in item.get("itemAspects") or []:
+                if asp.get("localizedAspectName", "").lower() == "brand":
+                    brand = (asp.get("localizedAspectValues") or [None])[0]
+                    break
+            key = ((brand or "").lower(), title.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            image = (item.get("image") or {}).get("imageUrl")
+            # EXPERIMENT: gtin extraction (USE_GTIN) vs hard-omit (SKIP_UPC).
+            # SKIP_UPC wins precedence — it's the "go straight to
+            # /resolve-from-search" toggle and ignores any GTIN we'd surface.
+            primary_upc: str | None = None
+            if settings.SEARCH_TIER2_EBAY_USE_GTIN and not settings.SEARCH_TIER2_EBAY_SKIP_UPC:
+                gtin = (item.get("gtin") or "").strip() or None
+                if gtin is None:
+                    for asp in item.get("localizedAspects") or []:
+                        nm = (asp.get("name") or "").lower()
+                        if nm in {"gtin", "upc", "ean"}:
+                            gtin = (asp.get("value") or "").strip() or None
+                            break
+                # UPCs are 12 digits, EAN-13 is 13. Drop anything else so we
+                # don't poison /resolve with garbage IDs.
+                if gtin and gtin.isdigit() and len(gtin) in (12, 13):
+                    primary_upc = gtin
+            rows.append({
+                "device_name": title,
+                "brand": brand,
+                "category": (item.get("categories") or [{}])[0].get("categoryName"),
+                "primary_upc": primary_upc,
+                "image_url": image,
+                "model": None,
+                # Match UPCitemdb's confidence band so ranking is comparable.
+                "confidence": max(0.3, 0.5 - 0.02 * len(rows)),
+            })
+            if len(rows) >= max_results:
+                break
+        logger.info(
+            "ebay tier2 q=%r returned=%d (raw=%d) in %dms",
+            normalized_query, len(rows), len(items), elapsed_ms,
+        )
+        return rows
 
     # MARK: - Gemini fallback
 
