@@ -271,21 +271,21 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     }
 
     var streamPricesLastQueryOverride: String?
-    var streamPricesLastFbLocationSlug: String?
+    var streamPricesLastFbLocationId: String?
     var streamPricesLastFbRadiusMiles: Int?
 
     func streamPrices(
         productId: UUID,
         forceRefresh: Bool,
         queryOverride: String?,
-        fbLocationSlug: String?,
+        fbLocationId: String?,
         fbRadiusMiles: Int?
     ) -> AsyncThrowingStream<RetailerStreamEvent, Error> {
         streamPricesCallCount += 1
         streamPricesLastProductId = productId
         streamPricesLastForceRefresh = forceRefresh
         streamPricesLastQueryOverride = queryOverride
-        streamPricesLastFbLocationSlug = fbLocationSlug
+        streamPricesLastFbLocationId = fbLocationId
         streamPricesLastFbRadiusMiles = fbRadiusMiles
 
         let events = streamPricesEvents
@@ -307,5 +307,29 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
                 }
             }
         }
+    }
+
+    // MARK: - FB Marketplace location (fb-marketplace-location-resolver)
+
+    var resolveFbLocationResult: Result<ResolvedFbLocation, APIError> = .success(
+        ResolvedFbLocation(
+            locationId: "108271525863730",
+            canonicalName: "Accident, MD",
+            verified: true,
+            source: "mock"
+        )
+    )
+    var resolveFbLocationCallCount = 0
+    var resolveFbLocationLastCity: String?
+    var resolveFbLocationLastState: String?
+
+    func resolveFbLocation(
+        city: String,
+        state: String
+    ) async throws -> ResolvedFbLocation {
+        resolveFbLocationCallCount += 1
+        resolveFbLocationLastCity = city
+        resolveFbLocationLastState = state
+        return try resolveFbLocationResult.get()
     }
 }

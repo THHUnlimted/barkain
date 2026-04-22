@@ -402,12 +402,12 @@ class PriceAggregationService:
         self,
         product_id: uuid.UUID,
         force_refresh: bool = False,
-        fb_location_slug: str | None = None,
+        fb_location_id: str | None = None,
         fb_radius_miles: int | None = None,
     ) -> dict:
         """Full price comparison pipeline. Returns dict matching PriceComparisonResponse.
 
-        ``fb_location_slug`` / ``fb_radius_miles`` scope the FB Marketplace
+        ``fb_location_id`` / ``fb_radius_miles`` scope the FB Marketplace
         leg (and therefore the cache bucket) to the caller's chosen city.
         Omitting them shares the env-default bucket with other callers.
         """
@@ -418,7 +418,7 @@ class PriceAggregationService:
         if not force_refresh:
             cached = await self._check_redis(
                 product_id,
-                fb_location_slug=fb_location_slug,
+                fb_location_id=fb_location_id,
                 fb_radius_miles=fb_radius_miles,
             )
             if cached is not None:
@@ -433,7 +433,7 @@ class PriceAggregationService:
                 await self._cache_to_redis(
                     product_id,
                     db_result,
-                    fb_location_slug=fb_location_slug,
+                    fb_location_id=fb_location_id,
                     fb_radius_miles=fb_radius_miles,
                 )
                 return db_result
@@ -445,7 +445,7 @@ class PriceAggregationService:
             query=query,
             product_name=product.name,
             upc=product.upc,
-            fb_location_slug=fb_location_slug,
+            fb_location_id=fb_location_id,
             fb_radius_miles=fb_radius_miles,
         )
 
@@ -511,7 +511,7 @@ class PriceAggregationService:
         await self._cache_to_redis(
             product_id,
             result,
-            fb_location_slug=fb_location_slug,
+            fb_location_id=fb_location_id,
             fb_radius_miles=fb_radius_miles,
         )
 
@@ -524,7 +524,7 @@ class PriceAggregationService:
         product_id: uuid.UUID,
         force_refresh: bool = False,
         query_override: str | None = None,
-        fb_location_slug: str | None = None,
+        fb_location_id: str | None = None,
         fb_radius_miles: int | None = None,
     ) -> AsyncGenerator[tuple[str, dict], None]:
         """Yield per-retailer SSE events (`retailer_result`, `done`, `error`) as
@@ -561,10 +561,10 @@ class PriceAggregationService:
             cached = await self._check_redis(
                 product_id,
                 query_override,
-                fb_location_slug=fb_location_slug,
+                fb_location_id=fb_location_id,
                 fb_radius_miles=fb_radius_miles,
             )
-            if cached is None and not query_override and not fb_location_slug:
+            if cached is None and not query_override and not fb_location_id:
                 # DB freshness short-circuit applies only to unscoped runs.
                 # A bare-name override asked for a different interpretation;
                 # a location override asked for different-city results; in
@@ -576,7 +576,7 @@ class PriceAggregationService:
                     await self._cache_to_redis(
                         product_id,
                         cached,
-                        fb_location_slug=fb_location_slug,
+                        fb_location_id=fb_location_id,
                         fb_radius_miles=fb_radius_miles,
                     )
             if cached is not None:
@@ -636,7 +636,7 @@ class PriceAggregationService:
                 product_name_for_containers,
                 product.upc,
                 10,
-                fb_location_slug=fb_location_slug,
+                fb_location_id=fb_location_id,
                 fb_radius_miles=fb_radius_miles,
             )
             return rid, resp
@@ -717,7 +717,7 @@ class PriceAggregationService:
             product_id,
             final,
             query_override,
-            fb_location_slug=fb_location_slug,
+            fb_location_id=fb_location_id,
             fb_radius_miles=fb_radius_miles,
         )
 
@@ -750,7 +750,7 @@ class PriceAggregationService:
         self,
         product_id: uuid.UUID,
         query_override: str | None = None,
-        fb_location_slug: str | None = None,
+        fb_location_id: str | None = None,
         fb_radius_miles: int | None = None,
     ) -> dict | None:
         """Check Redis for a cached price comparison result.
@@ -759,11 +759,11 @@ class PriceAggregationService:
         (``…:q:<sha1>``) instead of the bare product key — that's the cache
         for bare-name "Any variant" generic-row searches, kept separate so it
         can't pollute or be polluted by SKU-specific runs. When
-        ``fb_location_slug`` is set, the key also carries a ``:loc:…`` suffix
+        ``fb_location_id`` is set, the key also carries a ``:loc:…`` suffix
         so per-user marketplace location doesn't leak between callers.
         """
         key = self._cache_key(
-            product_id, query_override, fb_location_slug, fb_radius_miles
+            product_id, query_override, fb_location_id, fb_radius_miles
         )
         cached = await self.redis.get(key)
         if cached is None:
@@ -779,7 +779,7 @@ class PriceAggregationService:
     def _cache_key(
         product_id: uuid.UUID,
         query_override: str | None,
-        fb_location_slug: str | None = None,
+        fb_location_id: str | None = None,
         fb_radius_miles: int | None = None,
     ) -> str:
         """Compose the Redis cache key for a price comparison.
@@ -787,16 +787,20 @@ class PriceAggregationService:
         Bare product key for SKU-resolved runs; scoped key (suffix
         ``:q:<sha1>``) for bare-name override runs. When a user supplies a
         non-default fb_marketplace location, an additional
-        ``:loc:<slug>:r<radius>`` suffix fences their results away from the
+        ``:loc:<id>:r<miles>`` suffix fences their results away from the
         env-default bucket so two users on different coasts don't collide.
-        The namespaces are intentionally disjoint — one cannot serve another.
+        We keep radius in miles (user-intent unit) even though the
+        container receives km — two users picking 25 mi vs 15 mi in the
+        same metro are asking different questions and deserve different
+        buckets. The namespaces are intentionally disjoint — one cannot
+        serve another.
         """
         key = f"{REDIS_KEY_PREFIX}{product_id}"
         if query_override:
             key += f"{REDIS_KEY_QUERY_SUFFIX}{_query_scope_digest(query_override)}"
-        if fb_location_slug:
+        if fb_location_id:
             radius_label = str(fb_radius_miles) if fb_radius_miles else "x"
-            key += f":loc:{fb_location_slug}:r{radius_label}"
+            key += f":loc:{fb_location_id}:r{radius_label}"
         return key
 
     async def _check_db_prices(
@@ -1100,7 +1104,7 @@ class PriceAggregationService:
         product_id: uuid.UUID,
         data: dict,
         query_override: str | None = None,
-        fb_location_slug: str | None = None,
+        fb_location_id: str | None = None,
         fb_radius_miles: int | None = None,
     ) -> None:
         """Cache the price comparison result to Redis.
@@ -1112,12 +1116,12 @@ class PriceAggregationService:
           since bare-name runs are inherently fuzzier and we want to refresh
           them sooner; still uses the empty-result TTL when there are no
           prices to ensure the same fast retry semantics.
-        - Location-scoped key (``fb_location_slug`` set): same TTL rule as
+        - Location-scoped key (``fb_location_id`` set): same TTL rule as
           the bare key — the per-location suffix simply keeps distinct
           users' FB Marketplace results from leaking across city buckets.
         """
         key = self._cache_key(
-            product_id, query_override, fb_location_slug, fb_radius_miles
+            product_id, query_override, fb_location_id, fb_radius_miles
         )
         serialized = json.dumps(data, default=_json_serializer)
         if query_override:

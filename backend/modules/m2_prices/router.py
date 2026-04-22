@@ -15,10 +15,10 @@ from modules.m2_prices.service import PriceAggregationService, ProductNotFoundEr
 from modules.m2_prices.sse import SSE_HEADERS, sse_event
 
 # Shared fb_marketplace location query params. Validation lives here so a
-# bad slug 422s at the router boundary — returning the error mid-stream
+# bad id 422s at the router boundary — returning the error mid-stream
 # after SSE has opened is confusing for the iOS client (it expects events,
 # not validation failures).
-_FB_SLUG_PATTERN = r"^[a-z0-9_]{1,64}$"
+_FB_LOCATION_ID_PATTERN = r"^\d{1,30}$"
 
 logger = logging.getLogger("barkain.m2")
 
@@ -37,7 +37,7 @@ router = APIRouter(prefix="/api/v1/prices", tags=["prices"])
 async def get_prices(
     product_id: uuid.UUID,
     force_refresh: bool = False,
-    fb_location_slug: str | None = Query(default=None, pattern=_FB_SLUG_PATTERN),
+    fb_location_id: str | None = Query(default=None, pattern=_FB_LOCATION_ID_PATTERN),
     fb_radius_miles: int | None = Query(default=None, ge=1, le=500),
     user: dict = Depends(get_current_user),
     _rate: None = Depends(get_rate_limiter("general")),
@@ -46,16 +46,18 @@ async def get_prices(
 ) -> PriceComparisonResponse:
     """Get price comparison for a product across all retailers.
 
-    ``fb_location_slug`` / ``fb_radius_miles`` are routed to the FB
+    ``fb_location_id`` / ``fb_radius_miles`` are routed to the FB
     Marketplace container only — they let the caller override the baked-in
-    city default (see `containers/fb_marketplace/extract.sh`).
+    city default (see `containers/fb_marketplace/extract.sh`). Radius is
+    miles at the API boundary and converted to km inside
+    ``ContainerClient`` on the way to the container.
     """
     service = PriceAggregationService(db=db, redis=redis_client)
     try:
         result = await service.get_prices(
             product_id,
             force_refresh=force_refresh,
-            fb_location_slug=fb_location_slug,
+            fb_location_id=fb_location_id,
             fb_radius_miles=fb_radius_miles,
         )
         return PriceComparisonResponse.model_validate(result)
@@ -77,7 +79,7 @@ async def stream_prices_endpoint(
     product_id: uuid.UUID,
     force_refresh: bool = False,
     query: str | None = None,
-    fb_location_slug: str | None = Query(default=None, pattern=_FB_SLUG_PATTERN),
+    fb_location_id: str | None = Query(default=None, pattern=_FB_LOCATION_ID_PATTERN),
     fb_radius_miles: int | None = Query(default=None, ge=1, le=500),
     user: dict = Depends(get_current_user),
     _rate: None = Depends(get_rate_limiter("general")),
@@ -91,8 +93,10 @@ async def stream_prices_endpoint(
     summarizing the run, or an `error` event on pipeline failure.
 
     Cache hits replay all events instantly. `?force_refresh=true` bypasses cache.
-    ``fb_location_slug`` + ``fb_radius_miles`` are forwarded only to the
+    ``fb_location_id`` + ``fb_radius_miles`` are forwarded only to the
     fb_marketplace container and carve out a per-location cache bucket.
+    Radius is miles at the API boundary; km conversion happens at the
+    container adapter in ``ContainerClient.extract``.
     """
     service = PriceAggregationService(db=db, redis=redis_client)
 
@@ -113,7 +117,7 @@ async def stream_prices_endpoint(
             product_id,
             force_refresh=force_refresh,
             query_override=query,
-            fb_location_slug=fb_location_slug,
+            fb_location_id=fb_location_id,
             fb_radius_miles=fb_radius_miles,
         ):
             yield sse_event(event_type, payload)

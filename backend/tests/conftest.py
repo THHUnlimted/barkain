@@ -55,7 +55,7 @@ async def _ensure_schema(engine):
     if _schema_ready:
         return
 
-    # Drift marker: user_discount_profiles.is_young_adult column from migration 0010.
+    # Drift marker: fb_marketplace_locations table from migration 0011.
     # Update this query when adding new migrations that introduce
     # constraints, columns, or indexes to existing tables.
     async with engine.begin() as conn:
@@ -63,9 +63,8 @@ async def _ensure_schema(engine):
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         marker = await conn.execute(
             text(
-                "SELECT 1 FROM information_schema.columns "
-                "WHERE table_name = 'user_discount_profiles' "
-                "AND column_name = 'is_young_adult'"
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = 'fb_marketplace_locations'"
             )
         )
         schema_current = marker.scalar() is not None

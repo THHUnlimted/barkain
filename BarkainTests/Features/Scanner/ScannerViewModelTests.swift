@@ -578,15 +578,15 @@ final class ScannerViewModelTests: XCTestCase {
         // When the price stream fires.
         await vm.handleBarcodeScan(upc: "012345678901")
 
-        // Then APIClient saw nil slug / nil radius — backend falls back
+        // Then APIClient saw nil id / nil radius — backend falls back
         // to the container's env-default sanfrancisco bucket.
         XCTAssertGreaterThanOrEqual(mockClient.streamPricesCallCount, 1)
-        XCTAssertNil(mockClient.streamPricesLastFbLocationSlug)
+        XCTAssertNil(mockClient.streamPricesLastFbLocationId)
         XCTAssertNil(mockClient.streamPricesLastFbRadiusMiles)
     }
 
-    func test_fetchPrices_withStoredLocation_forwardsSlugAndRadius() async {
-        // Given a saved location.
+    func test_fetchPrices_withStoredLocation_forwardsIdAndRadius() async {
+        // Given a saved location with an FB numeric Marketplace Page ID.
         let defaults = makeIsolatedDefaults()
         let locationPrefs = LocationPreferences(defaults: defaults)
         locationPrefs.save(
@@ -594,7 +594,7 @@ final class ScannerViewModelTests: XCTestCase {
                 latitude: 40.6782,
                 longitude: -73.9442,
                 displayLabel: "Brooklyn, NY",
-                fbLocationSlug: "brooklyn",
+                fbLocationId: "112111905481230",
                 radiusMiles: 25
             )
         )
@@ -611,8 +611,8 @@ final class ScannerViewModelTests: XCTestCase {
         // When the stream fires.
         await vm.handleBarcodeScan(upc: "012345678901")
 
-        // Then slug + radius reach the APIClient.
-        XCTAssertEqual(mockClient.streamPricesLastFbLocationSlug, "brooklyn")
+        // Then id + radius reach the APIClient.
+        XCTAssertEqual(mockClient.streamPricesLastFbLocationId, "112111905481230")
         XCTAssertEqual(mockClient.streamPricesLastFbRadiusMiles, 25)
     }
 

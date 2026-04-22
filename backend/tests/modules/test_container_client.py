@@ -299,42 +299,43 @@ async def test_response_normalization(container_response_data: dict):
 # MARK: - fb_marketplace per-user location (fb-marketplace-location)
 
 
-def test_container_extract_request_validates_fb_location_slug():
-    """ContainerExtractRequest enforces the same [a-z0-9_] shape FB slugs use."""
+def test_container_extract_request_validates_fb_location_id():
+    """ContainerExtractRequest enforces numeric FB Page ID shape."""
     from modules.m2_prices.schemas import ContainerExtractRequest
 
-    # Happy path
-    req = ContainerExtractRequest(query="tv", fb_location_slug="brooklyn")
-    assert req.fb_location_slug == "brooklyn"
+    # Happy path — FB Page IDs are bigints, travel as strings over the wire
+    # to avoid iOS Int64 narrowing.
+    req = ContainerExtractRequest(query="tv", fb_location_id="112111905481230")
+    assert req.fb_location_id == "112111905481230"
 
-    # Normalized to lowercase
-    req = ContainerExtractRequest(query="tv", fb_location_slug="BROOKLYN")
-    assert req.fb_location_slug == "brooklyn"
+    # Whitespace trimmed
+    req = ContainerExtractRequest(query="tv", fb_location_id=" 108271525863730 ")
+    assert req.fb_location_id == "108271525863730"
 
     # Empty string → None (user cleared it)
-    req = ContainerExtractRequest(query="tv", fb_location_slug="")
-    assert req.fb_location_slug is None
+    req = ContainerExtractRequest(query="tv", fb_location_id="")
+    assert req.fb_location_id is None
 
-    # Bad chars rejected
-    with pytest.raises(ValueError, match="may only contain"):
-        ContainerExtractRequest(query="tv", fb_location_slug="not a slug")
+    # Non-numeric rejected
+    with pytest.raises(ValueError, match="positive integer"):
+        ContainerExtractRequest(query="tv", fb_location_id="brooklyn")
 
-    with pytest.raises(ValueError, match="64 chars"):
-        ContainerExtractRequest(query="tv", fb_location_slug="a" * 65)
+    with pytest.raises(ValueError, match="30 chars"):
+        ContainerExtractRequest(query="tv", fb_location_id="1" * 31)
 
 
-def test_container_extract_request_validates_fb_radius_miles():
-    """Radius must be a plausible mileage."""
+def test_container_extract_request_validates_fb_radius_km():
+    """Radius at the container boundary is km — backend converts from miles."""
     from modules.m2_prices.schemas import ContainerExtractRequest
 
-    ContainerExtractRequest(query="tv", fb_radius_miles=25)
-    ContainerExtractRequest(query="tv", fb_radius_miles=1)
-    ContainerExtractRequest(query="tv", fb_radius_miles=500)
+    ContainerExtractRequest(query="tv", fb_radius_km=40)
+    ContainerExtractRequest(query="tv", fb_radius_km=1)
+    ContainerExtractRequest(query="tv", fb_radius_km=800)
 
-    with pytest.raises(ValueError, match="between 1 and 500"):
-        ContainerExtractRequest(query="tv", fb_radius_miles=0)
-    with pytest.raises(ValueError, match="between 1 and 500"):
-        ContainerExtractRequest(query="tv", fb_radius_miles=501)
+    with pytest.raises(ValueError, match="between 1 and 800"):
+        ContainerExtractRequest(query="tv", fb_radius_km=0)
+    with pytest.raises(ValueError, match="between 1 and 800"):
+        ContainerExtractRequest(query="tv", fb_radius_km=801)
 
 
 @pytest.mark.asyncio
@@ -344,10 +345,12 @@ async def test_extract_forwards_location_to_fb_marketplace_only(
 ):
     """Location fields reach the fb_marketplace payload and NO other retailer.
 
-    Every other retailer's POST body must have `fb_location_slug=None` and
-    `fb_radius_miles=None` regardless of what the caller passed. The filter
+    Every other retailer's POST body must have `fb_location_id=None` and
+    `fb_radius_km=None` regardless of what the caller passed. The filter
     lives in `ContainerClient.extract` so every downstream path respects it
     — if we ever add a second location-aware retailer, re-gate here.
+
+    Also verifies miles → km conversion: 25 mi → 40 km (25 * 1.60934 ≈ 40.23).
     """
     # Point fb_marketplace + target at a local port so the fake HTTP client
     # can record what each received.
@@ -370,48 +373,49 @@ async def test_extract_forwards_location_to_fb_marketplace_only(
     await client.extract(
         "fb_marketplace",
         "sofa",
-        fb_location_slug="brooklyn",
+        fb_location_id="112111905481230",
         fb_radius_miles=25,
     )
     await client.extract(
         "target",
         "sofa",
-        fb_location_slug="brooklyn",
+        fb_location_id="112111905481230",
         fb_radius_miles=25,
     )
 
-    assert fb_body[0]["fb_location_slug"] == "brooklyn"
-    assert fb_body[0]["fb_radius_miles"] == 25
+    assert fb_body[0]["fb_location_id"] == "112111905481230"
+    # 25 mi → 40 km (rounded).
+    assert fb_body[0]["fb_radius_km"] == 40
 
     # Non-fb_marketplace retailers must have the fields nulled out.
-    assert other_body[0]["fb_location_slug"] is None
-    assert other_body[0]["fb_radius_miles"] is None
+    assert other_body[0]["fb_location_id"] is None
+    assert other_body[0]["fb_radius_km"] is None
 
 
-def test_cache_key_includes_location_suffix_when_slug_set():
-    """_cache_key gains a `:loc:<slug>:r<radius>` suffix for fb-specific buckets."""
+def test_cache_key_includes_location_suffix_when_id_set():
+    """_cache_key gains a `:loc:<id>:r<miles>` suffix for fb-specific buckets."""
     import uuid as _uuid
 
     from modules.m2_prices.service import PriceAggregationService, REDIS_KEY_PREFIX
 
     pid = _uuid.UUID("00000000-0000-0000-0000-000000000001")
 
-    # No slug → bare key (preserves pre-existing callers / cache hits).
+    # No id → bare key (preserves pre-existing callers / cache hits).
     assert PriceAggregationService._cache_key(pid, None) == f"{REDIS_KEY_PREFIX}{pid}"
 
-    # Slug only — unknown radius placeholder keeps the shape consistent.
+    # Id only — unknown radius placeholder keeps the shape consistent.
     assert (
-        PriceAggregationService._cache_key(pid, None, "brooklyn", None)
-        == f"{REDIS_KEY_PREFIX}{pid}:loc:brooklyn:rx"
+        PriceAggregationService._cache_key(pid, None, "112111905481230", None)
+        == f"{REDIS_KEY_PREFIX}{pid}:loc:112111905481230:rx"
     )
 
-    # Slug + radius — numeric suffix.
+    # Id + radius (miles — the user's intent unit) — numeric suffix.
     assert (
-        PriceAggregationService._cache_key(pid, None, "brooklyn", 25)
-        == f"{REDIS_KEY_PREFIX}{pid}:loc:brooklyn:r25"
+        PriceAggregationService._cache_key(pid, None, "112111905481230", 25)
+        == f"{REDIS_KEY_PREFIX}{pid}:loc:112111905481230:r25"
     )
 
-    # Different slug → different bucket (no cross-city cache hits).
+    # Different id → different bucket (no cross-metro cache hits).
     assert PriceAggregationService._cache_key(
-        pid, None, "brooklyn", 25
-    ) != PriceAggregationService._cache_key(pid, None, "austin", 25)
+        pid, None, "112111905481230", 25
+    ) != PriceAggregationService._cache_key(pid, None, "108271525863730", 25)

@@ -151,11 +151,12 @@ final class ScannerViewModel {
         // failure, fall back to the batch endpoint.
         //
         // Pull the user's FB Marketplace location (if they've set one) and
-        // forward the slug + radius as query params. When absent, the
-        // backend skips the per-location cache key and the fb_marketplace
-        // container falls back to its env-default slug (sanfrancisco).
+        // forward the numeric ID + radius as query params. When absent,
+        // the backend skips the per-location cache key and the
+        // fb_marketplace container falls back to its env-default slug
+        // (sanfrancisco).
         let storedLocation = locationPreferences.current()
-        sseLog.info("fetchPrices: starting stream for product \(product.name, privacy: .public) forceRefresh=\(forceRefresh, privacy: .public) queryOverride=\(queryOverride ?? "<none>", privacy: .public) fbSlug=\(storedLocation?.fbLocationSlug ?? "<default>", privacy: .public)")
+        sseLog.info("fetchPrices: starting stream for product \(product.name, privacy: .public) forceRefresh=\(forceRefresh, privacy: .public) queryOverride=\(queryOverride ?? "<none>", privacy: .public) fbLocationId=\(storedLocation?.fbLocationId ?? "<default>", privacy: .public)")
         var sawDone = false
         var sawAnyEvent = false
         do {
@@ -163,7 +164,7 @@ final class ScannerViewModel {
                 productId: product.id,
                 forceRefresh: forceRefresh,
                 queryOverride: queryOverride,
-                fbLocationSlug: storedLocation?.fbLocationSlug,
+                fbLocationId: storedLocation?.fbLocationId,
                 fbRadiusMiles: storedLocation?.radiusMiles
             ) {
                 sawAnyEvent = true

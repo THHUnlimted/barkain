@@ -16,9 +16,13 @@ protocol APIClientProtocol: Sendable {
         productId: UUID,
         forceRefresh: Bool,
         queryOverride: String?,
-        fbLocationSlug: String?,
+        fbLocationId: String?,
         fbRadiusMiles: Int?
     ) -> AsyncThrowingStream<RetailerStreamEvent, Error>
+    // FB Marketplace numeric location resolver. Called by LocationPickerSheet
+    // once CLGeocoder gives us a (city, state) — backend handles the
+    // search-engine dance and we save the returned numeric ID locally.
+    func resolveFbLocation(city: String, state: String) async throws -> ResolvedFbLocation
     func getIdentityProfile() async throws -> IdentityProfile
     func updateIdentityProfile(_ request: IdentityProfileRequest) async throws -> IdentityProfile
     func getEligibleDiscounts(productId: UUID?) async throws -> IdentityDiscountsResponse
@@ -232,6 +236,13 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
         try await request(endpoint: .getAffiliateStats)
     }
 
+    // MARK: - FB Marketplace location resolver (fb-marketplace-location-resolver)
+
+    func resolveFbLocation(city: String, state: String) async throws -> ResolvedFbLocation {
+        let body = ResolveFbLocationRequest(city: city, state: state)
+        return try await request(endpoint: .resolveFbLocation(body))
+    }
+
     // MARK: - Recommendation (Step 3e)
 
     /// Deterministic recommendation post-close. Returns `nil` when the
@@ -256,7 +267,7 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
         productId: UUID,
         forceRefresh: Bool = false,
         queryOverride: String? = nil,
-        fbLocationSlug: String? = nil,
+        fbLocationId: String? = nil,
         fbRadiusMiles: Int? = nil
     ) -> AsyncThrowingStream<RetailerStreamEvent, Error> {
         // Capture the parts the background Task needs up-front — `self` is
@@ -272,7 +283,7 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
                         productId: productId,
                         forceRefresh: forceRefresh,
                         queryOverride: queryOverride,
-                        fbLocationSlug: fbLocationSlug,
+                        fbLocationId: fbLocationId,
                         fbRadiusMiles: fbRadiusMiles
                     ).url(base: baseURL)
                     var urlRequest = URLRequest(url: url)

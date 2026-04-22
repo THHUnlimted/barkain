@@ -51,10 +51,24 @@ class BarePreviewAPIClient: APIClientProtocol, @unchecked Sendable {
         productId: UUID,
         forceRefresh: Bool,
         queryOverride: String?,
-        fbLocationSlug: String?,
+        fbLocationId: String?,
         fbRadiusMiles: Int?
     ) -> AsyncThrowingStream<RetailerStreamEvent, Error> {
         AsyncThrowingStream { $0.finish() }
+    }
+
+    // MARK: - FB Marketplace location (fb-marketplace-location-resolver)
+
+    func resolveFbLocation(
+        city: String,
+        state: String
+    ) async throws -> ResolvedFbLocation {
+        ResolvedFbLocation(
+            locationId: "108271525863730",
+            canonicalName: "\(city), \(state)",
+            verified: true,
+            source: "preview"
+        )
     }
 
     // MARK: - Identity (Step 2d)
