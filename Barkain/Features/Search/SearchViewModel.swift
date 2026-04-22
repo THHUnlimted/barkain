@@ -234,26 +234,39 @@ final class SearchViewModel {
             isLoading = true
             defer { isLoading = false }
             do {
-                let product: Product
-                if let upc = result.primaryUpc, !upc.isEmpty {
-                    product = try await apiClient.resolveProduct(upc: upc)
-                } else {
-                    product = try await apiClient.resolveProductFromSearch(
-                        deviceName: result.deviceName,
-                        brand: result.brand,
-                        model: result.model
-                    )
-                }
+                let product = try await resolveTappedResult(result)
                 let override: String? = result.source == .generic ? result.deviceName : nil
                 await presentProduct(product, queryOverride: override)
             } catch APIError.notFound {
-                resolveFailureMessage = "Couldn't find a barcode for this product — try scanning it instead."
+                // Even the description-based fallback failed. Usually means
+                // Gemini invented the product entirely; suggest a retry.
+                resolveFailureMessage = "We couldn't pull details for this result. Try a different search term, or scan the barcode directly."
             } catch let apiError as APIError {
                 error = apiError
             } catch {
                 self.error = .unknown(0, error.localizedDescription)
             }
         }
+    }
+
+    /// Resolve a tapped search result to a `Product`. Prefers UPC lookup when
+    /// available; falls back to the description-based endpoint on 404, which
+    /// re-runs a targeted device→UPC derivation on the backend. Gemini often
+    /// returns hallucinated UPCs that fail the UPC path — this fallback lets
+    /// those results still resolve via the device_name/brand/model signal.
+    private func resolveTappedResult(_ result: ProductSearchResult) async throws -> Product {
+        if let upc = result.primaryUpc, !upc.isEmpty {
+            do {
+                return try await apiClient.resolveProduct(upc: upc)
+            } catch APIError.notFound {
+                // UPC path failed — fall through to description-based resolve.
+            }
+        }
+        return try await apiClient.resolveProductFromSearch(
+            deviceName: result.deviceName,
+            brand: result.brand,
+            model: result.model
+        )
     }
 
     private func presentProduct(_ product: Product, queryOverride: String? = nil) async {

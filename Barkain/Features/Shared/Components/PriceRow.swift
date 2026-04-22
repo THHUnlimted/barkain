@@ -132,6 +132,12 @@ struct PriceRow: View {
             Text(formattedPrice(retailerPrice.price))
                 .font(.barkainTitle)
                 .foregroundStyle(Color.barkainPrimary)
+                // Long prices ($2,249.99) were wrapping the trailing "9" to a
+                // second line because the retailer-info column ate the space.
+                // Keep the price on one row and let the font auto-shrink a
+                // bit before trimming.
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
 
             if let originalPrice = retailerPrice.originalPrice,
                retailerPrice.isOnSale {
@@ -139,8 +145,12 @@ struct PriceRow: View {
                     .font(.barkainCaption)
                     .foregroundStyle(Color.barkainOnSurfaceVariant)
                     .strikethrough()
+                    .lineLimit(1)
             }
         }
+        // Win the width negotiation against retailerInfo so the price
+        // block always gets the room it needs.
+        .layoutPriority(1)
     }
 
     // MARK: - Helpers

@@ -171,7 +171,7 @@ struct SearchView: View {
             Task { await vm.onSearchSubmitted(vm.query) }
         }
         .alert(
-            "Can't open this result",
+            "Couldn't open this result",
             isPresented: Binding(
                 get: { vm.resolveFailureMessage != nil },
                 set: { if !$0 { vm.resolveFailureMessage = nil } }

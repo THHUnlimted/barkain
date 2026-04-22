@@ -396,6 +396,21 @@ military and education are mutually exclusive. Different scopes survive the
 dedup, so a Prime Student (`scope='membership_fee'`) card coexists with any
 product-scope Amazon program.
 
+**Brand-alias relevance gate (BE-L2 round 2).** The brand gate in
+`_retailer_covers_product` searches `product.brand + product.name` against
+`BRAND_ALIASES` — a hand-maintained tuple of submarks per brand (`lenovo`:
+ThinkPad/Legion/IdeaPad/Yoga; `asus`: ROG/Zenbook/Vivobook/TUF; `hp`:
+Omen/Pavilion/Spectre/Envy; `apple`: MacBook/iPhone/iPad; etc.). If the
+required brand's aliases match, the retailer passes the gate. If they don't
+AND a competing brand's aliases *do* match (e.g. the product name says
+"Lenovo ThinkPad" but we're gating asus_direct), the gate fails closed. If
+no brand at all is in the haystack (generic "USB-C cable"), it fails open —
+the original behavior preserved for ambiguous products. This is what stops
+a Lenovo ThinkPad search from surfacing Acer/Asus/Razer/Logitech Student
+cards when Gemini returns `brand=null` or `brand="ThinkPad"` (submark).
+`BRAND_ALIASES` must stay in sync with the 12 keys in
+`BRAND_SPECIFIC_RETAILERS`.
+
 ---
 
 ## Expansion Roadmap
