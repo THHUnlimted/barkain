@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-21 (Benefits Expansion Follow-ups — both rounds: BE-L1 membership retired; BE-L2 per-retailer scope dedup + `BRAND_ALIASES` name-gate; BE-L9 iOS scope badge + price/pill layout polish; search `/resolve` → `/resolve-from-search` fallback on Gemini UPC hallucination)
+> Last updated: 2026-04-22 (fb-marketplace-location — `LocationPickerSheet` (CoreLocationUI + CLGeocoder → `[a-z0-9_]` slug), `/stream?fb_location_slug&fb_radius_miles` routed only to fb_marketplace container, cache key gains `:loc:<slug>:r<radius>` + DB-fresh path skipped when location set)
 
 ---
 
@@ -3224,4 +3224,60 @@ POST /api/v1/affiliate/click
 - `activation_skipped` is telemetry only — no dashboard renders it yet.
 - Live smoke on physical device + PR screenshots deferred to post-merge (Mike).
 
+---
+
+### Step fb-marketplace-location — Per-user Facebook Marketplace city + radius (2026-04-22)
+
+**Branch:** `phase-3/fb-marketplace-location` → `main` (PR TBD)
+
+**Motivation.** The `fb_marketplace` container bakes `FB_MARKETPLACE_LOCATION=sanfrancisco` at container start, so every user's Marketplace results came from San Francisco regardless of where they actually live. A Brooklyn user searching for a used couch saw sofas in California. The fix lets the user grant one-shot location (`CoreLocationUI.LocationButton`), we reverse-geocode to an FB-style city slug, persist it locally, and forward `fb_location_slug` + `fb_radius_miles` on the `/stream` call. Only the fb_marketplace container reads them.
+
+**Scope.**
+- iOS — `LocationPreferences` service (`UserDefaults` Codable wrapper, `nonisolated` so SwiftUI view inits can use it as a default arg) + `LocationPickerSheet` (Form-style: CoreLocationUI `LocationButton` → CLGeocoder reverse-geocode → `locality` → `[a-z0-9_]` slug via `LocationPreferences.slugify`; editable TextField safety valve because FB slugs aren't fully normalized — "newyork" not "new_york"). Profile → "The Kennel" gets a new "Marketplace location" row that opens the sheet.
+- Backend — `ContainerExtractRequest` gains `fb_location_slug` (regex-validated `[a-z0-9_]{1,64}`) + `fb_radius_miles` (1–500). `ContainerClient.extract` / `_extract_one` / `extract_all` thread both through, but `extract` sets them to `None` on the payload for every retailer except `fb_marketplace` — so if we ever wire a second location-aware retailer we re-gate in one place.
+- Router — `GET /api/v1/prices/{id}` and `/{id}/stream` gain the two query params with FastAPI-level `Query(..., pattern=...)` / `ge=1 le=500` validation so a bad slug 422s at the boundary instead of landing as a mid-stream SSE error event.
+- Cache — `_cache_key(product_id, query_override, fb_location_slug, fb_radius_miles)` composes a `:loc:<slug>:r<radius>` suffix when location is set. DB-freshness path now skips when `fb_location_slug` is set (previously only skipped when `query_override`) — the prices table has no notion of which city produced a row, so replaying would serve stale fb_marketplace listings.
+- Container — `containers/base/server.py` `ExtractRequest` accepts the two optional fields and exports them as `FB_LOCATION_SLUG` / `FB_RADIUS_MILES` env for the script. `containers/fb_marketplace/extract.sh` reads per-request env first, falls back to the baked `FB_MARKETPLACE_LOCATION` slug, and appends `&radius=N` to the URL when the caller supplied one.
+
+**Design decisions.**
+- **Slug, not lat/long.** FB Marketplace's web URL is slug-shaped (`/marketplace/brooklyn/search`). Raw `?latitude=...&longitude=...` query params on the web surface don't change results — only the slug does. iOS still captures lat/long locally (for the CoreLocation flow) but the wire protocol only carries `fb_location_slug` + `fb_radius_miles`.
+- **Fail-open on no preference.** When the user never opens the sheet, iOS sends neither param, the router passes `None` through, and the fb_marketplace container falls back to its env-default slug. No behavior change for existing users.
+- **Location gate at the `extract` boundary, not at every callsite.** `ContainerClient.extract` nulls the fields for every non-fb_marketplace retailer regardless of what the caller passed. That way the service and router layers don't each have to remember which retailers care — one retailer ID check, one place.
+- **`:loc:…` suffix on ALL retailers' cache, not just fb_marketplace's.** The aggregate price comparison is a single cached document, so even though only fb_marketplace's row varies by location, the bucket has to account for it. Over-invalidation is the cost; correctness is the benefit.
+- **iOS `nonisolated final class`.** Project defaults every type to `@MainActor` isolation. `LocationPreferences` follows `APIClient`'s pattern (`nonisolated final class … @unchecked Sendable`) so it can be used as a `View.init` default argument (which runs in nonisolated context) without a hop.
+- **No stored-proc for slug normalization on backend.** iOS does lowercase + strip non-alphanumeric client-side. If a user's city's real FB slug is unusual ("new_york" vs "newyork"), the TextField lets them override — rather than shipping a 30k-entry city → slug dictionary on the container.
+
+**Files changed.**
+```
+backend/modules/m2_prices/schemas.py                   # fb_location_slug + fb_radius_miles fields + validators
+backend/modules/m2_prices/container_client.py          # thread through + gate at extract boundary
+backend/modules/m2_prices/service.py                   # get_prices/stream_prices kwargs + _cache_key + DB-fresh guard
+backend/modules/m2_prices/router.py                    # Query(pattern=…, ge=…, le=…) on both endpoints
+containers/base/server.py                              # ExtractRequest fields + FB_LOCATION_SLUG / FB_RADIUS_MILES env
+containers/fb_marketplace/extract.sh                   # Per-request env override + &radius=N URL suffix
+Barkain/Services/Location/LocationPreferences.swift    # NEW — nonisolated Codable UserDefaults wrapper
+Barkain/Features/Profile/LocationPickerSheet.swift     # NEW — CoreLocationUI + CLGeocoder + radius picker
+Barkain/Features/Profile/ProfileView.swift             # "Marketplace location" row opening the sheet
+Barkain/Services/Networking/Endpoints.swift            # streamPrices case + URLQueryItem builder
+Barkain/Services/Networking/APIClient.swift            # Protocol + impl signature extension
+Barkain/Features/Shared/Previews/BarePreviewAPIClient.swift   # Matching preview stub
+Barkain/Features/Scanner/ScannerViewModel.swift        # Read LocationPreferences, forward to streamPrices
+Info.plist                                             # NSLocationWhenInUseUsageDescription
+BarkainTests/Helpers/MockAPIClient.swift               # New captured-args fields (fb* last-slug / radius)
+BarkainTests/Services/Location/LocationPreferencesTests.swift  # NEW — 7 round-trip + slugify + radius tests
+BarkainTests/Services/Networking/EndpointsLocationTests.swift  # NEW — 5 URL-builder tests
+BarkainTests/Features/Scanner/ScannerViewModelTests.swift       # +2 (no-location passes nil; saved location forwards)
+backend/tests/modules/test_container_client.py         # +4 (schema validators, fb-only gate, cache-key suffix)
+backend/tests/modules/test_m2_prices_stream.py         # +5 (forward-both, scoped key, cross-city isolation, endpoint params, bad-slug 422)
+```
+
+**Tests.**
+- **Backend +9.** 4 in `test_container_client.py` (slug/radius Pydantic validators, `extract` location-field filter, `_cache_key` suffix composition) + 5 in `test_m2_prices_stream.py` (service threads kwargs, scoped cache key, different slugs ⇒ different buckets, router accepts params, router 422 on bad slug before SSE opens). Total: 529 passed / 0 failed / 7 skipped (from 520/0/7). `ruff check` clean.
+- **iOS +14.** `LocationPreferencesTests.swift` — 7 (round-trip, overwrite, clear, 4× slugify + radius options). `EndpointsLocationTests.swift` — 5 (no-params-when-unset, both-params-when-set, slug-only, empty-slug-drops, coexistence with force/override). `ScannerViewModelTests.swift` +2 (saved-location forwards; no-saved sends nil). Total: 138 passed / 0 failed (from 124/0). `xcodebuild build-for-testing` + `test_sim` clean; only pre-existing unrelated warnings remain.
+
+**Known limits.**
+- Slug list isn't exhaustive — cities whose FB slug doesn't match `lowercased(locality).filter(alphanumeric)` (rare — "stlouis" works, "newyork" works, edge cases like old/new/west prefixes might not) need the user to type a slug in the TextField. Geocoder happy path covers most of the US.
+- No bulk migration of users to their real city — current users without a saved preference keep seeing San Francisco until they open the sheet and grant permission. Intentional.
+- Container-side isn't fully tested against live FB; the URL-building logic (append `&radius=N`, use slug path segment) matches FB's in-app behavior but smoke testing against production FB was not performed (EC2 redeploy of fb_marketplace image pending with credentials rotation — SP-decodo-scoping resolved but Decodo/Firecrawl key rotation still open on Mike).
+- iOS sheet doesn't yet show "Location denied — go to Settings" as a deep-linked button. Sheet shows an inline error message and lets the user type a slug manually as a fallback.
 

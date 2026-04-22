@@ -27,7 +27,20 @@ JS_FILE="/tmp/extract-$$.js"
 RETRY_MAX=2
 CHROMIUM="${CHROMIUM_PATH:-/usr/bin/chromium}"
 PROXY_RELAY_PORT=18080
-FB_LOCATION="${FB_MARKETPLACE_LOCATION:-sanfrancisco}"
+
+# Location resolution order:
+#   1. Per-request override from the backend (FB_LOCATION_SLUG /
+#      FB_RADIUS_MILES in the process env — set by containers/base/server.py
+#      when the iOS caller supplied user coordinates).
+#   2. Container-wide env default (FB_MARKETPLACE_LOCATION — baked at
+#      container start, defaults to sanfrancisco).
+# When FB_LOCATION_SLUG arrives empty (user has no preference saved) we
+# fall back to the env default, so cold-start behaviour is unchanged.
+FB_LOCATION="${FB_LOCATION_SLUG:-}"
+if [ -z "$FB_LOCATION" ]; then
+  FB_LOCATION="${FB_MARKETPLACE_LOCATION:-sanfrancisco}"
+fi
+FB_RADIUS="${FB_RADIUS_MILES:-}"
 
 # Disable image loading by default — Marketplace DOM selectors only need
 # the <img src> attribute string (not the bytes), and images are ~70% of
@@ -92,9 +105,15 @@ fi
 pkill -f "chromium.*--remote-debugging-port=$CDP_PORT" 2>/dev/null || true
 sleep 1
 
-# Build search URL with location slug
+# Build search URL with location slug. When the user supplied a radius
+# through FB_RADIUS_MILES we append &radius=N — FB Marketplace honors it
+# on the search URL the same way the in-app radius picker does.
 ENCODED_QUERY=$(echo "$QUERY" | sed 's/ /+/g')
 SEARCH_URL="https://www.facebook.com/marketplace/${FB_LOCATION}/search/?query=${ENCODED_QUERY}&exact=false"
+if [ -n "$FB_RADIUS" ]; then
+  SEARCH_URL="${SEARCH_URL}&radius=${FB_RADIUS}"
+fi
+log "fb_marketplace location=${FB_LOCATION} radius=${FB_RADIUS:-default}"
 
 # Retry loop
 attempt=0

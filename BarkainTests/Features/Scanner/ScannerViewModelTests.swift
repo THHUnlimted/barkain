@@ -559,6 +559,72 @@ final class ScannerViewModelTests: XCTestCase {
         XCTAssertEqual(gate.dailyScanCount, 1)
     }
 
+    // MARK: - fb-marketplace-location
+
+    func test_fetchPrices_noStoredLocation_passesNilSlugAndRadius() async {
+        // Given a scan with no saved LocationPreferences.
+        let defaults = makeIsolatedDefaults()
+        let locationPrefs = LocationPreferences(defaults: defaults)
+        let vm = ScannerViewModel(
+            apiClient: mockClient,
+            featureGate: FeatureGateService(
+                proTierProvider: { false },
+                defaults: defaults,
+                clock: Date.init
+            ),
+            locationPreferences: locationPrefs
+        )
+
+        // When the price stream fires.
+        await vm.handleBarcodeScan(upc: "012345678901")
+
+        // Then APIClient saw nil slug / nil radius — backend falls back
+        // to the container's env-default sanfrancisco bucket.
+        XCTAssertGreaterThanOrEqual(mockClient.streamPricesCallCount, 1)
+        XCTAssertNil(mockClient.streamPricesLastFbLocationSlug)
+        XCTAssertNil(mockClient.streamPricesLastFbRadiusMiles)
+    }
+
+    func test_fetchPrices_withStoredLocation_forwardsSlugAndRadius() async {
+        // Given a saved location.
+        let defaults = makeIsolatedDefaults()
+        let locationPrefs = LocationPreferences(defaults: defaults)
+        locationPrefs.save(
+            LocationPreferences.Stored(
+                latitude: 40.6782,
+                longitude: -73.9442,
+                displayLabel: "Brooklyn, NY",
+                fbLocationSlug: "brooklyn",
+                radiusMiles: 25
+            )
+        )
+        let vm = ScannerViewModel(
+            apiClient: mockClient,
+            featureGate: FeatureGateService(
+                proTierProvider: { false },
+                defaults: defaults,
+                clock: Date.init
+            ),
+            locationPreferences: locationPrefs
+        )
+
+        // When the stream fires.
+        await vm.handleBarcodeScan(upc: "012345678901")
+
+        // Then slug + radius reach the APIClient.
+        XCTAssertEqual(mockClient.streamPricesLastFbLocationSlug, "brooklyn")
+        XCTAssertEqual(mockClient.streamPricesLastFbRadiusMiles, 25)
+    }
+
+    // MARK: - Helpers
+
+    private func makeIsolatedDefaults() -> UserDefaults {
+        let suite = "test.scanner_vm_loc.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        return defaults
+    }
+
     // MARK: - Step 2g: resolveAffiliateURL
 
     func test_resolveAffiliateURL_returnsTaggedURLOnSuccess() async {

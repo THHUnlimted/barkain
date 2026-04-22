@@ -271,16 +271,22 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     }
 
     var streamPricesLastQueryOverride: String?
+    var streamPricesLastFbLocationSlug: String?
+    var streamPricesLastFbRadiusMiles: Int?
 
     func streamPrices(
         productId: UUID,
         forceRefresh: Bool,
-        queryOverride: String?
+        queryOverride: String?,
+        fbLocationSlug: String?,
+        fbRadiusMiles: Int?
     ) -> AsyncThrowingStream<RetailerStreamEvent, Error> {
         streamPricesCallCount += 1
         streamPricesLastProductId = productId
         streamPricesLastForceRefresh = forceRefresh
         streamPricesLastQueryOverride = queryOverride
+        streamPricesLastFbLocationSlug = fbLocationSlug
+        streamPricesLastFbRadiusMiles = fbRadiusMiles
 
         let events = streamPricesEvents
         let delay = streamPricesPerEventDelay

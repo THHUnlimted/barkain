@@ -11,5 +11,7 @@
 	<string>$(API_BASE_URL)</string>
 	<key>REVENUECAT_API_KEY</key>
 	<string>$(REVENUECAT_API_KEY)</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Barkain uses your location to find Facebook Marketplace deals near you. You can clear or change this any time in Profile.</string>
 </dict>
 </plist>

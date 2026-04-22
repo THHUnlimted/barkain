@@ -97,6 +97,10 @@ class _FakeContainerClient:
         self._responses = responses
         self._delays_ms = delays_ms or {}
         self.extract_one_calls: list[str] = []
+        # Captured per-retailer location kwargs — keyed by retailer_id.
+        # Added for the fb-marketplace-location step so tests can assert
+        # the service forwarded slug/radius only to fb_marketplace.
+        self.extract_one_kwargs: dict[str, dict] = {}
 
     async def _extract_one(
         self,
@@ -105,8 +109,14 @@ class _FakeContainerClient:
         product_name: str | None,
         upc: str | None,
         max_listings: int,
+        fb_location_slug: str | None = None,
+        fb_radius_miles: int | None = None,
     ) -> ContainerResponse:
         self.extract_one_calls.append(retailer_id)
+        self.extract_one_kwargs[retailer_id] = {
+            "fb_location_slug": fb_location_slug,
+            "fb_radius_miles": fb_radius_miles,
+        }
         delay_ms = self._delays_ms.get(retailer_id, 0)
         if delay_ms:
             await asyncio.sleep(delay_ms / 1000)
@@ -531,3 +541,134 @@ async def test_stream_prices_unknown_product_raises(db_session, fake_redis):
         # Consuming the first item triggers validation.
         async for _ in service.stream_prices(uuid.uuid4()):
             break
+
+
+# MARK: - fb_marketplace per-user location (fb-marketplace-location)
+
+
+async def test_stream_forwards_fb_location_to_every_retailer_fake(db_session, fake_redis):
+    """stream_prices threads fb_location_slug / fb_radius_miles into _extract_one.
+
+    The ContainerClient layer is responsible for gating which retailers
+    actually see the slug (fb_marketplace only — asserted separately in
+    test_container_client.py). At the service layer we just verify the
+    kwargs are forwarded, not dropped.
+    """
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon", "fb_marketplace"])
+
+    fake = _FakeContainerClient(
+        responses={
+            "amazon": _success_response("amazon"),
+            "fb_marketplace": _success_response("fb_marketplace"),
+        }
+    )
+    service = PriceAggregationService(db=db_session, redis=fake_redis, container_client=fake)
+
+    async for _ in service.stream_prices(
+        product.id, fb_location_slug="brooklyn", fb_radius_miles=25
+    ):
+        pass
+
+    assert set(fake.extract_one_calls) == {"amazon", "fb_marketplace"}
+    for rid, kwargs in fake.extract_one_kwargs.items():
+        assert kwargs["fb_location_slug"] == "brooklyn", rid
+        assert kwargs["fb_radius_miles"] == 25, rid
+
+
+async def test_stream_location_writes_scoped_cache_key(db_session, fake_redis):
+    """With a location set, cache bucket is `…:loc:<slug>:r<radius>`, not the bare key."""
+    from modules.m2_prices.service import REDIS_KEY_PREFIX
+
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["fb_marketplace"])
+
+    fake = _FakeContainerClient(responses={"fb_marketplace": _success_response("fb_marketplace")})
+    service = PriceAggregationService(db=db_session, redis=fake_redis, container_client=fake)
+
+    async for _ in service.stream_prices(
+        product.id, fb_location_slug="brooklyn", fb_radius_miles=25
+    ):
+        pass
+
+    bare_key = f"{REDIS_KEY_PREFIX}{product.id}"
+    scoped_key = f"{REDIS_KEY_PREFIX}{product.id}:loc:brooklyn:r25"
+
+    assert await fake_redis.get(scoped_key) is not None
+    # Bare-product key MUST stay empty so another user without a preference
+    # doesn't pick up Brooklyn's fb_marketplace listings.
+    assert await fake_redis.get(bare_key) is None
+
+
+async def test_stream_location_different_slugs_use_different_cache_buckets(
+    db_session, fake_redis
+):
+    """Two users, two slugs, two buckets — no cross-contamination."""
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["fb_marketplace"])
+
+    fake_a = _FakeContainerClient(
+        responses={"fb_marketplace": _success_response("fb_marketplace", 100.0)}
+    )
+    service_a = PriceAggregationService(db=db_session, redis=fake_redis, container_client=fake_a)
+    async for _ in service_a.stream_prices(
+        product.id, fb_location_slug="brooklyn", fb_radius_miles=25
+    ):
+        pass
+
+    # Second user with different city must dispatch fresh (no cross-cache hit).
+    fake_b = _FakeContainerClient(
+        responses={"fb_marketplace": _success_response("fb_marketplace", 200.0)}
+    )
+    service_b = PriceAggregationService(db=db_session, redis=fake_redis, container_client=fake_b)
+    async for _ in service_b.stream_prices(
+        product.id, fb_location_slug="austin", fb_radius_miles=50
+    ):
+        pass
+
+    assert fake_b.extract_one_calls == ["fb_marketplace"]
+
+
+async def test_stream_endpoint_accepts_location_query_params(client, db_session):
+    """Router accepts fb_location_slug + fb_radius_miles and opens the stream."""
+    from unittest.mock import patch
+
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["fb_marketplace"])
+
+    fake = _FakeContainerClient(responses={"fb_marketplace": _success_response("fb_marketplace")})
+
+    with patch("modules.m2_prices.service.ContainerClient", return_value=fake):
+        async with client.stream(
+            "GET",
+            f"/api/v1/prices/{product.id}/stream",
+            params={"fb_location_slug": "brooklyn", "fb_radius_miles": 25},
+        ) as response:
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("text/event-stream")
+            async for _ in response.aiter_bytes():
+                pass
+
+    # The router forwarded the slug into _extract_one for fb_marketplace.
+    assert fake.extract_one_kwargs["fb_marketplace"] == {
+        "fb_location_slug": "brooklyn",
+        "fb_radius_miles": 25,
+    }
+
+
+async def test_stream_endpoint_422_on_bad_location_slug(client, db_session):
+    """Non-[a-z0-9_] slug must 422 at the router boundary before SSE opens.
+
+    Surfacing the error as a normal HTTP 422 (instead of a mid-stream
+    SSE event the client has to parse) is important for iOS — the stream
+    consumer expects events, not validation failures.
+    """
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["fb_marketplace"])
+
+    resp = await client.get(
+        f"/api/v1/prices/{product.id}/stream",
+        params={"fb_location_slug": "not a slug"},
+    )
+    assert resp.status_code == 422
+    assert not resp.headers.get("content-type", "").startswith("text/event-stream")

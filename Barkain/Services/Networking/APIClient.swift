@@ -12,7 +12,13 @@ protocol APIClientProtocol: Sendable {
     func resolveProductFromSearch(deviceName: String, brand: String?, model: String?) async throws -> Product
     func searchProducts(query: String, maxResults: Int, forceGemini: Bool) async throws -> ProductSearchResponse
     func getPrices(productId: UUID, forceRefresh: Bool) async throws -> PriceComparison
-    func streamPrices(productId: UUID, forceRefresh: Bool, queryOverride: String?) -> AsyncThrowingStream<RetailerStreamEvent, Error>
+    func streamPrices(
+        productId: UUID,
+        forceRefresh: Bool,
+        queryOverride: String?,
+        fbLocationSlug: String?,
+        fbRadiusMiles: Int?
+    ) -> AsyncThrowingStream<RetailerStreamEvent, Error>
     func getIdentityProfile() async throws -> IdentityProfile
     func updateIdentityProfile(_ request: IdentityProfileRequest) async throws -> IdentityProfile
     func getEligibleDiscounts(productId: UUID?) async throws -> IdentityDiscountsResponse
@@ -249,7 +255,9 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
     func streamPrices(
         productId: UUID,
         forceRefresh: Bool = false,
-        queryOverride: String? = nil
+        queryOverride: String? = nil,
+        fbLocationSlug: String? = nil,
+        fbRadiusMiles: Int? = nil
     ) -> AsyncThrowingStream<RetailerStreamEvent, Error> {
         // Capture the parts the background Task needs up-front — `self` is
         // @unchecked Sendable but the closure body only needs these immutables.
@@ -263,7 +271,9 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
                     let url = Endpoint.streamPrices(
                         productId: productId,
                         forceRefresh: forceRefresh,
-                        queryOverride: queryOverride
+                        queryOverride: queryOverride,
+                        fbLocationSlug: fbLocationSlug,
+                        fbRadiusMiles: fbRadiusMiles
                     ).url(base: baseURL)
                     var urlRequest = URLRequest(url: url)
                     urlRequest.httpMethod = "GET"
