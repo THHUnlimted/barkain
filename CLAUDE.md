@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** 2026-04-21 (v5.13 — BE follow-ups r2: `BRAND_ALIASES` name-gate, price/pill layout polish, `/resolve-from-search` fallback on Gemini UPC hallucination)
+> **Last updated:** 2026-04-22 (v5.14 — fb-marketplace-location: `LocationPickerSheet` + per-city `/stream` params + `:loc:…` cache bucket)
 
 ---
 
@@ -266,8 +266,9 @@ Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; 
 | 3e | M6 Recommendation Engine (deterministic, no LLM). `POST /api/v1/recommend` stacks identity + card + portal via `asyncio.gather`, p95 < 150 ms. Brand-direct callout ≥15 % `*_direct`. iOS hero gated on 3 settle flags; silent fallback on failure. `scripts/seed_portal_bonuses_demo.py` (3g replaces). M6 reclassified AI → T | +14 | +8 / +1 UI | #41 |
 | 3f (+hotfix) | Purchase Interstitial + Activation Reminder. `PurchaseInterstitialSheet` from hero CTA + row taps. `POST /affiliate/click` gains `activation_skipped` (migration 0008). Pre-fixes: `BarePreviewAPIClient` + `_db_url.py` + `without_demo_mode`. Hotfix: per-retailer `estimated_savings` w/ highest-scraped fallback; migration 0009 adds `discount_programs.scope`; Prime Student → `membership_fee` | +7 | +9 | #42 |
 | Benefits Expansion (+follow-ups) | +10 student-tech + Prime YA (`scope='membership_fee'`), +4 `*_direct`, `is_young_adult` axis (0010). 52→63 programs / 8→12 retailers / 9→10 eligibility types. Follow-ups: `program_type='membership'` retired; `_dedup_best_per_retailer_scope` + `BRAND_ALIASES` name-gate (ThinkPad hides Asus/Razer); iOS `scopeBadge` + price `lineLimit` + pills `VStack`; `/resolve` → `/resolve-from-search` on Gemini UPC hallucination | +10 | +7 | #45, #46 |
+| fb-marketplace-location | iOS `LocationPickerSheet` (CoreLocationUI + CLGeocoder→slug + 5/10/25/50/100 mi). `/stream?fb_location_slug&fb_radius_miles` → fb_marketplace container only; cache key `:loc:<slug>:r<radius>` + DB-fresh skipped when location set so cross-city users can't collide | +9 | +14 | TBD |
 
-**Test totals:** 520 backend + 124 iOS unit + 6 iOS UI. `ruff check` clean. `xcodebuild` clean.
+**Test totals:** 529 backend + 138 iOS unit + 6 iOS UI. `ruff check` clean. `xcodebuild` clean.
 
 **Migrations:** 0001 (initial, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert + failure counter) → 0006 (`chk_subscription_tier` CHECK) → 0007 (pg_trgm + trgm GIN idx) → 0008 (`affiliate_clicks.metadata` JSONB) → 0009 (`discount_programs.scope` — product / membership_fee / shipping) → 0010 (`is_young_adult` on `user_discount_profiles`). Drift marker in `tests/conftest.py::_ensure_schema` now checks `user_discount_profiles.is_young_adult`.
 
@@ -286,14 +287,13 @@ Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; 
 | 2i-d-L4 | MEDIUM | Watchdog heal at `workers/watchdog.py:251` passes `page_html=error_details` — Opus sees error string, not real DOM. Needs browser fetch in heal path | Phase 3 |
 | v4.0-L2 | MEDIUM | Sub-variants without digits (Galaxy Buds Pro 1st gen) still pass token overlap — needs richer Gemini output | Phase 3 |
 | 2h-ops | LOW | SQS queues have no DLQ wiring; per-portal fan-out deferred | Phase 3 ops |
-| SP-decodo-scoping | RESOLVED | fb_marketplace global proxy leak; fixed via scoped routing + telemetry kill flags. `docs/SCRAPING_AGENT_ARCHITECTURE.md` §C.11 | Mike (rotate Decodo/Firecrawl creds) |
 
 ---
 
 ## What's Next
 
 1. **Phase 2 CLOSED** — `v0.2.0` tagged (2026-04-16). Outstanding: revoke leaked PAT `gho_UUsp9ML7…` in GitHub UI (SP-L1-b, Mike).
-2. **Phase 3:** 3a–3d ✅, 3d-noise-filter ✅ (#36), ui-refresh-v1 ✅ (#37), ui-refresh-v2 ✅ (#38), ui-refresh-v2-fix ✅ (#39, #40), 3e M6 Recommendation Engine ✅ (#41), **3f Purchase Interstitial + Activation Reminder ✅**. Next: 3g portal live scrape + guided flow, 3h Claude Vision image scan, 3i receipts, 3k savings, 3l coupons, 3m hardening + `v0.3.0`. 3j (identity stacking) folded into 3e brand-direct callout. See `docs/CHANGELOG.md` + `docs/PHASES.md`.
+2. **Phase 3:** 3a–3d + 3d-noise-filter ✅ (#32–#36), ui-refresh-v1/v2/v2-fix ✅ (#37–#40), 3e (#41), 3f (#42), Benefits Expansion (#45–#47), fb-marketplace-location ✅. Next: 3g portal live scrape, 3h Claude Vision, 3i receipts, 3k savings, 3l coupons, 3m hardening + `v0.3.0`. 3j folded into 3e. See `docs/CHANGELOG.md` + `docs/PHASES.md`.
 3. **Phase 4 — Production Optimization:** ~~Best Buy~~ (done via demo-prep bundle, PR #30), Keepa API adapter, App Store submission, Sentry error tracking
 4. **Phase 5 — Growth:** Push notifications (APNs), web dashboard, Android (KMP)
 

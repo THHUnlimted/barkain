@@ -62,6 +62,7 @@ final class ScannerViewModel {
 
     private let apiClient: any APIClientProtocol
     private let featureGate: FeatureGateService
+    private let locationPreferences: LocationPreferences
 
     /// Step 3f: PriceComparisonView's PurchaseInterstitialSheet needs the
     /// same client for its affiliate-click call. Exposing this avoids
@@ -81,10 +82,12 @@ final class ScannerViewModel {
     /// gate inside the `init` body sidesteps that.
     init(
         apiClient: any APIClientProtocol,
-        featureGate: FeatureGateService? = nil
+        featureGate: FeatureGateService? = nil,
+        locationPreferences: LocationPreferences = LocationPreferences()
     ) {
         self.apiClient = apiClient
         self.featureGate = featureGate ?? FeatureGateService(proTierProvider: { false })
+        self.locationPreferences = locationPreferences
     }
 
     // MARK: - Actions
@@ -146,14 +149,22 @@ final class ScannerViewModel {
         // Step 2c: consume the SSE stream. Each retailer_result event mutates
         // `priceComparison` in place (lazy-seeded on first event). On stream
         // failure, fall back to the batch endpoint.
-        sseLog.info("fetchPrices: starting stream for product \(product.name, privacy: .public) forceRefresh=\(forceRefresh, privacy: .public) queryOverride=\(queryOverride ?? "<none>", privacy: .public)")
+        //
+        // Pull the user's FB Marketplace location (if they've set one) and
+        // forward the slug + radius as query params. When absent, the
+        // backend skips the per-location cache key and the fb_marketplace
+        // container falls back to its env-default slug (sanfrancisco).
+        let storedLocation = locationPreferences.current()
+        sseLog.info("fetchPrices: starting stream for product \(product.name, privacy: .public) forceRefresh=\(forceRefresh, privacy: .public) queryOverride=\(queryOverride ?? "<none>", privacy: .public) fbSlug=\(storedLocation?.fbLocationSlug ?? "<default>", privacy: .public)")
         var sawDone = false
         var sawAnyEvent = false
         do {
             for try await event in apiClient.streamPrices(
                 productId: product.id,
                 forceRefresh: forceRefresh,
-                queryOverride: queryOverride
+                queryOverride: queryOverride,
+                fbLocationSlug: storedLocation?.fbLocationSlug,
+                fbRadiusMiles: storedLocation?.radiusMiles
             ) {
                 sawAnyEvent = true
                 sseLog.info("fetchPrices: received event \(String(describing: event), privacy: .public)")

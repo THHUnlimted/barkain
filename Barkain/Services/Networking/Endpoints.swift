@@ -16,7 +16,13 @@ nonisolated enum Endpoint {
     case resolveFromSearch(deviceName: String, brand: String?, model: String?)
     case searchProducts(query: String, maxResults: Int, forceGemini: Bool)
     case getPrices(productId: UUID, forceRefresh: Bool = false)
-    case streamPrices(productId: UUID, forceRefresh: Bool = false, queryOverride: String? = nil)
+    case streamPrices(
+        productId: UUID,
+        forceRefresh: Bool = false,
+        queryOverride: String? = nil,
+        fbLocationSlug: String? = nil,
+        fbRadiusMiles: Int? = nil
+    )
     case health
     case getIdentityProfile
     case updateIdentityProfile(IdentityProfileRequest)
@@ -49,7 +55,7 @@ nonisolated enum Endpoint {
             return "/api/v1/products/search"
         case .getPrices(let productId, _):
             return "/api/v1/prices/\(productId.uuidString)"
-        case .streamPrices(let productId, _, _):
+        case .streamPrices(let productId, _, _, _, _):
             return "/api/v1/prices/\(productId.uuidString)/stream"
         case .health:
             return "/api/v1/health"
@@ -100,11 +106,17 @@ nonisolated enum Endpoint {
         switch self {
         case .getPrices(_, true):
             return [URLQueryItem(name: "force_refresh", value: "true")]
-        case .streamPrices(_, let force, let override):
+        case .streamPrices(_, let force, let override, let slug, let radius):
             var items: [URLQueryItem] = []
             if force { items.append(URLQueryItem(name: "force_refresh", value: "true")) }
             if let override, !override.isEmpty {
                 items.append(URLQueryItem(name: "query", value: override))
+            }
+            if let slug, !slug.isEmpty {
+                items.append(URLQueryItem(name: "fb_location_slug", value: slug))
+            }
+            if let radius {
+                items.append(URLQueryItem(name: "fb_radius_miles", value: String(radius)))
             }
             return items.isEmpty ? nil : items
         case .getEligibleDiscounts(let productId):

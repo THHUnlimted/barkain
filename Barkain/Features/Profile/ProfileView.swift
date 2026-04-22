@@ -14,6 +14,8 @@ struct ProfileView: View {
     @State private var showEditSheet = false
     @State private var showCardSheet = false
     @State private var showPaywall = false
+    @State private var showLocationSheet = false
+    @State private var savedLocation: LocationPreferences.Stored?
 
     @Environment(SubscriptionService.self) private var subscription
     @Environment(FeatureGateService.self) private var featureGate
@@ -22,11 +24,16 @@ struct ProfileView: View {
     private var hasCompletedOnboarding: Bool = false
 
     private let apiClient: APIClientProtocol
+    private let locationPreferences: LocationPreferences
 
     // MARK: - Init
 
-    init(apiClient: APIClientProtocol = APIClient()) {
+    init(
+        apiClient: APIClientProtocol = APIClient(),
+        locationPreferences: LocationPreferences = LocationPreferences()
+    ) {
         self.apiClient = apiClient
+        self.locationPreferences = locationPreferences
     }
 
     // MARK: - Body
@@ -40,6 +47,7 @@ struct ProfileView: View {
                 await loadProfile()
                 await loadCards()
                 await loadAffiliateStats()
+                savedLocation = locationPreferences.current()
             }
             .sheet(isPresented: $showEditSheet, onDismiss: {
                 Task { await loadProfile() }
@@ -60,6 +68,11 @@ struct ProfileView: View {
             // Step 2f: paywall sheet for the "Upgrade to Pro" button below.
             .sheet(isPresented: $showPaywall) {
                 PaywallHost()
+            }
+            .sheet(isPresented: $showLocationSheet, onDismiss: {
+                savedLocation = locationPreferences.current()
+            }) {
+                LocationPickerSheet(preferences: locationPreferences)
             }
     }
 
@@ -86,6 +99,7 @@ struct ProfileView: View {
                     scentTrailsCard
                     emptyProfileCTA
                     subscriptionSection
+                    marketplaceLocationSection
                     cardsSection
                 }
                 .padding(Spacing.lg)
@@ -248,6 +262,52 @@ struct ProfileView: View {
         .barkainShadowSoft()
     }
 
+    // MARK: - Marketplace Location (fb-marketplace-location)
+    //
+    // Tap-through to `LocationPickerSheet`. Shows the persisted display
+    // label + radius when set, or a "Not set" hint that explains what
+    // the default (sanfrancisco) means. The sheet owns all permission
+    // plumbing — this row is just an entry point.
+
+    private var marketplaceLocationSection: some View {
+        Button {
+            showLocationSheet = true
+        } label: {
+            HStack(spacing: Spacing.sm) {
+                Image(systemName: "mappin.and.ellipse")
+                    .font(.title3)
+                    .foregroundStyle(Color.barkainPrimary)
+                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                    Text("Marketplace location")
+                        .font(.barkainHeadline)
+                        .foregroundStyle(Color.barkainOnSurface)
+                    Text(marketplaceLocationSubtitle)
+                        .font(.barkainCaption)
+                        .foregroundStyle(Color.barkainOnSurfaceVariant)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(Color.barkainOnSurfaceVariant)
+            }
+            .padding(Spacing.lg)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                    .fill(Color.barkainSurfaceContainerLowest)
+            )
+            .barkainShadowSoft()
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var marketplaceLocationSubtitle: String {
+        if let stored = savedLocation {
+            return "\(stored.displayLabel) · \(stored.radiusMiles) mi"
+        }
+        return "Defaults to San Francisco. Tap to set your own city for Facebook Marketplace."
+    }
+
     private var tierBadge: some View {
         Text(subscription.isProUser ? "Barkain Pro" : "Free Plan")
             .font(.barkainCaption.weight(.bold))
@@ -272,6 +332,8 @@ struct ProfileView: View {
                 scentTrailsCard
 
                 subscriptionSection
+
+                marketplaceLocationSection
 
                 if !activeGroupChips(profile).isEmpty {
                     chipsSection(

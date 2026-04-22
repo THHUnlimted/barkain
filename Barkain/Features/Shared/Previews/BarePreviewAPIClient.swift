@@ -50,7 +50,9 @@ class BarePreviewAPIClient: APIClientProtocol, @unchecked Sendable {
     func streamPrices(
         productId: UUID,
         forceRefresh: Bool,
-        queryOverride: String?
+        queryOverride: String?,
+        fbLocationSlug: String?,
+        fbRadiusMiles: Int?
     ) -> AsyncThrowingStream<RetailerStreamEvent, Error> {
         AsyncThrowingStream { $0.finish() }
     }
