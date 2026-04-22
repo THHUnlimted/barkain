@@ -30,7 +30,7 @@ final class LocationPreferencesTests: XCTestCase {
             latitude: 40.6782,
             longitude: -73.9442,
             displayLabel: "Brooklyn, NY",
-            fbLocationSlug: "brooklyn",
+            fbLocationId: "112111905481230",
             radiusMiles: 25
         )
         prefs.save(stored)
@@ -46,7 +46,7 @@ final class LocationPreferencesTests: XCTestCase {
                 latitude: 40.6782,
                 longitude: -73.9442,
                 displayLabel: "Brooklyn, NY",
-                fbLocationSlug: "brooklyn",
+                fbLocationId: "112111905481230",
                 radiusMiles: 25
             )
         )
@@ -55,11 +55,11 @@ final class LocationPreferencesTests: XCTestCase {
                 latitude: 30.2672,
                 longitude: -97.7431,
                 displayLabel: "Austin, TX",
-                fbLocationSlug: "austin",
+                fbLocationId: "112782425413239",
                 radiusMiles: 50
             )
         )
-        XCTAssertEqual(prefs.current()?.fbLocationSlug, "austin")
+        XCTAssertEqual(prefs.current()?.fbLocationId, "112782425413239")
         XCTAssertEqual(prefs.current()?.radiusMiles, 50)
     }
 
@@ -71,7 +71,7 @@ final class LocationPreferencesTests: XCTestCase {
                 latitude: 40.6782,
                 longitude: -73.9442,
                 displayLabel: "Brooklyn, NY",
-                fbLocationSlug: "brooklyn",
+                fbLocationId: "112111905481230",
                 radiusMiles: 25
             )
         )
@@ -80,17 +80,31 @@ final class LocationPreferencesTests: XCTestCase {
         XCTAssertNil(defaults.data(forKey: LocationPreferences.storageKey))
     }
 
-    // MARK: - Slugify
+    // MARK: - Schema
 
-    func test_slugifyLowercasesAndStripsNonAlphanumeric() {
-        XCTAssertEqual(LocationPreferences.slugify("Brooklyn"), "brooklyn")
-        XCTAssertEqual(LocationPreferences.slugify("San Francisco"), "sanfrancisco")
-        XCTAssertEqual(LocationPreferences.slugify("St. Louis"), "stlouis")
-        XCTAssertEqual(LocationPreferences.slugify("New York City"), "newyorkcity")
+    func test_storageKeyIsV2() {
+        // V1 held the old slug-based schema. Bumping to v2 means old prefs
+        // are ignored on read — users re-pick their location once, then
+        // never again. Guard against an accidental revert to v1.
+        XCTAssertEqual(
+            LocationPreferences.storageKey,
+            "barkain.fbMarketplaceLocation.v2"
+        )
     }
 
-    func test_slugifyReturnsEmptyForPunctuationOnly() {
-        XCTAssertEqual(LocationPreferences.slugify("-..."), "")
+    func test_storedSupportsNilCoordinates() {
+        // Coordinates are optional — a user who denies CoreLocation or
+        // enters a city manually can still have a resolved FB ID.
+        let prefs = LocationPreferences(defaults: makeIsolatedDefaults())
+        let stored = LocationPreferences.Stored(
+            latitude: nil,
+            longitude: nil,
+            displayLabel: "Brooklyn, NY",
+            fbLocationId: "112111905481230",
+            radiusMiles: 25
+        )
+        prefs.save(stored)
+        XCTAssertEqual(prefs.current(), stored)
     }
 
     // MARK: - Radius options
@@ -98,5 +112,23 @@ final class LocationPreferencesTests: XCTestCase {
     func test_radiusOptionsCoverFbMarketplaceStandardValues() {
         XCTAssertEqual(LocationPreferences.radiusOptions, [5, 10, 25, 50, 100])
         XCTAssertEqual(LocationPreferences.defaultRadiusMiles, 25)
+    }
+
+    // MARK: - Codable guard
+
+    func test_fbLocationIdEncodesAsString() throws {
+        // FB Marketplace Page IDs are bigints; JSONDecoder → Int narrows
+        // values above 2^53. Guard the schema by asserting the wire
+        // format is a string, not a number.
+        let stored = LocationPreferences.Stored(
+            latitude: 40.6782,
+            longitude: -73.9442,
+            displayLabel: "Brooklyn, NY",
+            fbLocationId: "112111905481230",
+            radiusMiles: 25
+        )
+        let encoded = try JSONEncoder().encode(stored)
+        let json = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        XCTAssertEqual(json?["fbLocationId"] as? String, "112111905481230")
     }
 }

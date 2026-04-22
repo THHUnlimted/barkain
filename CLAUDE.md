@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** 2026-04-22 (v5.14 — fb-marketplace-location: `LocationPickerSheet` + per-city `/stream` params + `:loc:…` cache bucket)
+> **Last updated:** 2026-04-22 (v5.15 — fb-marketplace-location-resolver: iOS drops slug / saves numeric FB Page ID; backend resolver via Startpage→DDG→Brave with singleflight + GCRA token bucket + tombstoning; container URL uses `radius_in_km`)
 
 ---
 
@@ -254,8 +254,7 @@ Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; 
 |------|------|:-:|:-:|:-:|
 | 3a | M1 Product Text Search: `POST /products/search` + pg_trgm + Gemini fallback + SearchView | +10 | +6 unit/+1 UI | #22, #23 |
 | 3b | eBay Browse API adapter (replaces `ebay_new`/`ebay_used` containers, sub-second) + GDPR deletion webhook + FastAPI deploy on scraper EC2 (Caddy+LE) | +13 | — | #24 |
-| demo-prep | Walmart `decodo_http` default + CHALLENGE retry + SP-decodo-scoping (fb_marketplace bandwidth fix) + scraper timing trim + SP-samsclub-decodo + Best Buy Products API adapter | +113 | — | #25–#30 |
-| post-demo-prep | Walmart bare-host fix + lowes/sams_club retired + Decodo Scraper API adapter for Amazon (~3 s vs ~53 s) | +14 | — | #31 |
+| demo/post-demo prep | Walmart `decodo_http` default + CHALLENGE retry + Decodo-scoping; Best Buy Products API adapter; Decodo Scraper API for Amazon (~3 s); lowes/sams_club retired | +127 | — | #25–#31 |
 | 3c | M1 Search v2: 3-tier cascade (DB → [BBY+UPCitemdb parallel] → Gemini), brand-only routing, `force_gemini` deep-search, variant collapse, price-stream `?query=` override, eBay affiliate fix (rover pixel → EPN params) | +14 | +5 | #32 |
 | 3c-hardening | Amazon platform-suffix + service/repair filter; Walmart 5× CHALLENGE retry; BBY 429/5xx retry + `_sanitize_query`; Redis device→UPC 24h + scoped query cache 30 min; iOS sheet-anchoring fix | +26 | — | #32 |
 | 3d | Autocomplete: `actor AutocompleteService` (sorted-array binary search) + `.searchable` + `RecentSearches` + `scripts/generate_autocomplete_vocab.py` (4,448 terms / 128 KB). Removed 300 ms auto-debounce; submit-driven | +23 | +34 / +1 UI | #34 |
@@ -266,11 +265,11 @@ Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; 
 | 3e | M6 Recommendation Engine (deterministic, no LLM). `POST /api/v1/recommend` stacks identity + card + portal via `asyncio.gather`, p95 < 150 ms. Brand-direct callout ≥15 % `*_direct`. iOS hero gated on 3 settle flags; silent fallback on failure. `scripts/seed_portal_bonuses_demo.py` (3g replaces). M6 reclassified AI → T | +14 | +8 / +1 UI | #41 |
 | 3f (+hotfix) | Purchase Interstitial + Activation Reminder. `PurchaseInterstitialSheet` from hero CTA + row taps. `POST /affiliate/click` gains `activation_skipped` (migration 0008). Pre-fixes: `BarePreviewAPIClient` + `_db_url.py` + `without_demo_mode`. Hotfix: per-retailer `estimated_savings` w/ highest-scraped fallback; migration 0009 adds `discount_programs.scope`; Prime Student → `membership_fee` | +7 | +9 | #42 |
 | Benefits Expansion (+follow-ups) | +10 student-tech + Prime YA (`scope='membership_fee'`), +4 `*_direct`, `is_young_adult` axis (0010). 52→63 programs / 8→12 retailers / 9→10 eligibility types. Follow-ups: `program_type='membership'` retired; `_dedup_best_per_retailer_scope` + `BRAND_ALIASES` name-gate (ThinkPad hides Asus/Razer); iOS `scopeBadge` + price `lineLimit` + pills `VStack`; `/resolve` → `/resolve-from-search` on Gemini UPC hallucination | +10 | +7 | #45, #46 |
-| fb-marketplace-location | iOS `LocationPickerSheet` (CoreLocationUI + CLGeocoder→slug + 5/10/25/50/100 mi). `/stream?fb_location_slug&fb_radius_miles` → fb_marketplace container only; cache key `:loc:<slug>:r<radius>` + DB-fresh skipped when location set so cross-city users can't collide | +9 | +14 | TBD |
+| fb-marketplace-location-resolver | Numeric FB Page ID end-to-end (slug path retired). Migration 0011 + `FbLocationResolver` (Redis→PG→Startpage/DDG/Brave, GCRA bucket, singleflight w/ subscribe-before-recheck, throttled ≠ unresolved). M2 + container: `fb_location_id` + `fb_radius_km` (miles→km at adapter). `POST /api/v1/fb-location/resolve`. iOS `Stored.fbLocationId` (bigint-safe String), storage v1→v2, picker FSM. Seed `seed_fb_marketplace_locations.py` | +28 | +9 | TBD |
 
-**Test totals:** 529 backend + 138 iOS unit + 6 iOS UI. `ruff check` clean. `xcodebuild` clean.
+**Test totals:** 557 backend + 147 iOS unit + 6 iOS UI. `ruff check` clean. `xcodebuild` clean.
 
-**Migrations:** 0001 (initial, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert + failure counter) → 0006 (`chk_subscription_tier` CHECK) → 0007 (pg_trgm + trgm GIN idx) → 0008 (`affiliate_clicks.metadata` JSONB) → 0009 (`discount_programs.scope` — product / membership_fee / shipping) → 0010 (`is_young_adult` on `user_discount_profiles`). Drift marker in `tests/conftest.py::_ensure_schema` now checks `user_discount_profiles.is_young_adult`.
+**Migrations:** 0001 (initial, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert + failure counter) → 0006 (`chk_subscription_tier` CHECK) → 0007 (pg_trgm + trgm GIN idx) → 0008 (`affiliate_clicks.metadata` JSONB) → 0009 (`discount_programs.scope` — product / membership_fee / shipping) → 0010 (`is_young_adult` on `user_discount_profiles`) → 0011 (`fb_marketplace_locations` — city→FB Page ID cache w/ tombstoning). Drift marker in `tests/conftest.py::_ensure_schema` now checks `fb_marketplace_locations`.
 
 > Per-step file inventories, detailed test breakdowns, and full decision rationale: see `docs/CHANGELOG.md`.
 
@@ -293,7 +292,7 @@ Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; 
 ## What's Next
 
 1. **Phase 2 CLOSED** — `v0.2.0` tagged (2026-04-16). Outstanding: revoke leaked PAT `gho_UUsp9ML7…` in GitHub UI (SP-L1-b, Mike).
-2. **Phase 3:** 3a–3d + 3d-noise-filter ✅ (#32–#36), ui-refresh-v1/v2/v2-fix ✅ (#37–#40), 3e (#41), 3f (#42), Benefits Expansion (#45–#47), fb-marketplace-location ✅. Next: 3g portal live scrape, 3h Claude Vision, 3i receipts, 3k savings, 3l coupons, 3m hardening + `v0.3.0`. 3j folded into 3e. See `docs/CHANGELOG.md` + `docs/PHASES.md`.
+2. **Phase 3:** 3a–3d + 3d-noise-filter ✅ (#32–#36), ui-refresh-v1/v2/v2-fix ✅ (#37–#40), 3e (#41), 3f (#42), Benefits Expansion (#45–#47), fb-marketplace-location ✅, fb-marketplace-location-resolver ✅. Next: run `scripts/seed_fb_marketplace_locations.py` against prod once Decodo budget is confirmed; 3g portal live scrape, 3h Claude Vision, 3i receipts, 3k savings, 3l coupons, 3m hardening + `v0.3.0`. 3j folded into 3e. See `docs/CHANGELOG.md` + `docs/PHASES.md`.
 3. **Phase 4 — Production Optimization:** ~~Best Buy~~ (done via demo-prep bundle, PR #30), Keepa API adapter, App Store submission, Sentry error tracking
 4. **Phase 5 — Growth:** Push notifications (APNs), web dashboard, Android (KMP)
 
@@ -340,23 +339,19 @@ ssh -i ~/.ssh/barkain-scrapers.pem ubuntu@54.197.27.219 'sudo systemctl restart 
 - Relevance: model-number hard gate + variant-token + ordinal + brand match + 0.4 token overlap; UPCitemdb cross-val runs alongside Gemini, brand agreement picks winner; Gemini emits `device_name` + `model` (shortest unambiguous)
 
 ### Phase 2 (see CHANGELOG 2a–2i-d for full rationale)
-- SSE: `asyncio.as_completed`; iOS manual byte splitter; fall back to batch on error (2c/2c-fix)
-- Identity discounts: zero-LLM SQL join < 150 ms, post-SSE, non-fatal (2d). Card priority: rotating > user-selected > static > base (2e)
-- Billing two sources: iOS RC SDK for UI, backend `users.subscription_tier` for rate limit, ≤60 s drift. Webhook idempotency via SETNX 7d. Tier cache `tier:{user_id}` 60 s, fail-open (2f)
-- Migrations 0004/0006 mirrored on `__table_args__` so test `create_all` matches alembic (2f/2i-b)
-- Affiliate: backend-built URLs + `SFSafariViewController`; fail-open (2g). Workers: LocalStack SQS dev / `moto[sqs]` tests; boto3 via `asyncio.to_thread`; `_UNSET` sentinel (2h)
-- Portal rates: `httpx`+BS4, anchor on `aria-label`/semantic classes; `is_elevated` is `GENERATED ALWAYS STORED`. Discount verify 3-state: `verified`/`flagged_missing_mention`/`hard_failed` 3-strikes
-- `_classify_retailer_result` = single classification authority for batch + stream (2i-b). Worker CLI scripts MUST `from app import models` for cross-module FK flush (2i-c)
-- Test DB drift auto-detected in `conftest.py:_ensure_schema` via marker probe; update each migration (2i-c/3a)
-- Watchdog `CONTAINERS_ROOT = parents[2]` — unit mocks hid the bug. XCUITest affiliate-sheet uses OR-of-3 signals (iOS 26 SFSafari chrome outside host a11y tree). Deploy via `rsync` + inline Phase C/D when GitHub auth broken (2i-d)
-- fb_marketplace + sams_club need Decodo residential with scoped routing (kill-flags + `--proxy-bypass-list`). See `docs/SCRAPING_AGENT_ARCHITECTURE.md` §C.11
+- SSE via `asyncio.as_completed` + iOS byte splitter; batch fallback on error. Identity discounts zero-LLM SQL join <150ms, post-SSE, non-fatal. Card priority rotating > user > static > base
+- Billing: iOS RC SDK for UI, backend `users.subscription_tier` for rate limit, ≤60 s drift. Webhook idempotency SETNX 7d. Tier cache `tier:{user_id}` 60s, fail-open. Migrations mirror constraints on `__table_args__` for test `create_all` parity
+- Affiliate: backend URLs + `SFSafariViewController`, fail-open. Workers: LocalStack SQS / `moto[sqs]`; boto3 via `asyncio.to_thread`; `_UNSET` sentinel. Portal rates: `httpx`+BS4, anchor on `aria-label`; `is_elevated` GENERATED STORED
+- `_classify_retailer_result` = single classification for batch + stream. Worker scripts MUST `from app import models` for FK flush. Test DB drift auto-detected in `conftest._ensure_schema`; update each migration
+- fb_marketplace needs Decodo residential with scoped routing (kill-flags + `--proxy-bypass-list`). See `docs/SCRAPING_AGENT_ARCHITECTURE.md` §C.11
 
 ### Phase 3 (see CHANGELOG 3a–3e for full rationale)
 - eBay Browse API auto-prefers on `EBAY_APP_ID`+`EBAY_CERT_ID`; 2 hr TTL; filter DSL uses `|` not `,`. GDPR deletion webhook = GET SHA-256 + POST log-and-204. Backend co-deployed on scraper EC2 via Caddy + systemd (3b)
 - Best Buy API (`BESTBUY_API_KEY`, ~150 ms); Decodo Scraper API for Amazon (`DECODO_SCRAPER_API_AUTH`, ~3 s); listings at `content.results.results.organic[]`. Decodo: `proxy_relay.py` reads HOST+PORT separately; `walmart_http` appends `:7000` when bare
 - lowes + sams_club scrapers retired 2026-04-18, rows kept `is_active=False` for FK. 9 active scraped retailers; `*_direct` stay `is_active=True` as identity-redirect targets
 - Search v2 cascade: normalize → Redis → DB pg_trgm@0.3 → Tier 2 `gather(BBY, UPCitemdb)` → Tier 3 Gemini only when Tier 2 irrelevant OR `force_gemini`. Merge DB>BBY>UPCitemdb>Gemini → `_collapse_variants` (2+ variants → synthetic generic row) (3c). `query` override on `/prices/{id}/stream` swaps both retailer query AND per-container `product_name` hint (3c). eBay affiliate = modern EPN params on item URL; `rover.ebay.com` legacy = 42-byte pixel (3c)
-- 3c-hardening: platform-suffix / CHALLENGE / 429-5xx retries + Redis cache layering + iOS `browserURL @Binding` anchoring. 3d-noise-filter: `_is_tier2_noise` with strict-majority + model-code verbatim gate. ui-refresh-v2 fix: `.searchable` setter fires `""` on nav-bar hide; guard dismisses only on non-empty changed queries
+- 3c-hardening: retailer-retries + Redis cache layering + iOS `browserURL @Binding` anchoring. 3d-noise-filter: `_is_tier2_noise` strict-majority + model-code verbatim gate
 - **3e M6 Recommendation — deterministic.** Zero LLM. `POST /api/v1/recommend` `gather`s Prices+Identity+Cards+Portals, pure Python (<150 ms p95). `final = base − identity`; card + portal deferred rebates on post-identity price. Tie-break: `effective_cost`, condition, well-known retailer. Brand-direct callout ≥15 %. Excludes inactive/drift. 15 min cache. iOS hero gated on `streamClosed`+`identityLoaded`+`cardsLoaded`; fail → silent nil
 - **3f Purchase Interstitial + hotfix.** Reuses 3e rec + cards. `PurchaseInterstitialSheet` from hero CTA + row taps. Activation ack session-scoped. `POST /affiliate/click` gains `activation_skipped` (0008). Baseline 1%. Alternatives rail `scrollTo` + pulse. Pre-fixes: `BarePreviewAPIClient`, `_db_url.py`, `without_demo_mode`. Hotfix: per-retailer `estimated_savings` w/ highest-scraped fallback; migration 0009 `discount_programs.scope` ∈ `{product, membership_fee, shipping}` skips savings when ≠ product. M6 cache `:v4`
 - **Benefits Expansion (+follow-ups).** +10 student-tech + Prime YA (`scope='membership_fee'`); +4 `*_direct`; `is_young_adult` (0010). Follow-ups: Prime Student → `identity`; `_dedup_best_per_retailer_scope` key=(retailer_id, scope), rank -savings/-discount_value/name — different scopes survive; `BRAND_ALIASES` widens brand-gate over `product.brand + name`, fails closed on competing brand (ThinkPad→lenovo, ROG→asus, Galaxy→samsung); iOS `scopeBadge` + scope-aware `savingsText`; `PriceRow` price `lineLimit(1)` + `minimumScaleFactor(0.7)` + `layoutPriority(1)`; identity pills `VStack`/`fixedSize`; `resolveTappedResult` falls `/resolve` → `/resolve-from-search` on 404 (Gemini hallucinated UPC)
+- **fb-marketplace-location-resolver.** Slug→numeric FB Page ID; FB 400s unauthed so we ask Startpage/DDG/Brave through Decodo. 3-tier Redis(24h)→PG(`fb_marketplace_locations`, 0011)→live. Tombstone `(NULL, 'unresolved')` 1h stops retry storms; all-engines-throttled writes 5-min Redis bar only (no PG). GCRA token bucket (GET+SET — fakeredis no EVAL). Singleflight lock + pub/sub, **subscribe before re-check** to close the race window. Canonical name from search snippet flags Ding Dong→Killeen without hitting FB. Miles→km at `ContainerClient.extract` boundary; cache key `:loc:<id>:r<miles>`. iOS `Stored.fbLocationId` (bigint-safe String), v1→v2 silent clear, `fbSlugAliases`/`slugify` removed, picker FSM idle→geocoding→resolving→resolved

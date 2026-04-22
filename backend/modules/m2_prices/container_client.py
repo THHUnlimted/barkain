@@ -119,7 +119,7 @@ class ContainerClient:
         product_name: str | None = None,
         upc: str | None = None,
         max_listings: int = 10,
-        fb_location_slug: str | None = None,
+        fb_location_id: str | None = None,
         fb_radius_miles: int | None = None,
     ) -> ContainerResponse:
         """Send a POST /extract request to a single retailer container.
@@ -127,23 +127,27 @@ class ContainerClient:
         Returns a ContainerResponse in all cases — errors are captured in the
         response's error field, never raised.
 
-        ``fb_location_slug`` / ``fb_radius_miles`` are passed through only
+        ``fb_location_id`` / ``fb_radius_miles`` are passed through only
         when ``retailer_id == "fb_marketplace"`` — every other retailer gets
         a payload without those fields so their container schema doesn't see
-        unknown keys.
+        unknown keys. Miles → km conversion happens here so the container
+        can pass the value straight through to FB's ``radius_in_km`` URL
+        param without doing math in bash.
         """
         url = self._get_container_url(retailer_id)
+        is_fb = retailer_id == "fb_marketplace"
+        fb_radius_km: int | None = None
+        if is_fb and fb_radius_miles is not None:
+            # km = miles * 1.60934; round to the nearest whole km so the
+            # number that reaches FB matches the picker's intent.
+            fb_radius_km = max(1, round(fb_radius_miles * 1.60934))
         payload = ContainerExtractRequest(
             query=query,
             product_name=product_name,
             upc=upc,
             max_listings=max_listings,
-            fb_location_slug=(
-                fb_location_slug if retailer_id == "fb_marketplace" else None
-            ),
-            fb_radius_miles=(
-                fb_radius_miles if retailer_id == "fb_marketplace" else None
-            ),
+            fb_location_id=fb_location_id if is_fb else None,
+            fb_radius_km=fb_radius_km if is_fb else None,
         ).model_dump()
 
         last_error: str | None = None
@@ -228,7 +232,7 @@ class ContainerClient:
         product_name: str | None,
         upc: str | None,
         max_listings: int,
-        fb_location_slug: str | None = None,
+        fb_location_id: str | None = None,
         fb_radius_miles: int | None = None,
     ) -> ContainerResponse:
         """Route a single retailer to its adapter or the default container path.
@@ -236,7 +240,7 @@ class ContainerClient:
         Walmart may use a pluggable HTTP adapter (Firecrawl / Decodo) instead
         of the browser container. Other retailers always use the container path.
 
-        ``fb_location_slug`` / ``fb_radius_miles`` are only forwarded when
+        ``fb_location_id`` / ``fb_radius_miles`` are only forwarded when
         this retailer is ``fb_marketplace`` (see ``extract``).
         """
         if retailer_id == "walmart":
@@ -292,7 +296,7 @@ class ContainerClient:
             product_name,
             upc,
             max_listings,
-            fb_location_slug=fb_location_slug,
+            fb_location_id=fb_location_id,
             fb_radius_miles=fb_radius_miles,
         )
 
@@ -303,14 +307,14 @@ class ContainerClient:
         upc: str | None = None,
         retailer_ids: list[str] | None = None,
         max_listings: int = 10,
-        fb_location_slug: str | None = None,
+        fb_location_id: str | None = None,
         fb_radius_miles: int | None = None,
     ) -> dict[str, ContainerResponse]:
         """Dispatch extraction requests to multiple containers in parallel.
 
         Partial failures are tolerated — successful results are returned
         alongside error responses. Walmart may be routed through an HTTP
-        adapter (see `_extract_one`). ``fb_location_slug`` / ``fb_radius_miles``
+        adapter (see `_extract_one`). ``fb_location_id`` / ``fb_radius_miles``
         are threaded through but only reach the fb_marketplace container.
         """
         # Phase 2: Watchdog circuit-breaker will skip unhealthy containers (D10)
@@ -323,7 +327,7 @@ class ContainerClient:
                 product_name,
                 upc,
                 max_listings,
-                fb_location_slug=fb_location_slug,
+                fb_location_id=fb_location_id,
                 fb_radius_miles=fb_radius_miles,
             )
             for rid in ids

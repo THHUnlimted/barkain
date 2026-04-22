@@ -10,6 +10,7 @@ from app.dependencies import get_redis
 from app.ebay_webhook import router as ebay_webhook_router
 from app.middleware import setup_middleware
 from modules.m1_product.router import router as m1_product_router
+from modules.m2_prices.fb_location_router import router as m2_fb_location_router
 from modules.m2_prices.health_router import router as health_router
 from modules.m2_prices.router import router as m2_prices_router
 from modules.m5_identity.card_router import router as m5_card_router
@@ -28,6 +29,7 @@ app = FastAPI(
 setup_middleware(app)
 app.include_router(m1_product_router)
 app.include_router(m2_prices_router)
+app.include_router(m2_fb_location_router)
 app.include_router(health_router)
 app.include_router(m5_identity_router)
 app.include_router(m5_card_router)

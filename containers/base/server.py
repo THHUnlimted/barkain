@@ -32,9 +32,11 @@ class ExtractRequest(BaseModel):
     max_listings: int = 10
     # fb_marketplace-only overrides; every other retailer ignores them. The
     # fields live on the shared request so the backend doesn't have to fork
-    # per-retailer schemas.
-    fb_location_slug: str | None = None
-    fb_radius_miles: int | None = None
+    # per-retailer schemas. `fb_location_id` is FB's numeric Marketplace
+    # Page ID; `fb_radius_km` is already km (backend converts from the
+    # user's miles at the adapter boundary).
+    fb_location_id: str | None = None
+    fb_radius_km: int | None = None
 
 
 class Listing(BaseModel):
@@ -126,10 +128,10 @@ async def extract(request: ExtractRequest) -> ExtractResponse:
                 "PRODUCT_NAME": request.product_name or "",
                 "UPC": request.upc or "",
                 # fb_marketplace reads these; other retailers ignore them.
-                "FB_LOCATION_SLUG": request.fb_location_slug or "",
-                "FB_RADIUS_MILES": (
-                    str(request.fb_radius_miles)
-                    if request.fb_radius_miles is not None
+                "FB_LOCATION_ID": request.fb_location_id or "",
+                "FB_RADIUS_KM": (
+                    str(request.fb_radius_km)
+                    if request.fb_radius_km is not None
                     else ""
                 ),
             },

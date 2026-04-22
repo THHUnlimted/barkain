@@ -29,18 +29,22 @@ CHROMIUM="${CHROMIUM_PATH:-/usr/bin/chromium}"
 PROXY_RELAY_PORT=18080
 
 # Location resolution order:
-#   1. Per-request override from the backend (FB_LOCATION_SLUG /
-#      FB_RADIUS_MILES in the process env — set by containers/base/server.py
-#      when the iOS caller supplied user coordinates).
-#   2. Container-wide env default (FB_MARKETPLACE_LOCATION — baked at
-#      container start, defaults to sanfrancisco).
-# When FB_LOCATION_SLUG arrives empty (user has no preference saved) we
-# fall back to the env default, so cold-start behaviour is unchanged.
-FB_LOCATION="${FB_LOCATION_SLUG:-}"
+#   1. Per-request FB_LOCATION_ID (numeric FB Page ID, resolved by the
+#      backend from the user's city/state via the Startpage/DDG/Brave
+#      resolver — see backend/modules/m2_prices/adapters/fb_marketplace_location_resolver.py).
+#   2. Container-wide FB_MARKETPLACE_LOCATION default (slug form, baked
+#      at container start; defaults to `sanfrancisco`). Only used when the
+#      caller didn't supply an ID — FB accepts the slug form for its own
+#      handful of canonical metros.
+# When FB_LOCATION_ID arrives empty we fall back to the slug default so
+# cold-start behaviour is unchanged for anonymous / pre-resolver users.
+FB_LOCATION="${FB_LOCATION_ID:-}"
 if [ -z "$FB_LOCATION" ]; then
   FB_LOCATION="${FB_MARKETPLACE_LOCATION:-sanfrancisco}"
 fi
-FB_RADIUS="${FB_RADIUS_MILES:-}"
+# Radius arrives in km (backend converts from miles at the adapter
+# boundary — avoids doing floating-point math in bash).
+FB_RADIUS_KM="${FB_RADIUS_KM:-}"
 
 # Disable image loading by default — Marketplace DOM selectors only need
 # the <img src> attribute string (not the bytes), and images are ~70% of
@@ -105,15 +109,18 @@ fi
 pkill -f "chromium.*--remote-debugging-port=$CDP_PORT" 2>/dev/null || true
 sleep 1
 
-# Build search URL with location slug. When the user supplied a radius
-# through FB_RADIUS_MILES we append &radius=N — FB Marketplace honors it
-# on the search URL the same way the in-app radius picker does.
+# Build search URL. The resolver path uses the numeric ID form
+# (/marketplace/<id>/search?…), which FB honors verbatim; the slug
+# fallback (/marketplace/<slug>/search?…) only works for the handful of
+# canonical metros FB recognizes and silently falls back to a generic
+# category page otherwise. Radius parameter is `radius_in_km` — the
+# modern form — which FB accepts for both URL shapes.
 ENCODED_QUERY=$(echo "$QUERY" | sed 's/ /+/g')
 SEARCH_URL="https://www.facebook.com/marketplace/${FB_LOCATION}/search/?query=${ENCODED_QUERY}&exact=false"
-if [ -n "$FB_RADIUS" ]; then
-  SEARCH_URL="${SEARCH_URL}&radius=${FB_RADIUS}"
+if [ -n "$FB_RADIUS_KM" ]; then
+  SEARCH_URL="${SEARCH_URL}&radius_in_km=${FB_RADIUS_KM}"
 fi
-log "fb_marketplace location=${FB_LOCATION} radius=${FB_RADIUS:-default}"
+log "fb_marketplace location=${FB_LOCATION} radius_km=${FB_RADIUS_KM:-default}"
 
 # Retry loop
 attempt=0

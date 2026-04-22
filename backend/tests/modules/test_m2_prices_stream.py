@@ -109,12 +109,12 @@ class _FakeContainerClient:
         product_name: str | None,
         upc: str | None,
         max_listings: int,
-        fb_location_slug: str | None = None,
+        fb_location_id: str | None = None,
         fb_radius_miles: int | None = None,
     ) -> ContainerResponse:
         self.extract_one_calls.append(retailer_id)
         self.extract_one_kwargs[retailer_id] = {
-            "fb_location_slug": fb_location_slug,
+            "fb_location_id": fb_location_id,
             "fb_radius_miles": fb_radius_miles,
         }
         delay_ms = self._delays_ms.get(retailer_id, 0)
@@ -547,10 +547,10 @@ async def test_stream_prices_unknown_product_raises(db_session, fake_redis):
 
 
 async def test_stream_forwards_fb_location_to_every_retailer_fake(db_session, fake_redis):
-    """stream_prices threads fb_location_slug / fb_radius_miles into _extract_one.
+    """stream_prices threads fb_location_id / fb_radius_miles into _extract_one.
 
     The ContainerClient layer is responsible for gating which retailers
-    actually see the slug (fb_marketplace only — asserted separately in
+    actually see the id (fb_marketplace only — asserted separately in
     test_container_client.py). At the service layer we just verify the
     kwargs are forwarded, not dropped.
     """
@@ -566,18 +566,18 @@ async def test_stream_forwards_fb_location_to_every_retailer_fake(db_session, fa
     service = PriceAggregationService(db=db_session, redis=fake_redis, container_client=fake)
 
     async for _ in service.stream_prices(
-        product.id, fb_location_slug="brooklyn", fb_radius_miles=25
+        product.id, fb_location_id="112111905481230", fb_radius_miles=25
     ):
         pass
 
     assert set(fake.extract_one_calls) == {"amazon", "fb_marketplace"}
     for rid, kwargs in fake.extract_one_kwargs.items():
-        assert kwargs["fb_location_slug"] == "brooklyn", rid
+        assert kwargs["fb_location_id"] == "112111905481230", rid
         assert kwargs["fb_radius_miles"] == 25, rid
 
 
 async def test_stream_location_writes_scoped_cache_key(db_session, fake_redis):
-    """With a location set, cache bucket is `…:loc:<slug>:r<radius>`, not the bare key."""
+    """With a location set, cache bucket is `…:loc:<id>:r<miles>`, not the bare key."""
     from modules.m2_prices.service import REDIS_KEY_PREFIX
 
     product = await _seed_product(db_session)
@@ -587,12 +587,12 @@ async def test_stream_location_writes_scoped_cache_key(db_session, fake_redis):
     service = PriceAggregationService(db=db_session, redis=fake_redis, container_client=fake)
 
     async for _ in service.stream_prices(
-        product.id, fb_location_slug="brooklyn", fb_radius_miles=25
+        product.id, fb_location_id="112111905481230", fb_radius_miles=25
     ):
         pass
 
     bare_key = f"{REDIS_KEY_PREFIX}{product.id}"
-    scoped_key = f"{REDIS_KEY_PREFIX}{product.id}:loc:brooklyn:r25"
+    scoped_key = f"{REDIS_KEY_PREFIX}{product.id}:loc:112111905481230:r25"
 
     assert await fake_redis.get(scoped_key) is not None
     # Bare-product key MUST stay empty so another user without a preference
@@ -600,10 +600,10 @@ async def test_stream_location_writes_scoped_cache_key(db_session, fake_redis):
     assert await fake_redis.get(bare_key) is None
 
 
-async def test_stream_location_different_slugs_use_different_cache_buckets(
+async def test_stream_location_different_ids_use_different_cache_buckets(
     db_session, fake_redis
 ):
-    """Two users, two slugs, two buckets — no cross-contamination."""
+    """Two users, two location IDs, two buckets — no cross-contamination."""
     product = await _seed_product(db_session)
     await _seed_retailers(db_session, ["fb_marketplace"])
 
@@ -612,17 +612,17 @@ async def test_stream_location_different_slugs_use_different_cache_buckets(
     )
     service_a = PriceAggregationService(db=db_session, redis=fake_redis, container_client=fake_a)
     async for _ in service_a.stream_prices(
-        product.id, fb_location_slug="brooklyn", fb_radius_miles=25
+        product.id, fb_location_id="112111905481230", fb_radius_miles=25
     ):
         pass
 
-    # Second user with different city must dispatch fresh (no cross-cache hit).
+    # Second user in a different metro must dispatch fresh (no cross-cache hit).
     fake_b = _FakeContainerClient(
         responses={"fb_marketplace": _success_response("fb_marketplace", 200.0)}
     )
     service_b = PriceAggregationService(db=db_session, redis=fake_redis, container_client=fake_b)
     async for _ in service_b.stream_prices(
-        product.id, fb_location_slug="austin", fb_radius_miles=50
+        product.id, fb_location_id="108271525863730", fb_radius_miles=50
     ):
         pass
 
@@ -630,7 +630,7 @@ async def test_stream_location_different_slugs_use_different_cache_buckets(
 
 
 async def test_stream_endpoint_accepts_location_query_params(client, db_session):
-    """Router accepts fb_location_slug + fb_radius_miles and opens the stream."""
+    """Router accepts fb_location_id + fb_radius_miles and opens the stream."""
     from unittest.mock import patch
 
     product = await _seed_product(db_session)
@@ -642,22 +642,22 @@ async def test_stream_endpoint_accepts_location_query_params(client, db_session)
         async with client.stream(
             "GET",
             f"/api/v1/prices/{product.id}/stream",
-            params={"fb_location_slug": "brooklyn", "fb_radius_miles": 25},
+            params={"fb_location_id": "112111905481230", "fb_radius_miles": 25},
         ) as response:
             assert response.status_code == 200
             assert response.headers["content-type"].startswith("text/event-stream")
             async for _ in response.aiter_bytes():
                 pass
 
-    # The router forwarded the slug into _extract_one for fb_marketplace.
+    # The router forwarded the id into _extract_one for fb_marketplace.
     assert fake.extract_one_kwargs["fb_marketplace"] == {
-        "fb_location_slug": "brooklyn",
+        "fb_location_id": "112111905481230",
         "fb_radius_miles": 25,
     }
 
 
-async def test_stream_endpoint_422_on_bad_location_slug(client, db_session):
-    """Non-[a-z0-9_] slug must 422 at the router boundary before SSE opens.
+async def test_stream_endpoint_422_on_bad_location_id(client, db_session):
+    """Non-numeric id must 422 at the router boundary before SSE opens.
 
     Surfacing the error as a normal HTTP 422 (instead of a mid-stream
     SSE event the client has to parse) is important for iOS — the stream
@@ -668,7 +668,7 @@ async def test_stream_endpoint_422_on_bad_location_slug(client, db_session):
 
     resp = await client.get(
         f"/api/v1/prices/{product.id}/stream",
-        params={"fb_location_slug": "not a slug"},
+        params={"fb_location_id": "not a number"},
     )
     assert resp.status_code == 422
     assert not resp.headers.get("content-type", "").startswith("text/event-stream")

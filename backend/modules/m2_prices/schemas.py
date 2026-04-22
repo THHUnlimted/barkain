@@ -7,7 +7,7 @@ from enum import Enum
 
 from pydantic import BaseModel, field_validator
 
-_FB_LOCATION_SLUG_PATTERN = re.compile(r"[a-z0-9_]+")
+_FB_LOCATION_ID_PATTERN = re.compile(r"\d+")
 
 
 # MARK: - Container Request
@@ -16,18 +16,20 @@ _FB_LOCATION_SLUG_PATTERN = re.compile(r"[a-z0-9_]+")
 class ContainerExtractRequest(BaseModel):
     """Request body sent to a scraper container's POST /extract.
 
-    ``fb_location_slug`` + ``fb_radius_miles`` are routed only to the
-    fb_marketplace container (ignored by every other retailer). They let a
-    user override the baked-in ``FB_MARKETPLACE_LOCATION`` env default with
-    their own city slug + search radius.
+    ``fb_location_id`` + ``fb_radius_km`` are routed only to the
+    fb_marketplace container (ignored by every other retailer). They
+    let the backend override the baked-in ``FB_MARKETPLACE_LOCATION``
+    env default with a user-resolved numeric location ID + search
+    radius. Miles → km conversion happens in ``ContainerClient`` at
+    the adapter boundary so callers can keep speaking miles.
     """
 
     query: str
     product_name: str | None = None
     upc: str | None = None
     max_listings: int = 10
-    fb_location_slug: str | None = None
-    fb_radius_miles: int | None = None
+    fb_location_id: str | None = None
+    fb_radius_km: int | None = None
 
     @field_validator("query")
     @classmethod
@@ -44,30 +46,32 @@ class ContainerExtractRequest(BaseModel):
             raise ValueError("max_listings must be between 1 and 50")
         return v
 
-    @field_validator("fb_location_slug")
+    @field_validator("fb_location_id")
     @classmethod
-    def validate_fb_location_slug(cls, v: str | None) -> str | None:
-        # Normalize to FB's URL-safe slug shape: lowercase, alphanumeric +
-        # underscore only. Empty string or obviously-malformed input → None
-        # so the container falls back to its env default.
+    def validate_fb_location_id(cls, v: str | None) -> str | None:
+        # FB Page IDs are positive bigints; we accept them as strings
+        # to avoid iOS Int64 round-trip narrowing. Empty → None so the
+        # container falls back to its env default.
         if v is None:
             return None
-        v = v.strip().lower()
+        v = v.strip()
         if not v:
             return None
-        if len(v) > 64:
-            raise ValueError("fb_location_slug must be 64 chars or fewer")
-        if not _FB_LOCATION_SLUG_PATTERN.fullmatch(v):
-            raise ValueError("fb_location_slug may only contain [a-z0-9_]")
+        if len(v) > 30:
+            raise ValueError("fb_location_id must be 30 chars or fewer")
+        if not _FB_LOCATION_ID_PATTERN.fullmatch(v):
+            raise ValueError("fb_location_id must be a positive integer")
         return v
 
-    @field_validator("fb_radius_miles")
+    @field_validator("fb_radius_km")
     @classmethod
-    def validate_fb_radius_miles(cls, v: int | None) -> int | None:
+    def validate_fb_radius_km(cls, v: int | None) -> int | None:
+        # 800 km ≈ 500 mi, the outer iOS-side cap. FB silently clamps
+        # anything higher but we want to reject obvious nonsense early.
         if v is None:
             return None
-        if v < 1 or v > 500:
-            raise ValueError("fb_radius_miles must be between 1 and 500")
+        if v < 1 or v > 800:
+            raise ValueError("fb_radius_km must be between 1 and 800")
         return v
 
 

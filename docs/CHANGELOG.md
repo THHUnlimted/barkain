@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-22 (fb-marketplace-location — `LocationPickerSheet` (CoreLocationUI + CLGeocoder → `[a-z0-9_]` slug), `/stream?fb_location_slug&fb_radius_miles` routed only to fb_marketplace container, cache key gains `:loc:<slug>:r<radius>` + DB-fresh path skipped when location set)
+> Last updated: 2026-04-22 (fb-marketplace-location-resolver — `FbLocationResolver` (Redis→Postgres→Startpage/DDG/Brave via Decodo, GCRA token bucket, singleflight with subscribe-before-recheck, throttled ≠ unresolved), `POST /api/v1/fb-location/resolve`, M2 stream swaps slug → numeric FB Page ID + miles→km at adapter, iOS `LocationPreferences.Stored` bump v1→v2 dropping `fbLocationSlug`/`fbSlugAliases` for `fbLocationId`)
 
 ---
 
@@ -3280,4 +3280,94 @@ backend/tests/modules/test_m2_prices_stream.py         # +5 (forward-both, scope
 - No bulk migration of users to their real city — current users without a saved preference keep seeing San Francisco until they open the sheet and grant permission. Intentional.
 - Container-side isn't fully tested against live FB; the URL-building logic (append `&radius=N`, use slug path segment) matches FB's in-app behavior but smoke testing against production FB was not performed (EC2 redeploy of fb_marketplace image pending with credentials rotation — SP-decodo-scoping resolved but Decodo/Firecrawl key rotation still open on Mike).
 - iOS sheet doesn't yet show "Location denied — go to Settings" as a deep-linked button. Sheet shows an inline error message and lets the user type a slug manually as a fallback.
+
+---
+
+### Step fb-marketplace-location-resolver — Numeric FB Page ID pipeline replaces the slug (2026-04-22)
+
+**Branch:** `phase-3/fb-marketplace-location-resolver` → `main` (PR TBD)
+
+**Motivation.** Real-world testing of the prior fb-marketplace-location step (slug path) kept surfacing California listings for users set to NY / Atlanta / etc. Root cause: FB Marketplace's slug dictionary is short and mostly undocumented. Slugs like `brooklyn` / `mableton` / `newyork` silently redirect to `/marketplace/category/search` (no city segment), and the proxy's egress IP (California) then decides the geo. `nyc` works; `brooklyn` doesn't. The fix is to stop guessing: resolve the user's city once to FB's **numeric Page ID** (`112111905481230` for Brooklyn — stable forever) and use that in the URL path. Numeric URLs are unambiguous and FB honors `radius_in_km` on them verbatim.
+
+**Discovery tests that set the path.** `scripts/test_fb_location_resolver.py` ran Startpage / DDG / Brave against 22 cities including the previously-broken set (Brooklyn, Mableton, Santa Monica) and obscure towns (Pie Town NM, Why AZ, Accident MD, Embarrass MN, Toad Suck AR). FB's bare `/marketplace/<slug>/` returned HTTP 400 to any unauthenticated client from any IP we tried (LAN, EC2, Decodo residential) — confirming we can't resolve IDs by asking FB directly. Public search engines returned the canonical numeric URL in the first result, with Startpage tolerating ~12 req before CAPTCHA warning and recovering on 2s sleep; DDG ~8 req before 10-min lockout; Brave ~5 req before 429. Startpage is the primary; DDG and Brave are fallbacks.
+
+**Architecture.** Three-tier cache + singleflight:
+- **L1 Redis** `fbmkt:<country>:<state>:<normalized-city>` — 24h for resolved, 1h for unresolved tombstones, 5min for throttled.
+- **L2 Postgres** `fb_marketplace_locations` (migration 0011) — UNIQUE(country, state_code, city), CHECK `state_code ~ '^[A-Z]{2}$'` + CHECK source ∈ {seed, startpage, ddg, brave, user, unresolved}. `location_id BIGINT NULL` — NULL is the tombstone.
+- **L3 live** — Startpage → DDG → Brave, each gated by a **per-engine Redis token bucket** (GCRA-shaped, GET+SET implementation because fakeredis in tests doesn't support EVAL/Lua — small TOCTOU window tolerated; worst-case overshoot is one token per race which is well under the empirical thresholds).
+
+**Singleflight** prevents thundering herd on the same cold key: first resolver SET-NX acquires the lock, subsequent callers **subscribe to the pub/sub notify channel *before* re-checking the cache** (subscribing after the re-check leaves a race window where the winner's publish happens between our GET and SUBSCRIBE — we'd block until timeout). Winner publishes on finish, waiters receive the result and decode; if the winner crashes the first timed-out waiter becomes the new winner.
+
+**Throttled ≠ unresolved.** Critical distinction: "all engines rate-limited right now" is transient and must not poison Postgres. The persist path writes a 5-min Redis sentinel (`__T__`) and no PG row; the resolver endpoint returns 429. "Engines fired and nothing came back" is a real tombstone — PG row with `location_id=NULL, source='unresolved'` + 1h Redis `__U__` — which stops retry storms for genuinely-FB-less places like Toad Suck AR.
+
+**Canonical-name extraction.** FB itself 400s us, so we can't do the textbook "fetch `/marketplace/<id>/` and parse `<title>`" verification. Instead, we lift the canonical name from the search-result HTML *around* the marketplace URL match — Startpage/DDG results typically include "Buy and Sell in Brooklyn, NY | Facebook Marketplace" in the snippet. This catches the Ding Dong, TX → Killeen, TX redirect case: query goes in as "Ding Dong", FB returns Killeen's numeric ID, the search result says "Killeen", iOS sheet shows a soft "Marketplace shows this area as Killeen, TX." banner. No confirm dialog — saving with the redirect is the pragmatic choice.
+
+**Router** — `POST /api/v1/fb-location/resolve`, `city` + `state` (USPS 2-letter) + `country` body fields. `get_current_user` auth, `get_rate_limiter("write")` quota. Returns `{location_id: str | null, canonical_name, verified, source}`. 429 on throttled. ID returned as **string** because FB Page IDs are bigints > 2^53 and iOS `Int` / JSON `Number` round-tripping silently narrows.
+
+**M2 pipeline swap.**
+- `ContainerExtractRequest.fb_location_slug` → `fb_location_id` (pattern `\d{1,30}`). `fb_radius_miles` → `fb_radius_km` at the *container* boundary (backend converts).
+- `ContainerClient.extract` does `km = max(1, round(miles * 1.60934))` when gating for `retailer_id == "fb_marketplace"`. Service + router keep miles as the UI unit.
+- `_cache_key` now `:loc:<id>:r<miles>` — ID in the key avoids cross-metro collisions (two different "Springfield"s have different IDs); miles in the key captures user intent (25 mi ≠ 15 mi even within the same metro).
+- Router `fb_location_id: str | None = Query(pattern=r"^\d{1,30}$")`; bad id 422s at the boundary before SSE opens.
+- Container extract.sh: `SEARCH_URL="https://www.facebook.com/marketplace/${FB_LOCATION}/search/?query=..."` + `&radius_in_km=${FB_RADIUS_KM}`; FB accepts both numeric ID and legacy slug in the path segment so the env-default fallback (slug = `sanfrancisco`) still works for anonymous callers.
+
+**iOS rewrite.**
+- `LocationPreferences.Stored.fbLocationSlug` → `fbLocationId: String`. `fbSlugAliases` + `slugify` **removed**. `storageKey` bumped `v1` → `v2` — old slug-based prefs are silently ignored on read; user re-picks once.
+- `LocationPickerSheet` loses the "FB slug" TextField entirely. New flow: LocationButton → CLGeocoder → state machine `idle → geocoding → resolving → resolved / failed`. `canSave` requires a resolved numeric ID. Banner shows canonical name when it differs from user input.
+- New `APIClient.resolveFbLocation(city:state:)` method + `Endpoint.resolveFbLocation` case. Response DTO `ResolvedFbLocation` (Codable, `nonisolated` for cross-actor encoding).
+- `streamPrices` signature: `fbLocationSlug` → `fbLocationId`. `ScannerViewModel.fetchPrices` reads `.fbLocationId` from prefs.
+
+**Strengthening beyond the findings doc.**
+- **Redis-backed token bucket, not `aiolimiter.AsyncLimiter`.** Per-process limiters break across uvicorn workers; Redis GCRA is cross-process correct.
+- **Throttled / unresolved distinction** made explicit in `_persist_and_cache` — doc sketched it, we implemented it. Prevents a 5-min search-engine outage from writing 1h tombstones across every novel city requested during that outage.
+- **Normalization expands abbreviations** — `"St. Louis"`, `"Saint Louis"`, `"ST. LOUIS"` all map to the same Redis key. Drops settlement-type suffixes (city / town / village / borough / township).
+- **Router auth + write-bucket rate limit** — not in the findings doc; added before ship so the resolver endpoint can't be weaponized to burn our Decodo + Startpage budgets.
+
+**Bootstrap.** `scripts/seed_fb_marketplace_locations.py` — top-50 US metros baked in (covers every metro the old alias map tried to handle plus ~40 more), `--cities-csv` hook for SimpleMaps-style `uscities.csv` with `--min-population` filter. Idempotent (L1/L2 short-circuit). Throttle-aware (sleeps 3s on `source='throttled'` to let the bucket drain). Dry-run smoke confirms the baked-in list and arg-parse path work without a live resolver call.
+
+**Files changed.**
+```
+infrastructure/migrations/versions/0011_fb_marketplace_locations.py         # NEW
+backend/modules/m2_prices/fb_location_models.py                             # NEW — FbMarketplaceLocation SQLAlchemy model
+backend/modules/m2_prices/adapters/fb_marketplace_location_resolver.py      # NEW — 3-tier cache, GCRA bucket, singleflight, engines, persist
+backend/modules/m2_prices/fb_location_router.py                             # NEW — POST /api/v1/fb-location/resolve
+backend/app/main.py                                                         # Wire router
+backend/app/models.py                                                       # Register FbMarketplaceLocation
+backend/tests/conftest.py                                                   # Drift marker now checks fb_marketplace_locations
+backend/modules/m2_prices/schemas.py                                        # fb_location_id + fb_radius_km on ContainerExtractRequest
+backend/modules/m2_prices/container_client.py                               # Miles→km at adapter boundary; field renames
+backend/modules/m2_prices/service.py                                        # fb_location_id threading; cache key :loc:<id>:r<miles>
+backend/modules/m2_prices/router.py                                         # Query param rename + pattern
+containers/base/server.py                                                   # FB_LOCATION_ID + FB_RADIUS_KM env
+containers/fb_marketplace/extract.sh                                        # Numeric URL + radius_in_km
+backend/tests/modules/test_fb_location_resolver.py                          # NEW — 28 tests
+backend/tests/modules/test_container_client.py                              # Rewrite fb-related tests for id/km
+backend/tests/modules/test_m2_prices_stream.py                              # Rewrite fb-related tests for id
+scripts/seed_fb_marketplace_locations.py                                    # NEW — bootstrap seed
+scripts/test_fb_location_resolver.py                                        # NEW — pre-wire empirical probe (kept for future debugging)
+Barkain/Services/Location/LocationPreferences.swift                         # Drop fbSlugAliases/slugify; storageKey v2; Stored.fbLocationId
+Barkain/Features/Profile/LocationPickerSheet.swift                          # Rewrite — remove slug TextField, add resolve state machine
+Barkain/Services/Networking/APIClient.swift                                 # resolveFbLocation method + streamPrices param rename
+Barkain/Services/Networking/Endpoints.swift                                 # resolveFbLocation case + streamPrices param rename
+Barkain/Features/Shared/Models/ResolvedFbLocation.swift                     # NEW — Codable DTOs
+Barkain/Features/Shared/Previews/BarePreviewAPIClient.swift                 # Preview stub
+Barkain/Features/Scanner/ScannerViewModel.swift                             # Read fbLocationId (was fbLocationSlug)
+BarkainTests/Helpers/MockAPIClient.swift                                    # resolveFbLocation mock + streamPrices param rename
+BarkainTests/Services/Location/LocationPreferencesTests.swift               # Rewrite — drop slugify tests, add Codable/v2 tests (8 total)
+BarkainTests/Services/Networking/EndpointsLocationTests.swift               # Rewrite — id-based param tests + resolveFbLocation (7 total)
+BarkainTests/Features/Profile/LocationPickerViewModelTests.swift            # NEW — 7 state-machine / save-gating tests
+BarkainTests/Features/Scanner/ScannerViewModelTests.swift                   # Rewrite fb-related tests for id
+CLAUDE.md, docs/CHANGELOG.md, docs/TESTING.md                               # Documentation
+```
+
+**Tests.**
+- **Backend +28.** `test_fb_location_resolver.py` — normalization (abbreviations / suffixes / non-ASCII / punctuation / empty), canonical-name extraction, L1 Redis hit, L2 Postgres hit with L1 warm, live resolve + persist, engine fallback on miss, tombstone on all-engines-empty, throttled write (no PG, 5-min bar), singleflight contention (two resolvers share one engine call via pub/sub notify), router happy/422/401 paths. Total: 557 passed / 0 failed / 7 skipped (from 529/0/7). `ruff check` clean.
+- **iOS +9 net.** `LocationPreferencesTests` (8 total — drops slugify; adds v2 storage key, bigint-safe encoding, nil-coord roundtrip). `EndpointsLocationTests` (7 total — swaps to id-based params, adds large-bigint round-trip + `resolveFbLocation` path/body). `LocationPickerViewModelTests` (NEW, 7 — initial state, seeded prefs load, save gating, radius mutate + save, clear reset). `ScannerViewModelTests` updated for id. Total: 147 passed / 0 failed (from 138/0).
+
+**Known limits / follow-ups.**
+- Bootstrap hasn't been run against production — needs Mike to confirm Decodo budget is comfortable with ~50 extra search-engine requests (~25 s wall clock at 2s/req through a single Decodo exit; faster with IP rotation). Dry-run is green.
+- Weekly verifier (sample 2 % of rows, re-check FB canonical name, tombstone if the ID 404s) is explicitly deferred to phase 2 of this feature — not needed until we have meaningful traffic.
+- Unincorporated-area UX: we show a soft banner when FB's canonical name differs from input, but no "use a different city" shortcut yet. Defer until a user actually hits it.
+- Seed-from-CSV path untested in CI because we don't ship `uscities.csv` in the repo. Script is mechanical (CSV → tuples → existing resolver); obvious bugs would surface on first run.
+- EC2 deploy completed 2026-04-22: `barkain-base:latest` + `barkain-fb_marketplace:latest` rebuilt, `fbmarketplace` container swapped with Decodo creds preserved. Smoke-tested end-to-end: `POST /extract` with `fb_location_id=108271525863730` + `fb_radius_km=40` returned the URL `https://www.facebook.com/marketplace/108271525863730/search/?query=sofa&exact=false&radius_in_km=40` and 3 real Accident, MD listings (no bot detection). Backend systemd unit (`barkain-api`) restarted clean — eBay webhook still returns the SHA-256 challenge response.
 

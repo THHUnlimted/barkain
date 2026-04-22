@@ -9,6 +9,7 @@ from app.core_models import (  # noqa: F401
     WatchdogEvent,
 )
 from modules.m1_product.models import Product  # noqa: F401
+from modules.m2_prices.fb_location_models import FbMarketplaceLocation  # noqa: F401
 from modules.m2_prices.models import Price, PriceHistory  # noqa: F401
 from modules.m3_secondary.models import Listing  # noqa: F401
 from modules.m4_coupons.models import CouponCache  # noqa: F401

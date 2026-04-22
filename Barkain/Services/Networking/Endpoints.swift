@@ -20,9 +20,10 @@ nonisolated enum Endpoint {
         productId: UUID,
         forceRefresh: Bool = false,
         queryOverride: String? = nil,
-        fbLocationSlug: String? = nil,
+        fbLocationId: String? = nil,
         fbRadiusMiles: Int? = nil
     )
+    case resolveFbLocation(ResolveFbLocationRequest)
     case health
     case getIdentityProfile
     case updateIdentityProfile(IdentityProfileRequest)
@@ -57,6 +58,8 @@ nonisolated enum Endpoint {
             return "/api/v1/prices/\(productId.uuidString)"
         case .streamPrices(let productId, _, _, _, _):
             return "/api/v1/prices/\(productId.uuidString)/stream"
+        case .resolveFbLocation:
+            return "/api/v1/fb-location/resolve"
         case .health:
             return "/api/v1/health"
         case .getIdentityProfile, .updateIdentityProfile:
@@ -89,7 +92,8 @@ nonisolated enum Endpoint {
     var method: HTTPMethod {
         switch self {
         case .resolveProduct, .resolveFromSearch, .searchProducts, .updateIdentityProfile,
-             .addCard, .setCardCategories, .getAffiliateURL, .getRecommendation:
+             .addCard, .setCardCategories, .getAffiliateURL, .getRecommendation,
+             .resolveFbLocation:
             return .post
         case .setPreferredCard:
             return .put
@@ -106,14 +110,14 @@ nonisolated enum Endpoint {
         switch self {
         case .getPrices(_, true):
             return [URLQueryItem(name: "force_refresh", value: "true")]
-        case .streamPrices(_, let force, let override, let slug, let radius):
+        case .streamPrices(_, let force, let override, let locationId, let radius):
             var items: [URLQueryItem] = []
             if force { items.append(URLQueryItem(name: "force_refresh", value: "true")) }
             if let override, !override.isEmpty {
                 items.append(URLQueryItem(name: "query", value: override))
             }
-            if let slug, !slug.isEmpty {
-                items.append(URLQueryItem(name: "fb_location_slug", value: slug))
+            if let locationId, !locationId.isEmpty {
+                items.append(URLQueryItem(name: "fb_location_id", value: locationId))
             }
             if let radius {
                 items.append(URLQueryItem(name: "fb_radius_miles", value: String(radius)))
@@ -170,6 +174,10 @@ nonisolated enum Endpoint {
             encoder.keyEncodingStrategy = .convertToSnakeCase
             return try? encoder.encode(request)
         case .getRecommendation(let request):
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            return try? encoder.encode(request)
+        case .resolveFbLocation(let request):
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase
             return try? encoder.encode(request)
