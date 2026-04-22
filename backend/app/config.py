@@ -120,6 +120,22 @@ class Settings(BaseSettings):
     EBAY_APP_ID: str = ""
     EBAY_CERT_ID: str = ""
 
+    # EXPERIMENT (revertable): swap Tier 2 UPCitemdb for eBay Browse keyword
+    # search in ProductSearchService. Off by default — flip to True to A/B.
+    SEARCH_TIER2_USE_EBAY: bool = False
+    # EXPERIMENT: when an eBay item exposes a `gtin`, surface it as
+    # `primary_upc` on the search row. Lets the iOS tap take the fast
+    # /resolve UPC path when the UPC is already in the products cache.
+    SEARCH_TIER2_EBAY_USE_GTIN: bool = False
+    # EXPERIMENT: force eBay rows to omit `primary_upc` so iOS skips the
+    # /resolve UPC round-trip entirely and goes straight to
+    # /resolve-from-search. Wins precedence over USE_GTIN if both on.
+    SEARCH_TIER2_EBAY_SKIP_UPC: bool = False
+    # EXPERIMENT (revertable): drop "box only", "for parts", "charger only"
+    # style listings from the M2 ebay_browse_api price stream. Especially
+    # noisy on used categories (laptops, phones).
+    M2_EBAY_DROP_PARTIAL_LISTINGS: bool = False
+
     # Best Buy Products API key. When set, the best_buy retailer leg is served
     # from the Products API (~150 ms per call) instead of the browser-container
     # scraper (~80–90 s). Same fallback pattern as EBAY_APP_ID — missing key

@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-22 (fb-marketplace-location-resolver — `FbLocationResolver` (Redis→Postgres→Startpage/DDG/Brave via Decodo, GCRA token bucket, singleflight with subscribe-before-recheck, throttled ≠ unresolved), `POST /api/v1/fb-location/resolve`, M2 stream swaps slug → numeric FB Page ID + miles→km at adapter, iOS `LocationPreferences.Stored` bump v1→v2 dropping `fbLocationSlug`/`fbSlugAliases` for `fbLocationId`)
+> Last updated: 2026-04-22 (experiment/tier2-ebay-search — opt-in flags swap M1 Tier 2 UPCitemdb → eBay Browse keyword search, `_sanitize_ebay_title` strips seller noise, optional `gtin` surfacing + `SKIP_UPC` shortcut to `/resolve-from-search`, separate `M2_EBAY_DROP_PARTIAL_LISTINGS` flag drops box-only / for-parts / charger-only listings on the price stream)
 
 ---
 
@@ -3371,3 +3371,67 @@ CLAUDE.md, docs/CHANGELOG.md, docs/TESTING.md                               # Do
 - Seed-from-CSV path untested in CI because we don't ship `uscities.csv` in the repo. Script is mechanical (CSV → tuples → existing resolver); obvious bugs would surface on first run.
 - EC2 deploy completed 2026-04-22: `barkain-base:latest` + `barkain-fb_marketplace:latest` rebuilt, `fbmarketplace` container swapped with Decodo creds preserved. Smoke-tested end-to-end: `POST /extract` with `fb_location_id=108271525863730` + `fb_radius_km=40` returned the URL `https://www.facebook.com/marketplace/108271525863730/search/?query=sofa&exact=false&radius_in_km=40` and 3 real Accident, MD listings (no bot detection). Backend systemd unit (`barkain-api`) restarted clean — eBay webhook still returns the SHA-256 challenge response.
 
+
+
+### Step experiment/tier2-ebay-search — Opt-in eBay Browse for M1 Tier 2 + M2 partial-listing denylist (2026-04-22)
+
+**Branch:** `experiment/tier2-ebay-search` → `main` (PR TBD)
+
+**Why.** Hands-on session probe: would Tier 2 picker results improve if we
+swapped UPCitemdb's slow / shared-IP-rate-capped trial endpoint for the
+eBay Browse API (already wired for the M2 price stream, OAuth2 client
+credentials, sub-second). Plus a parallel finding from a "MacBook"
+search — used eBay results were dominated by box-only / for-parts
+listings that the rec engine was treating as "best deal" candidates.
+
+All four toggles default off so trunk behavior is unchanged. Flip via
+`backend/.env`; `git checkout` the two backend files for full rollback.
+
+```
+backend/app/config.py                                      # +4 flags
+backend/modules/m1_product/search_service.py               # _ebay_search + _sanitize_ebay_title + EXTENDED branch
+backend/modules/m2_prices/adapters/ebay_browse_api.py      # _is_partial_listing + filtered loop
+.env.example                                               # documents the 4 flags
+CLAUDE.md / docs/CHANGELOG.md                              # this entry + step row + key-decision bullet
+```
+
+**Flags.**
+- `SEARCH_TIER2_USE_EBAY` — `gather(BBY, _upcitemdb_search)` becomes `gather(BBY, _ebay_search)`. Single-line branch on the second-leg coroutine. Schema unchanged: rows ride the existing `"upcitemdb"` source slot in `_merge` to avoid widening the iOS `Literal["db","best_buy","upcitemdb","gemini","generic"]` Codable enum.
+- `SEARCH_TIER2_EBAY_USE_GTIN` — adds `fieldgroups=EXTENDED` to the search call and tries `item.gtin` then `localizedAspects[name=GTIN|UPC|EAN]`, surfacing as `primary_upc` only when 12 or 13 digits. **Practical no-op:** dump of `item_summary` on `q=apple airpods pro 2 fieldgroups=EXTENDED` shows `gtin=None` for every row (`epid` is present but isn't a UPC). Per-item `/item/{itemId}` enrichment would cost N×~250 ms on the picker path — not worth it. Flag stays so it auto-engages if eBay starts returning gtins for some categories.
+- `SEARCH_TIER2_EBAY_SKIP_UPC` — forces `primary_upc=None` on eBay rows so the iOS `if let upc = result.primaryUpc` branch is skipped and the tap goes straight to `/resolve-from-search`. Wins precedence over `USE_GTIN` if both on.
+- `M2_EBAY_DROP_PARTIAL_LISTINGS` — separate from the Tier 2 swap. Adds a title regex (`box only|empty box|for parts|not working|as[- ]is|charger only|cable only|adapter only|replacement (parts|screen|battery|charger)|sticker(s)? only|decal(s)? only|no (battery|charger|hdd|ssd|os|hard drive)|...`) and drops matching items inside `fetch_ebay`'s loop before `_map_item_to_listing`. Logs a single `dropped_partial=N` line per request. Specificity over breadth — "box only" not "box".
+
+**Title sanitizer.** `_sanitize_ebay_title` was added because seller titles
+("🎤 Generation Apple AirPods Pro 2nd…", `**Apple** 'Air Pods'`,
+`Sony WH-1000XM6 - Black FREE SHIPPING`) made `/resolve-from-search`
+404, surfacing as iOS `APIError.notFound` → "We couldn't pull details
+for this result" toast. Sanitizer strips broad emoji ranges, markdown
+asterisks, smart quotes / fancy hyphens, seller-pitch phrases (`free
+shipping`, `brand new sealed`, `outer box imperfections`,
+`100% authentic`, …), and trailing fluff after a long dash / pipe when
+the tail has no model digits. Unconditional inside `_ebay_search` —
+rides the same `git checkout` revert.
+
+**Server-side spinner finding.** With or without `USE_GTIN` / `SKIP_UPC`,
+eBay rows always flow through `/resolve-from-search` because Browse
+search doesn't expose UPCs. The ~1–3 s post-tap spinner is server-side:
+device-name → UPC derivation via UPCitemdb keyword + Gemini cross-val +
+PG persist. Unavoidable without a different source-of-UPC. Recorded
+here so future sessions don't relitigate.
+
+**Local infra notes.**
+- Backend must run with `uvicorn --host 0.0.0.0 --port 8000`. `127.0.0.1`-only binds make iOS sim's IPv6 happy-eyeballs from `localhost:8000` time out — same trap CLAUDE.md flagged for `API_BASE_URL`. The `0.0.0.0` bind is dev-only (production Caddy fronts uvicorn on `127.0.0.1:8000`).
+- Containers: scraper SG (`sg-0235e0aafe9fa446e`) keeps ports 8081–8091 closed to the internet (VPC-only invariant). For local dev, SSH-tunnel them rather than opening the SG: `ssh -i ~/.ssh/barkain-scrapers.pem -N -L 8081:127.0.0.1:8081 -L 8082:127.0.0.1:8082 -L 8083:127.0.0.1:8083 -L 8084:127.0.0.1:8084 -L 8085:127.0.0.1:8085 -L 8087:127.0.0.1:8087 -L 8088:127.0.0.1:8088 -L 8090:127.0.0.1:8090 -L 8091:127.0.0.1:8091 ubuntu@54.197.27.219`. `CONTAINER_URL_PATTERN` stays `http://localhost:{port}`.
+
+**Tests.** No test changes — opt-in defaults preserve current behavior, so
+the existing 557-backend / 147-iOS suite is the regression net. eBay
+sanitizer + partial-listing regex were validated by ad-hoc Python
+one-shots during the session (8/8 expected drops on MacBook samples,
+clean rewrite on 5 messy AirPods titles). If the experiment graduates,
+both deserve focused unit tests before merging behind a default-on flag.
+
+**Known limits / follow-ups.**
+- `USE_GTIN` is a no-op until eBay returns gtins on `item_summary`. Periodic re-check on a real query is cheap.
+- Sanitizer is unconditional inside `_ebay_search` — if anyone wants the raw eBay title for debugging, it's only a `print(raw_title)` away.
+- M2 partial-listing regex covers electronics noise. Apparel / collectibles use different vocabulary ("size only listed", "swatch") — extend if those categories matter.
+- Schema slot reuse (`source="upcitemdb"` for eBay rows) is intentionally undisclosed to iOS to avoid a Codable migration. If telemetry needs to distinguish, the cleanest path is a new optional `tier2_origin` field, additive, defaults None.
