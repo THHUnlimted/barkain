@@ -14,17 +14,28 @@ nonisolated struct AffiliateClickRequest: Codable, Sendable, Equatable {
     // issuer's activation URL. Backend persists to
     // `affiliate_clicks.metadata` for post-demo analytics.
     let activationSkipped: Bool
+    // Step 3g-B — when the click came via a portal CTA, both fields
+    // populate so funnel analytics can split MEMBER_DEEPLINK detours,
+    // SIGNUP_REFERRAL conversions, and GUIDED_ONLY handoffs (the last
+    // is the signal that says "TopCashback approval would unlock
+    // revenue from X% of flows"). Direct retailer taps leave both nil.
+    let portalEventType: String?
+    let portalSource: String?
 
     init(
         productId: UUID?,
         retailerId: String,
         productUrl: String,
-        activationSkipped: Bool = false
+        activationSkipped: Bool = false,
+        portalEventType: String? = nil,
+        portalSource: String? = nil
     ) {
         self.productId = productId
         self.retailerId = retailerId
         self.productUrl = productUrl
         self.activationSkipped = activationSkipped
+        self.portalEventType = portalEventType
+        self.portalSource = portalSource
     }
 }
 

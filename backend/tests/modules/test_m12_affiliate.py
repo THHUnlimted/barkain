@@ -346,6 +346,65 @@ async def test_click_endpoint_persists_activation_skipped_true(
     assert row[0] == {"activation_skipped": True}
 
 
+async def test_click_endpoint_persists_portal_event_type_and_source(
+    client, db_session
+):
+    """Step 3g-B — portal CTA taps flow `portal_event_type` + `portal_source`
+    into `affiliate_clicks.metadata` so funnel analytics can split member
+    deeplinks, signup conversions, and guided-only handoffs."""
+    await _seed_retailer(db_session, "amazon")
+
+    resp = await client.post(
+        "/api/v1/affiliate/click",
+        json={
+            "retailer_id": "amazon",
+            "product_url": "https://www.rakuten.com/amazon.com.htm",
+            "portal_event_type": "member_deeplink",
+            "portal_source": "rakuten",
+        },
+    )
+    assert resp.status_code == 200
+
+    row = (
+        await db_session.execute(
+            text(
+                "SELECT metadata FROM affiliate_clicks "
+                "WHERE user_id = :uid ORDER BY clicked_at DESC LIMIT 1"
+            ),
+            {"uid": MOCK_USER_ID},
+        )
+    ).first()
+    assert row is not None
+    metadata = row[0]
+    assert metadata["activation_skipped"] is False
+    assert metadata["portal_event_type"] == "member_deeplink"
+    assert metadata["portal_source"] == "rakuten"
+
+
+async def test_click_endpoint_rejects_unknown_portal_event_type(
+    client, db_session
+):
+    """Step 3g-B — bad `portal_event_type` returns 422 instead of silently
+    polluting analytics with junk values. iOS string enum mirrors the
+    backend `_VALID_PORTAL_EVENT_TYPES` set."""
+    await _seed_retailer(db_session, "amazon")
+
+    resp = await client.post(
+        "/api/v1/affiliate/click",
+        json={
+            "retailer_id": "amazon",
+            "product_url": "https://www.amazon.com/dp/X",
+            "portal_event_type": "definitely_not_a_real_mode",
+            "portal_source": "rakuten",
+        },
+    )
+    assert resp.status_code == 422
+    assert (
+        resp.json()["detail"]["error"]["code"]
+        == "AFFILIATE_INVALID_PORTAL_EVENT_TYPE"
+    )
+
+
 async def test_stats_endpoint_unchanged_by_metadata_field(
     client, db_session
 ):

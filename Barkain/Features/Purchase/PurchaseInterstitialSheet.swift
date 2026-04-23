@@ -62,6 +62,32 @@ final class PurchaseInterstitialViewModel {
         }
     }
 
+    /// Step 3g-B: user tapped a portal CTA row. Logs the affiliate click
+    /// with the portal event-type/source so funnel analytics can split
+    /// MEMBER_DEEPLINK detours, SIGNUP_REFERRAL conversions, and
+    /// GUIDED_ONLY handoffs separately. Hands `cta.ctaUrl` to the in-app
+    /// browser regardless of the click-log outcome — UX should not block
+    /// on telemetry.
+    func openPortal(cta: PortalCTA, onOpen: (URL) -> Void) async {
+        Task {
+            _ = try? await apiClient.getAffiliateURL(
+                productId: context.productId,
+                retailerId: context.retailerId,
+                productURL: cta.ctaUrl,
+                activationSkipped: false,
+                portalEventType: cta.mode,
+                portalSource: cta.portalSource
+            )
+        }
+        if let url = URL(string: cta.ctaUrl) {
+            onOpen(url)
+        } else {
+            interstitialLog.warning(
+                "openPortal: invalid cta_url for portal=\(cta.portalSource, privacy: .public)"
+            )
+        }
+    }
+
     // MARK: - Copy
 
     var baselineComparisonCopy: String {
@@ -132,6 +158,9 @@ struct PurchaseInterstitialSheet: View {
             } else {
                 directPurchaseBlock
             }
+            if !viewModel.context.portalCTAs.isEmpty {
+                portalBlock
+            }
             if viewModel.context.shouldShowActivationBlock {
                 activationBlock
             }
@@ -141,6 +170,66 @@ struct PurchaseInterstitialSheet: View {
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .accessibilityIdentifier("purchaseInterstitialSheet")
+    }
+
+    // MARK: - Portal block (Step 3g-B)
+    //
+    // Renders ≤3 CTAs already sorted by the backend (rate desc, portal asc).
+    // Top CTA bold; signup-promo amber line is conditional; FTC disclosure
+    // ("Referral — Barkain earns a bonus if you sign up.") renders only on
+    // SIGNUP_REFERRAL rows because that's the only mode that triggers
+    // attribution. All disclosure copy is co-located with the link per FTC
+    // guidance, not buried in a separate sheet.
+
+    private var portalBlock: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            ForEach(Array(viewModel.context.portalCTAs.enumerated()), id: \.element.id) { idx, cta in
+                portalRow(cta: cta, isTop: idx == 0)
+            }
+        }
+        .padding(.vertical, Spacing.xs)
+        .accessibilityIdentifier("purchaseInterstitialPortalBlock")
+    }
+
+    @ViewBuilder
+    private func portalRow(cta: PortalCTA, isTop: Bool) -> some View {
+        Button {
+            Task { await viewModel.openPortal(cta: cta, onOpen: onContinue) }
+        } label: {
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("+ \(cta.displayName) — \(formatPortalRate(cta.bonusRatePercent))")
+                        .font(.barkainBody)
+                        .fontWeight(isTop ? .semibold : .regular)
+                        .foregroundStyle(Color.barkainOnSurface)
+                    Spacer()
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.barkainOnSurfaceVariant.opacity(0.6))
+                }
+                Text(cta.ctaLabel)
+                    .font(.barkainCaption)
+                    .foregroundStyle(Color.barkainOnSurfaceVariant)
+                if let promo = cta.signupPromoCopy {
+                    Text(promo)
+                        .font(.barkainCaption)
+                        .foregroundStyle(Color.orange)
+                }
+                if cta.disclosureRequired {
+                    Text("Referral — Barkain earns a bonus if you sign up.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.barkainOnSurfaceVariant.opacity(0.7))
+                        .accessibilityIdentifier("purchaseInterstitialPortalDisclosure")
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("purchaseInterstitialPortalRow_\(cta.portalSource)")
+    }
+
+    private func formatPortalRate(_ rate: Double) -> String {
+        if rate == rate.rounded() { return "\(Int(rate))%" }
+        return String(format: "%.1f%%", rate)
     }
 
     // MARK: - Header

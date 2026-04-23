@@ -47,7 +47,10 @@ async def recommend(
     service = RecommendationService(db=db, redis=redis_client)
     try:
         return await service.get_recommendation(
-            user["user_id"], body.product_id, force_refresh=body.force_refresh
+            user["user_id"],
+            body.product_id,
+            force_refresh=body.force_refresh,
+            user_memberships=body.user_memberships,
         )
     except RecommendationProductNotFoundError:
         raise_http_error(

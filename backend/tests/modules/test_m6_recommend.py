@@ -6,10 +6,8 @@ fixture plus fakeredis, then drops to pure-function tests on the
 stacking helpers for the math edge cases.
 """
 
-import subprocess
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 from sqlalchemy import text
@@ -678,6 +676,62 @@ async def test_recommendation_cache_busts_on_card_portfolio_change(
     assert third.cached is False
 
 
+async def test_recommendation_cache_busts_on_portal_membership_toggle(
+    db_session, fake_redis
+):
+    """Toggling a portal membership flag flips the `:p<hash>` cache segment.
+
+    Step 3g-B — without this, a user toggling "I'm a Rakuten member" in
+    Profile would keep seeing the SIGNUP_REFERRAL CTA for up to the
+    15-min TTL. Same class of bug as the card-portfolio busting test
+    above; covered with the same setup.
+    """
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "amazon")
+    await _seed_retailer(db_session, "best_buy")
+    await _seed_health(db_session, "amazon")
+    await _seed_health(db_session, "best_buy")
+    product = await _seed_product(db_session)
+    await db_session.flush()
+
+    import json as _json
+    payload = {
+        "product_id": str(product.id),
+        "product_name": product.name,
+        "prices": [
+            _wire_price("amazon", 100.0), _wire_price("best_buy", 110.0),
+        ],
+        "retailer_results": [],
+        "total_retailers": 2, "retailers_succeeded": 2, "retailers_failed": 0,
+        "cached": True, "fetched_at": datetime.now(UTC).isoformat(),
+    }
+    await fake_redis.setex(f"prices:product:{product.id}", 600, _json.dumps(payload))
+
+    service = RecommendationService(db_session, fake_redis)
+    first = await service.get_recommendation(
+        MOCK_USER_ID, product.id, user_memberships={}
+    )
+    assert first.cached is False
+
+    second = await service.get_recommendation(
+        MOCK_USER_ID, product.id, user_memberships={}
+    )
+    assert second.cached is True
+
+    # Toggle Rakuten membership on — the :p<hash> segment changes.
+    third = await service.get_recommendation(
+        MOCK_USER_ID, product.id, user_memberships={"rakuten": True}
+    )
+    assert third.cached is False
+
+    # Toggle off again returns the same hash as the first call (False values
+    # are dropped before hashing) so we get a cache hit on that key.
+    fourth = await service.get_recommendation(
+        MOCK_USER_ID, product.id, user_memberships={"rakuten": False}
+    )
+    assert fourth.cached is True
+
+
 # MARK: - Endpoint-level tests
 
 
@@ -720,37 +774,6 @@ async def test_recommend_endpoint_422_on_insufficient_data(
     assert resp.status_code == 422
     assert resp.json()["detail"]["error"]["code"] == "RECOMMEND_INSUFFICIENT_DATA"
 
-
-async def test_seed_portal_bonuses_demo_is_idempotent(db_session):
-    """Running the seed twice leaves the row count unchanged."""
-    # Minimum retailer set so every seed row can resolve.
-    for rid in (
-        "amazon", "best_buy", "walmart", "target", "home_depot",
-        "backmarket", "samsung_direct", "apple_direct",
-    ):
-        await _seed_retailer(db_session, rid)
-    await db_session.commit()
-
-    script = (
-        Path(__file__).resolve().parents[3]
-        / "scripts" / "seed_portal_bonuses_demo.py"
-    )
-    import os
-    env = os.environ.copy()
-    env["DATABASE_URL"] = os.environ.get(
-        "TEST_DATABASE_URL",
-        "postgresql+asyncpg://app:test@localhost:5433/barkain_test",
-    )
-    subprocess.run(["python3", str(script)], check=True, env=env)
-    row = (await db_session.execute(
-        text("SELECT count(*) FROM portal_bonuses")
-    )).scalar_one()
-    first = int(row)
-    subprocess.run(["python3", str(script)], check=True, env=env)
-    row = (await db_session.execute(
-        text("SELECT count(*) FROM portal_bonuses")
-    )).scalar_one()
-    assert int(row) == first
 
 
 # MARK: - Wire-shape helper

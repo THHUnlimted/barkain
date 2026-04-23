@@ -7,17 +7,28 @@ so the convention across the codebase is float-everywhere for price math).
 
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+from modules.m13_portal.schemas import PortalCTA
 
 
 # MARK: - Request
 
 
 class RecommendationRequest(BaseModel):
-    """Body for `POST /api/v1/recommend`."""
+    """Body for `POST /api/v1/recommend`.
+
+    `user_memberships` carries the user's self-reported portal-membership
+    state (Step 3g-B). Sparse map of portal_source → True. The service
+    folds this into the cache-key hash so toggling "I'm a Rakuten member"
+    busts stale recs immediately — same class of bug as adding a card
+    that 3f's `:c<sha1(card_ids)>` pattern solved. Missing keys are
+    treated as non-member; explicit False is also non-member.
+    """
 
     product_id: UUID
     force_refresh: bool = False
+    user_memberships: dict[str, bool] = Field(default_factory=dict)
 
 
 # MARK: - Stacked Path
@@ -48,6 +59,11 @@ class StackedPath(BaseModel):
 
     portal_savings: float = 0.0
     portal_source: str | None = None
+
+    # Step 3g-B: actionable portal CTAs for this retailer (member deeplink
+    # vs signup referral vs guided-only). Only the winner carries a
+    # populated list; alternatives default to [] to keep the response tight.
+    portal_ctas: list[PortalCTA] = Field(default_factory=list)
 
     condition: str = "new"
     product_url: str | None = None

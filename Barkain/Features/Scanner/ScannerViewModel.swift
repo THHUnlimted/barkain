@@ -63,11 +63,19 @@ final class ScannerViewModel {
     private let apiClient: any APIClientProtocol
     private let featureGate: FeatureGateService
     private let locationPreferences: LocationPreferences
+    private let portalMembershipPreferences: PortalMembershipPreferences
 
     /// Step 3f: PriceComparisonView's PurchaseInterstitialSheet needs the
     /// same client for its affiliate-click call. Exposing this avoids
     /// injecting APIClient into the view env from two directions.
     var apiClientForInterstitial: any APIClientProtocol { apiClient }
+
+    /// Step 3g-B: portal-membership prefs are read at fetch time so the
+    /// sheet's "I'm a member" toggles in Profile bust the M6 cache via
+    /// the `:p<hash>` segment without any explicit refresh wiring.
+    var portalMembershipPreferencesForInterstitial: PortalMembershipPreferences {
+        portalMembershipPreferences
+    }
 
     // MARK: - Init
 
@@ -83,11 +91,13 @@ final class ScannerViewModel {
     init(
         apiClient: any APIClientProtocol,
         featureGate: FeatureGateService? = nil,
-        locationPreferences: LocationPreferences = LocationPreferences()
+        locationPreferences: LocationPreferences = LocationPreferences(),
+        portalMembershipPreferences: PortalMembershipPreferences = PortalMembershipPreferences()
     ) {
         self.apiClient = apiClient
         self.featureGate = featureGate ?? FeatureGateService(proTierProvider: { false })
         self.locationPreferences = locationPreferences
+        self.portalMembershipPreferences = portalMembershipPreferences
     }
 
     // MARK: - Actions
@@ -284,9 +294,17 @@ final class ScannerViewModel {
     /// secondary-feature failure. Same contract as identity discounts.
     private func fetchRecommendation(productId: UUID) async {
         let log = Logger(subsystem: "com.barkain.app", category: "Recommendation")
+        // Step 3g-B: snapshot membership prefs at fetch time. nil when no
+        // portals are toggled on so the request body stays small.
+        let memberships = portalMembershipPreferences.current()
+        let activeMemberships = memberships.filter { $0.value }
+        let userMemberships: [String: Bool]? = activeMemberships.isEmpty
+            ? nil : activeMemberships
         do {
             let result = try await apiClient.fetchRecommendation(
-                productId: productId, forceRefresh: false
+                productId: productId,
+                forceRefresh: false,
+                userMemberships: userMemberships
             )
             if let result {
                 recommendation = result

@@ -184,3 +184,140 @@ struct PurchaseInterstitialSheetRenderTests {
         #expect(vm.continueButtonLabel.contains("Amazon"))
     }
 }
+
+// MARK: - Portal CTA tests (Step 3g-B)
+
+private func makePortalCTA(
+    portalSource: String = "rakuten",
+    mode: String = "member_deeplink",
+    rate: Double = 3.0,
+    disclosureRequired: Bool = false,
+    signupPromoCopy: String? = nil
+) -> PortalCTA {
+    PortalCTA(
+        portalSource: portalSource,
+        displayName: portalSource.capitalized,
+        mode: mode,
+        bonusRatePercent: rate,
+        bonusIsElevated: false,
+        ctaUrl: "https://www.\(portalSource).com/store/X",
+        ctaLabel: "Open \(portalSource.capitalized) for \(Int(rate))% back",
+        signupPromoCopy: signupPromoCopy,
+        lastVerified: Date(),
+        disclosureRequired: disclosureRequired
+    )
+}
+
+private func makeWinnerWithPortals(_ ctas: [PortalCTA]) -> StackedPath {
+    StackedPath(
+        retailerId: "amazon",
+        retailerName: "Amazon",
+        basePrice: 100,
+        finalPrice: 100,
+        effectiveCost: 100,
+        totalSavings: 0,
+        portalCtas: ctas
+    )
+}
+
+@Suite("PurchaseInterstitialContext + sheet portal row")
+struct PurchaseInterstitialPortalTests {
+
+    @Test("Winner-init populates portalCTAs from StackedPath")
+    func winnerInitPropagatesCTAs() {
+        let ctas = [makePortalCTA(portalSource: "rakuten")]
+        let ctx = PurchaseInterstitialContext(
+            winner: makeWinnerWithPortals(ctas),
+            productId: UUID(),
+            productName: "Sony WH-1000XM5",
+            cards: []
+        )
+        #expect(ctx.portalCTAs.count == 1)
+        #expect(ctx.portalCTAs.first?.portalSource == "rakuten")
+    }
+
+    @Test("Price-row init defaults portalCTAs to empty (filled on demand)")
+    func priceRowInitDefaultsCTAsToEmpty() {
+        let price = RetailerPrice(
+            retailerId: "amazon",
+            retailerName: "Amazon",
+            price: 99.00,
+            url: nil,
+            condition: "new",
+            lastChecked: Date()
+        )
+        let ctx = PurchaseInterstitialContext(
+            price: price,
+            productId: UUID(),
+            productName: "Sony WH-1000XM5",
+            card: nil
+        )
+        #expect(ctx.portalCTAs.isEmpty)
+    }
+
+    @Test("openPortal logs the click with portal_event_type + portal_source")
+    func openPortalSendsAffiliateClickWithPortalMetadata() async {
+        let mock = MockAPIClient()
+        mock.getAffiliateURLResult = .success(
+            AffiliateURLResponse(
+                affiliateUrl: "https://www.rakuten.com/r/X",
+                isAffiliated: false,
+                network: nil,
+                retailerId: "amazon"
+            )
+        )
+        let cta = makePortalCTA(portalSource: "rakuten", mode: "signup_referral")
+        let ctx = PurchaseInterstitialContext(
+            winner: makeWinnerWithPortals([cta]),
+            productId: UUID(),
+            productName: "Sony WH-1000XM5",
+            cards: []
+        )
+        let vm = PurchaseInterstitialViewModel(context: ctx, apiClient: mock)
+
+        var openedURL: URL?
+        await vm.openPortal(cta: cta) { url in openedURL = url }
+
+        // openPortal hands the URL to the caller synchronously regardless of
+        // the click-log outcome — UX must not block on telemetry.
+        #expect(openedURL != nil)
+
+        // The click is fire-and-forget via Task — give it a tick to land.
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(mock.getAffiliateURLLastPortalEventType == "signup_referral")
+        #expect(mock.getAffiliateURLLastPortalSource == "rakuten")
+    }
+
+    @Test("Multi-portal context preserves backend-provided sort order")
+    func multiPortalSortPreserved() {
+        // Backend sorts (rate desc, portal_source asc); iOS must NOT re-sort.
+        let ctas = [
+            makePortalCTA(portalSource: "topcashback", rate: 4.0),
+            makePortalCTA(portalSource: "befrugal", rate: 2.5),
+            makePortalCTA(portalSource: "rakuten", rate: 1.0),
+        ]
+        let ctx = PurchaseInterstitialContext(
+            winner: makeWinnerWithPortals(ctas),
+            productId: UUID(),
+            productName: "Sony WH-1000XM5",
+            cards: []
+        )
+        #expect(ctx.portalCTAs.map(\.portalSource) == ["topcashback", "befrugal", "rakuten"])
+    }
+
+    @Test("Disclosure flag is per-CTA, not all-or-nothing")
+    func disclosurePerCTA() {
+        let ctas = [
+            makePortalCTA(portalSource: "rakuten", mode: "signup_referral", disclosureRequired: true),
+            makePortalCTA(portalSource: "befrugal", mode: "member_deeplink", disclosureRequired: false),
+        ]
+        let ctx = PurchaseInterstitialContext(
+            winner: makeWinnerWithPortals(ctas),
+            productId: UUID(),
+            productName: "Sony WH-1000XM5",
+            cards: []
+        )
+        #expect(ctx.portalCTAs[0].disclosureRequired == true)
+        #expect(ctx.portalCTAs[1].disclosureRequired == false)
+    }
+}
