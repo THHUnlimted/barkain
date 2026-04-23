@@ -3654,18 +3654,46 @@ trimming load-bearing detail from the new entries themselves.
   + flushed `fbmkt:*` Redis keys, re-ran the seed. Resolver
   short-circuits the 44 already-good rows via L1/L2 cache so only
   the 6 deleted hit the live engines.
-- **Final state:** 50 rows — **47 resolved, 3 tombstoned, 0
-  throttled.** Recovered: El Paso TX (transient extractor miss),
-  Tampa FL (transient), Columbus OH (Brave engine succeeded on
-  retry where Startpage had failed). Persistent failures: Oakland
-  CA, Raleigh NC, Seattle WA — all common city names where the
-  search-result snippet returns metro/state-level pages or
-  ambiguous results. This is an extractor-quality issue (not
-  transient); will not self-resolve on retry. Three options to
-  handle: (1) hand-resolve via FB Marketplace UI + manual
-  `INSERT INTO fb_marketplace_locations`, (2) tighten the
-  `_parse_result_html` extractor to handle these snippet shapes,
-  (3) leave them — users in those metros see the SF-default pill.
+- **Cleanup pass result:** 50 rows — 47 resolved, 3 tombstoned.
+  Recovered: El Paso TX (transient extractor miss), Tampa FL
+  (transient), Columbus OH `108450559178997` (Brave engine
+  succeeded on retry where Startpage had failed). Persistent
+  failures: Oakland CA, Raleigh NC, Seattle WA — common city
+  names where the snippet returns metro/state-level pages or
+  ambiguous results. Not transient; will not self-resolve.
+- **Hand-resolve pass.** WebSearched `"facebook.com/marketplace/"
+  Oakland California site:facebook.com` (and Raleigh + Seattle
+  variants). Snippets surfaced numeric Page IDs in
+  `/marketplace/<id>/cars/` and `/marketplace/<id>/free/` shapes
+  that `_parse_result_html` doesn't catch (it keys on
+  `/marketplace/<id>/` with no trailing category). Extracted IDs
+  validated against multiple category-page URL hits per city,
+  then `INSERT`ed with `source='user'` (the `'user'` value in
+  the model CHECK constraint exists exactly for this manual-seed
+  case) + `verified=true` + `last_verified_at=NOW()`. Stale
+  Redis tombstones flushed via
+  `redis-cli --scan --pattern fbmkt:*:{oakland,raleigh,seattle}*`.
+- **Final state: 50 rows, 50 resolved, 0 tombstones, 100%
+  coverage.** IDs:
+  - Oakland CA → `108363292521622` (sources agree across
+    `/free/` and `/cars/`)
+  - Raleigh NC → `103879976317396` (4× consistent across
+    `/free/`, `/cars/`, `/trailers/`, `/rv-campers/`)
+  - Seattle WA → `110843418940484` (`/cars/` + `/free/`).
+    **Note:** Seattle has a second ID `136989752989520`
+    appearing in `/classifieds/`, `/home/`, `/furniture/` —
+    likely a parallel sub-region or category bucket. Picked the
+    cars+free pair since those are the highest-traffic
+    surfaces. If listings look wrong for Seattle users, swap
+    via single UPDATE.
+- **Latent extractor improvement (followup, not done here):**
+  `_parse_result_html` should match the
+  `/marketplace/<digits>/<category>/?` shape too, not just
+  `/marketplace/<digits>/?`. That single regex relaxation would
+  have prevented all 6 first-pass tombstones. Documenting as a
+  small follow-up — the seed is now Mike-correct via hand-resolve,
+  but live user resolves for novel cities will keep hitting the
+  same parser limitation.
 - Spot-check verified: NYC `108424279189115`, LA `103097699730654`,
   Chicago `103794029659599`, SF `107929532567815`, El Paso
   (recovered), Tampa (recovered), Columbus `108450559178997`
@@ -3701,11 +3729,12 @@ trimming load-bearing detail from the new entries themselves.
   presentation tweaks come up. The new banner secondary-action
   affordance uses `lastResolveTarget?.label` instead, so it works
   correctly.
-- 3 persistent tombstones after the cleanup pass (Oakland, Raleigh,
-  Seattle) — common city names where the snippet extractor returns
-  ambiguous results. These won't self-resolve on retry; need either
-  hand-resolved INSERTs or a tightened `_parse_result_html`. Tampa,
-  El Paso, Columbus all recovered on the cleanup-pass retry.
+- All 50 seed rows now resolved (after hand-resolve of Oakland /
+  Raleigh / Seattle). The latent issue is in `_parse_result_html` —
+  it doesn't match the `/marketplace/<digits>/<category>/` URL
+  shape, only the bare `/marketplace/<digits>/`. Tightening that
+  regex would have prevented all 6 first-pass tombstones and would
+  also help live user resolves for novel cities. Filed for follow-up.
 - Production seed pending — Mike-operated when the Decodo budget
   is confirmed.
 - CHANGELOG + CLAUDE.md compaction overshoot (~447 chars over
