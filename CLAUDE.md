@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** 2026-04-23 (v5.23 — chore/profileview-snapshot-infra-smoke: +3 `ProfileView` snapshots for the remaining `content` branches (loading, error, kitchen-sink w/ all 3 chip rows), +5 `.accessibilityIdentifier` modifiers on shared sections (`kennelHeader`/`scentTrailsCard`/`subscriptionSection`/`marketplaceLocationSection`/`cardsSection`). Tried an a11y-tree grep as secondary smoke — 3 walker variants all failed on iOS 26.4's SwiftUI bridge; PNG baselines stay the regression signal. iOS unit 173 → 176. Full entry in docs/CHANGELOG.md.)
+> **Last updated:** 2026-04-23 (v5.24 — chore/profileview-snapshot-infra-smoke: +6 `ProfileView` snapshot tests for under-covered states — 3 missing `content` branches (loading, error, kitchen-sink w/ all 3 chip rows) + 3 shared-section state permutations (pro-user tier, non-zero affiliate stats, saved marketplace location). +5 `.accessibilityIdentifier` modifiers on shared sections (`kennelHeader`/`scentTrailsCard`/`subscriptionSection`/`marketplaceLocationSection`/`cardsSection`) + `MockAPIClient.getIdentityProfileDelay` test seam. Tried an a11y-tree grep as secondary smoke — 3 walker variants all failed on iOS 26.4's SwiftUI bridge; PNG baselines stay the regression signal. iOS unit 173 → 179. Full entry in docs/CHANGELOG.md.)
 
 ---
 
@@ -226,7 +226,7 @@ Two-tier AI workflow: **Planner** (Claude Opus via claude.ai) authors prompt pac
 | 3g-B | Portal Live Integration iOS: `PortalCTA` model + interstitial row (≤3 sorted, FTC disclosure on SIGNUP_REFERRAL, amber promo); `PortalMembershipPreferences` + Profile toggles; M6 cache key adds `:p<sha1(active_portals)>:v5` so toggles bust stale recs; `affiliate_clicks.metadata` gains `portal_event_type`/`portal_source` for funnel split; demo seed deleted | +2 | +14 | #54 |
 | 3g-B-fix-1 | Wire `portalMembershipsSection` into `ProfileView`'s second `ScrollView` branch (completed-profile path) — original 3g-B only patched the empty-profile branch. Sim screenshot during validation showed zero toggles for users with a saved identity. 1-line structural fix | — | — | #55 |
 
-**Test totals:** 585 backend + 176 iOS unit + 6 iOS UI (with experiment flags off — see L-Experiment-flags-default-off). `ruff check` clean. `xcodebuild` clean.
+**Test totals:** 585 backend + 179 iOS unit + 6 iOS UI (with experiment flags off — see L-Experiment-flags-default-off). `ruff check` clean. `xcodebuild` clean.
 
 **Migrations:** 0001 (initial, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert + failure counter) → 0006 (`chk_subscription_tier` CHECK) → 0007 (pg_trgm + trgm GIN idx) → 0008 (`affiliate_clicks.metadata` JSONB) → 0009 (`discount_programs.scope` — product / membership_fee / shipping) → 0010 (`is_young_adult` on `user_discount_profiles`) → 0011 (`fb_marketplace_locations` — city→FB Page ID cache w/ tombstoning) → 0012 (`portal_configs` — display + signup-promo + alerting state for shopping portals). Drift marker in `tests/conftest.py::_ensure_schema` now checks `portal_configs`.
 

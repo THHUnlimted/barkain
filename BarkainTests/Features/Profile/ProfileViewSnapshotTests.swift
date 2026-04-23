@@ -200,25 +200,40 @@ struct ProfileViewSnapshotTests {
         profileResult: Result<IdentityProfile, APIError>,
         portalMemberships: [String: Bool],
         identityDelay: TimeInterval,
-        flushTaskIterations: Int
+        flushTaskIterations: Int,
+        affiliateStats: AffiliateStatsResponse = AffiliateStatsResponse(
+            clicksByRetailer: [:],
+            totalClicks: 0
+        ),
+        savedLocation: LocationPreferences.Stored? = nil,
+        isProUser: Bool = false
     ) async -> UIViewController {
         let api = MockAPIClient()
         api.getIdentityProfileResult = profileResult
         api.getIdentityProfileDelay = identityDelay
         api.getUserCardsResult = .success([])
-        api.getAffiliateStatsResult = .success(
-            AffiliateStatsResponse(clicksByRetailer: [:], totalClicks: 0)
-        )
+        api.getAffiliateStatsResult = .success(affiliateStats)
 
         let locationDefaults = makeDefaults()
         let membershipDefaults = makeDefaults()
         let location = LocationPreferences(defaults: locationDefaults)
+        if let savedLocation {
+            location.save(savedLocation)
+        }
         let membership = PortalMembershipPreferences(defaults: membershipDefaults)
         for (portal, value) in portalMemberships {
             membership.setMember(portal, isMember: value)
         }
 
         let subscription = SubscriptionService()
+        if isProUser {
+            // `SubscriptionService.currentTier` is `private(set)`. The only
+            // test seam that flips it is the DEBUG-empty-apiKey branch of
+            // `configure(apiKey:appUserId:)` — it short-circuits the
+            // RevenueCat SDK wiring and forces `.pro` for local demo use.
+            // Tests compile in Debug so the `#if DEBUG` path is live.
+            subscription.configure(apiKey: "", appUserId: "snapshot_pro")
+        }
         let gate = makeFeatureGate()
 
         let view = NavigationStack {
@@ -249,16 +264,20 @@ struct ProfileViewSnapshotTests {
 
     // MARK: - Tests
 
-    // NOTE: the original chore tried
-    // `SnapshotTestHelper.accessibilityIdentifiers(in:)` here as a
-    // secondary smoke assertion and hit a 60s wedge on iOS 26.4 —
-    // the slow path was `accessibilityElements` /
-    // `accessibilityElement(at:)` bridging from SwiftUI's hosting
-    // layer, NOT the plain `UIView.subviews` recursion. The
-    // followup (`chore/profileview-snapshot-infra-smoke`) adds
-    // `uiViewAccessibilityIdentifiers(in:)` which walks ONLY
-    // `subviews` and completes in <100 ms on the full ProfileView.
-    // `test_sharedSections_presentInBothBranches` below uses it.
+    // NOTE: the original chore + smoke followup tried 4 walker
+    // variants of an accessibility-tree grep assertion (full
+    // `UIAccessibilityContainer` recursion, UIView-only,
+    // `accessibilityElements` array, bounded-bridge probe w/ 5 s
+    // wall-clock budget). All failed on iOS 26.4: SwiftUI surfaces
+    // `.accessibilityIdentifier` ONLY through the slow container
+    // recursion that wedges the runtime. Committed baseline PNGs
+    // are the regression signal. Identifiers on shared sections
+    // (kennelHeader / scentTrailsCard / subscriptionSection /
+    // marketplaceLocationSection / cardsSection /
+    // portalMembershipsSection) stay in view code as XCUITest
+    // anchors + contract markers. See docs/CHANGELOG.md entry
+    // "Chore — ProfileView snapshot smoke followup" for the full
+    // walker-variant matrix.
 
     @Test("Empty-profile branch renders with portalMembershipsSection visible")
     func test_emptyProfile_branch_rendersPortalSection() async {
@@ -354,6 +373,82 @@ struct ProfileViewSnapshotTests {
                 of: controller,
                 as: SnapshotTestHelper.deviceImage,
                 named: "kitchen-sink"
+            )
+        }
+    }
+
+    @Test("Pro-user state renders Pro badge, Pro kennelSubtitle, and Manage-subscription link")
+    func test_proUserState_rendersProBadgeAndManageLink() async {
+        // `subscription.isProUser` branches both `subscriptionSection`
+        // (upgrade button → "Manage subscription" NavigationLink) AND
+        // `kennelSubtitle` ("You're running Barkain Pro" copy), so a
+        // single Pro snapshot protects two render deltas.
+        let controller = await Self.hostProfile(
+            profileResult: .success(Self.studentProfile),
+            portalMemberships: [:],
+            identityDelay: 0,
+            flushTaskIterations: 8,
+            isProUser: true
+        )
+        withSnapshotTesting(record: SnapshotTestHelper.recordMode) {
+            assertSnapshot(
+                of: controller,
+                as: SnapshotTestHelper.deviceImage,
+                named: "pro-user"
+            )
+        }
+    }
+
+    @Test("Non-zero affiliate stats render total-clicks and top-trail subtitle")
+    func test_nonZeroAffiliateStats_rendersTopTrail() async {
+        // `scentTrailsCard` subtitle rewrites itself when
+        // `totalClicks > 0` ("You've sniffed out 42 deals. Top
+        // trail: Amazon.") AND the big count text in the gradient
+        // card updates. Both deltas land above the fold in the
+        // snapshot surface.
+        let controller = await Self.hostProfile(
+            profileResult: .success(Self.studentProfile),
+            portalMemberships: [:],
+            identityDelay: 0,
+            flushTaskIterations: 8,
+            affiliateStats: AffiliateStatsResponse(
+                clicksByRetailer: ["amazon": 30, "walmart": 12],
+                totalClicks: 42
+            )
+        )
+        withSnapshotTesting(record: SnapshotTestHelper.recordMode) {
+            assertSnapshot(
+                of: controller,
+                as: SnapshotTestHelper.deviceImage,
+                named: "affiliate-stats"
+            )
+        }
+    }
+
+    @Test("Saved marketplace location renders label + radius in place of Not-set hint")
+    func test_savedMarketplaceLocation_rendersLocationLabel() async {
+        // `marketplaceLocationSubtitle` branches on `savedLocation`:
+        // "Defaults to San Francisco…" vs "<label> · <radius> mi".
+        // The saved-location branch is unreachable from the `nil`
+        // default every other test uses.
+        let controller = await Self.hostProfile(
+            profileResult: .success(Self.studentProfile),
+            portalMemberships: [:],
+            identityDelay: 0,
+            flushTaskIterations: 8,
+            savedLocation: LocationPreferences.Stored(
+                latitude: 40.6782,
+                longitude: -73.9442,
+                displayLabel: "Brooklyn, NY",
+                fbLocationId: "108424279189115",
+                radiusMiles: 25
+            )
+        )
+        withSnapshotTesting(record: SnapshotTestHelper.recordMode) {
+            assertSnapshot(
+                of: controller,
+                as: SnapshotTestHelper.deviceImage,
+                named: "saved-location"
             )
         }
     }
