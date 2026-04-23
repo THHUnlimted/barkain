@@ -36,18 +36,26 @@ protocol APIClientProtocol: Sendable {
     func getCardRecommendations(productId: UUID) async throws -> CardRecommendationsResponse
     // Step 2f — Billing
     func getBillingStatus() async throws -> BillingStatus
-    // Step 2g — Affiliate. Step 3f adds `activationSkipped`.
+    // Step 2g — Affiliate. Step 3f adds `activationSkipped`. Step 3g-B
+    // adds optional `portalEventType` + `portalSource` so portal-driven
+    // taps land in `affiliate_clicks.metadata` with funnel-analytics
+    // detail (MEMBER_DEEPLINK / SIGNUP_REFERRAL / GUIDED_ONLY).
     func getAffiliateURL(
         productId: UUID?,
         retailerId: String,
         productURL: String,
-        activationSkipped: Bool
+        activationSkipped: Bool,
+        portalEventType: String?,
+        portalSource: String?
     ) async throws -> AffiliateURLResponse
     func getAffiliateStats() async throws -> AffiliateStatsResponse
     // Step 3e — Deterministic Recommendation Engine
+    // Step 3g-B added `userMemberships` so portal-membership toggles bust
+    // the M6 cache hash; nil = "user has not opted into any portals".
     func fetchRecommendation(
         productId: UUID,
-        forceRefresh: Bool
+        forceRefresh: Bool,
+        userMemberships: [String: Bool]?
     ) async throws -> Recommendation?
 }
 
@@ -64,7 +72,40 @@ nonisolated extension APIClientProtocol {
             productId: productId,
             retailerId: retailerId,
             productURL: productURL,
-            activationSkipped: false
+            activationSkipped: false,
+            portalEventType: nil,
+            portalSource: nil
+        )
+    }
+
+    /// Convenience for callers that only set `activationSkipped` (3f path).
+    func getAffiliateURL(
+        productId: UUID?,
+        retailerId: String,
+        productURL: String,
+        activationSkipped: Bool
+    ) async throws -> AffiliateURLResponse {
+        try await getAffiliateURL(
+            productId: productId,
+            retailerId: retailerId,
+            productURL: productURL,
+            activationSkipped: activationSkipped,
+            portalEventType: nil,
+            portalSource: nil
+        )
+    }
+
+    /// Step 3g-B convenience — old call sites that don't have a portal
+    /// memberships dict yet (ScannerViewModel) keep working without
+    /// passing `userMemberships:` explicitly.
+    func fetchRecommendation(
+        productId: UUID,
+        forceRefresh: Bool
+    ) async throws -> Recommendation? {
+        try await fetchRecommendation(
+            productId: productId,
+            forceRefresh: forceRefresh,
+            userMemberships: nil
         )
     }
 }
@@ -221,13 +262,17 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
         productId: UUID?,
         retailerId: String,
         productURL: String,
-        activationSkipped: Bool = false
+        activationSkipped: Bool = false,
+        portalEventType: String? = nil,
+        portalSource: String? = nil
     ) async throws -> AffiliateURLResponse {
         let clickRequest = AffiliateClickRequest(
             productId: productId,
             retailerId: retailerId,
             productUrl: productURL,
-            activationSkipped: activationSkipped
+            activationSkipped: activationSkipped,
+            portalEventType: portalEventType,
+            portalSource: portalSource
         )
         return try await request(endpoint: .getAffiliateURL(clickRequest))
     }
@@ -251,9 +296,14 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
     /// and silently leaves the hero unrendered. All other errors propagate.
     func fetchRecommendation(
         productId: UUID,
-        forceRefresh: Bool = false
+        forceRefresh: Bool = false,
+        userMemberships: [String: Bool]? = nil
     ) async throws -> Recommendation? {
-        let body = RecommendationRequest(productId: productId, forceRefresh: forceRefresh)
+        let body = RecommendationRequest(
+            productId: productId,
+            forceRefresh: forceRefresh,
+            userMemberships: userMemberships
+        )
         do {
             return try await request(endpoint: .getRecommendation(body)) as Recommendation
         } catch APIError.validation {

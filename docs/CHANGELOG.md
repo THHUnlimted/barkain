@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-22 (3g-A — Portal Live Integration backend slice: migration 0012 `portal_configs`, `m13_portal` module with 5-step CTA decision tree, `POST /api/v1/portal/cta`, Resend alerting on 3 consecutive empty portal runs with 24h throttle, AWS Lambda infrastructure files + deploy runbook (Mike runs `deploy.sh`). iOS interstitial portal row + recommendation cache-key bump deferred to 3g-B.)
+> Last updated: 2026-04-23 (3g-B — Portal Live Integration iOS slice: M6 cache-key extension w/ portal-membership hash so toggles bust stale recs (`:c<...>:i<...>:p<sha1>:v5`), `PortalCTA` model + winner-only `portal_ctas` on `StackedPath`, interstitial row w/ FTC disclosure on SIGNUP_REFERRAL + amber promo, `PortalMembershipPreferences` + Profile toggles, `affiliate_clicks.metadata.portal_event_type`/`portal_source` for funnel split (no migration — uses existing 0008 JSONB), `seed_portal_bonuses_demo.py` deleted. CLAUDE.md compacted 33,952 → 26,095 chars before 3g-B kickoff.)
 
 ---
 
@@ -3435,6 +3435,204 @@ both deserve focused unit tests before merging behind a default-on flag.
 - Sanitizer is unconditional inside `_ebay_search` — if anyone wants the raw eBay title for debugging, it's only a `print(raw_title)` away.
 - M2 partial-listing regex covers electronics noise. Apparel / collectibles use different vocabulary ("size only listed", "swatch") — extend if those categories matter.
 - Schema slot reuse (`source="upcitemdb"` for eBay rows) is intentionally undisclosed to iOS to avoid a Codable migration. If telemetry needs to distinguish, the cleanest path is a new optional `tier2_origin` field, additive, defaults None.
+
+---
+
+### Step 3g-B — Portal Live Integration: iOS slice (2026-04-23)
+
+**Branch:** `phase-3/step-3g-b` → `main` (PR TBD)
+
+**Why.** 3g-A shipped the backend half (PR #53): migration 0012,
+`m13_portal` module, `POST /api/v1/portal/cta`, Resend alerting, Lambda
+infra. 3g-B closes the loop on the iOS side — interstitial portal row,
+recommendation cache-key extension to honour portal membership toggles,
+funnel-attribution metadata so we can measure which CTA mode actually
+drives conversions, and deletion of the demo seed that 3g-A retained for
+3g-B's development.
+
+The split lets each PR fail/revert independently — backend has been on
+trunk for a few hours of integration time before the iOS surface lands.
+
+**Pre-fix #6 — CLAUDE.md compaction.** Pre-3g-B, CLAUDE.md was 33,952
+chars (well over the 28 K aspirational ceiling). The previous
+`chore/claude-md-compaction` branch was deleted unmerged, so this PR
+opens with a self-contained compaction commit (`d0e374b`): Phase 3 step
+table → 1-line indices, KDL bullets consolidated to one line per topic,
+Conventions/Methodology/Tooling/Architecture tightened. No information
+lost — anything pruned has a current home in CHANGELOG/ARCHITECTURE/
+DEPLOYMENT. New baseline 26,095 chars before 3g-B's additions.
+
+**What.**
+
+1. **M6 cache key bump `:v4 → :c<...>:i<...>:p<portal_hash>:v5`.** Without
+   the `:p` segment, toggling "I'm a Rakuten member" in Profile would
+   leave the recommendation cached with the SIGNUP_REFERRAL CTA for up
+   to the 15-min TTL — same class of bug as "adding a card doesn't bust
+   stale recs" that 3f's `:c<sha1(card_ids)>` solved. Hash is over the
+   *active* set only (falsy entries dropped before sorting+joining), so
+   toggling a portal off and back on doesn't double-bust; the old hash
+   recurs. Old `:v4` keys naturally expire on the 15-min TTL — no eager
+   invalidation needed.
+
+2. **Backend DTO threading.** `RecommendationRequest.user_memberships:
+   dict[str, bool] = {}` (defaults to empty for old iOS clients during
+   TestFlight rollout); `StackedPath.portal_ctas: list[PortalCTA] = []`.
+   M6 service calls `PortalMonetizationService.resolve_cta_list` for the
+   *winner only* after stacking; alternatives don't carry CTAs to keep
+   the response payload tight (the secondary "tap any retailer" entry
+   path can fetch on demand via `POST /api/v1/portal/cta`). CTA fold-in
+   wrapped in try/except — failure leaves `portal_ctas=[]` and logs a
+   warning, same fail-silent contract as identity/cards.
+
+3. **Affiliate metadata: `portal_event_type` not boolean.** Per Mike's
+   feedback during 3g-B planning, collapsing portal taps to `used / not
+   used` would lose the SIGNUP_REFERRAL vs GUIDED_ONLY funnel signal.
+   `AffiliateClickRequest` now carries optional `portal_event_type`
+   (`'member_deeplink' | 'signup_referral' | 'guided_only'`) +
+   `portal_source` (`'rakuten' | 'topcashback' | 'befrugal'`). Server
+   validates against `_VALID_PORTAL_EVENT_TYPES` at the boundary — a bad
+   value hits 422 with code `AFFILIATE_INVALID_PORTAL_EVENT_TYPE` rather
+   than silently polluting analytics. Persisted into existing
+   `affiliate_clicks.metadata` JSONB (no new migration — reuses 0008's
+   shape extension).
+
+4. **iOS `PortalCTA` model** at `Barkain/Features/Recommendation/PortalCTA.swift`.
+   `nonisolated struct`, full snake→camel mapping, ISO 8601 dates.
+   `mode` is intentionally a `String` (not a Swift enum) so a
+   forward-rolled backend value doesn't fail the whole Recommendation
+   decode — iOS treats unknowns as guided_only at the rendering layer.
+
+5. **Codable acronym pitfall (worth recording).** Apple's
+   `.convertFromSnakeCase` strategy maps `portal_ctas → portalCtas`
+   (lowercase `as`), not `portalCTAs` — it can't recover the all-caps
+   acronym. Solution: `StackedPath` exposes the wire-bound property as
+   lowercase `portalCtas`, matching the codebase convention used by
+   `productUrl` (not `productURL`). The local-only
+   `PurchaseInterstitialContext` keeps Swift-style `portalCTAs` because
+   it's never decoded from JSON. The bridging line at
+   `PurchaseInterstitialContext(winner:)` has a comment explaining why
+   the case differs across the two types — non-obvious, worth flagging
+   for future contributors.
+
+6. **`PortalMembershipPreferences`** at
+   `Barkain/Services/Profile/PortalMembershipPreferences.swift`. Mirrors
+   `LocationPreferences` exactly: `nonisolated final class @unchecked
+   Sendable`, UserDefaults wrapper, no observable state. Storage key
+   `barkain.portalMemberships.v1`. Open-ended `[String: Bool]` schema so
+   future portals don't require a migration. `setMember(portal:isMember:)`
+   preserves other portals' state.
+
+7. **Profile → "The Kennel" portal-memberships section.** Three SwiftUI
+   `Toggle`s under the Cards section, bound to a `@State` mirror of the
+   prefs dict that's read on `.task` and written through on toggle. No
+   fetch trigger here — `ScannerViewModel` reads prefs at recommendation
+   fetch time so the cache-key hash picks up the change.
+
+8. **`PurchaseInterstitialContext.portalCTAs`** populated from
+   `winner.portalCtas` on the recommendation path; defaults `[]` on the
+   price-row path (the secondary "tap any retailer" entry doesn't have a
+   pre-resolved recommendation yet — Group 6's on-demand fetch is a
+   follow-up, not in this PR).
+
+9. **`PurchaseInterstitialSheet.portalRow`.** New subview between the
+   card block and activation block. Renders ≤3 CTAs sorted by the
+   backend (iOS does NOT re-sort); top CTA bold. `signup_promo_copy`
+   surfaces in amber when present. **FTC disclosure** ("Referral —
+   Barkain earns a bonus if you sign up.") renders inline + per-CTA on
+   `disclosureRequired == true` (i.e. SIGNUP_REFERRAL only). FTC
+   guidance requires the disclosure co-located with the link, not in a
+   separate sheet — implementation reflects that. **First disclosure
+   pattern in the codebase** — no existing FTC component to reuse;
+   audited via `grep -rn "FTC\|disclosure" Barkain/` returning empty
+   pre-3g-B.
+
+10. **Portal-tap telemetry.** `PurchaseInterstitialViewModel.openPortal`
+    fires-and-forgets a `getAffiliateURL` call with
+    `portalEventType=cta.mode` + `portalSource=cta.portalSource`, then
+    hands `cta.ctaUrl` to the in-app browser regardless of the click-log
+    outcome. UX must not block on telemetry.
+
+11. **Demo seed deletion.** `scripts/seed_portal_bonuses_demo.py` and
+    `test_seed_portal_bonuses_demo_is_idempotent` removed. Local dev now
+    uses `scripts/run_worker.py portal-rates` for portal data; CI is
+    fine because `portal_bonuses` rows are seeded ad-hoc per test.
+
+**Tests.** +2 backend (cache busts on membership toggle in m6;
++`portal_event_type` round-trip + 422 validation in m12). −1 backend
+(`test_seed_portal_bonuses_demo_is_idempotent` removed). Net +2 →
+**585 backend / 7 skipped**. iOS +14 (5 PortalCTA decoding + 5
+PortalMembershipPreferences + 5 PurchaseInterstitial portal-row + 1
+existing helper, minus a dup) →  **170 iOS unit / 6 iOS UI**.
+
+**Decisions worth recording.**
+
+- **Codable acronym choice.** `.convertFromSnakeCase` strips acronym
+  capitalization. Two paths: explicit `case x = "snake_form"` raw
+  values, or rename property to lowercase-acronym style. Chose the
+  latter (`portalCtas`) because the codebase already uses
+  `productUrl`/`ctaUrl` style and mixing strategies inside one
+  `CodingKeys` enum is fragile (Apple's docs are silent on whether
+  `keyDecodingStrategy` runs before or after explicit raw values).
+
+- **`portal_event_type` validated on the server, not in the iOS model.**
+  iOS `PortalCTA.mode` stays `String` (forward-roll safety); the
+  backend rejects unknown values at the boundary. Asymmetric on
+  purpose: iOS clients in older app versions need to decode a future
+  backend's new modes without crashing, but new bad values from the
+  iOS side (e.g. typo in a manual UserDefaults edit) should surface
+  loudly so we catch the bug.
+
+- **Winner-only CTAs on `StackedPath`.** Alternatives default `[]` to
+  keep the response under 4 KB even with 9 retailers. Secondary
+  taps that need CTAs hit `POST /api/v1/portal/cta` on demand — that
+  endpoint already exists from 3g-A and was sized for exactly this
+  use case.
+
+- **Read prefs at fetch time, not at toggle time.** `ScannerViewModel`
+  snapshots `PortalMembershipPreferences.current()` inside
+  `fetchRecommendation`. No `.observableObject` wiring; the cache-key
+  hash is the only mechanism that needs to know about the change, and
+  that's read off-main inside the fetch. Keeps Profile UI free of any
+  recommendation-specific glue.
+
+- **CLAUDE.md compaction shipped as a separate first commit on this
+  branch.** PR #53's docs sweep had pushed the file to 33,952 chars
+  with the 3g-B follow-up row inflating it further; doing the
+  compaction inline in 3g-B would have made the diff hard to review.
+  Separate commit `d0e374b` keeps the substantive 3g-B work in one
+  reviewable diff and the doc gardening in another.
+
+**File inventory.**
+```
+Barkain/Features/Recommendation/PortalCTA.swift                 NEW
+Barkain/Services/Profile/PortalMembershipPreferences.swift      NEW
+BarkainTests/Features/Recommendation/PortalCTADecodingTests.swift NEW (+5 tests)
+BarkainTests/Services/Profile/PortalMembershipPreferencesTests.swift NEW (+5 tests)
+Barkain/Features/Recommendation/RecommendationModels.swift      EDIT (+ portalCtas, explicit Codable)
+Barkain/Features/Purchase/PurchaseInterstitialModels.swift      EDIT (+ portalCTAs, price-row optional arg)
+Barkain/Features/Purchase/PurchaseInterstitialSheet.swift       EDIT (+ portalRow + openPortal action)
+Barkain/Features/Profile/ProfileView.swift                       EDIT (+ portalMembershipsSection)
+Barkain/Features/Scanner/ScannerViewModel.swift                  EDIT (read prefs at fetch time, thread userMemberships)
+Barkain/Services/Networking/APIClient.swift                      EDIT (extend protocol + impl + extension defaults)
+Barkain/Features/Shared/Models/AffiliateURL.swift                EDIT (+ portalEventType / portalSource)
+Barkain/Features/Shared/Previews/BarePreviewAPIClient.swift     EDIT (conform to extended protocol)
+BarkainTests/Helpers/MockAPIClient.swift                         EDIT (record portal fields + memberships)
+BarkainTests/Features/Purchase/PurchaseInterstitialViewModelTests.swift EDIT (+5 portal tests)
+backend/modules/m6_recommend/schemas.py                          EDIT (+ user_memberships, + portal_ctas)
+backend/modules/m6_recommend/service.py                          EDIT (cache key + portal CTA fold-in + hash helper)
+backend/modules/m6_recommend/router.py                           EDIT (thread user_memberships)
+backend/modules/m12_affiliate/schemas.py                         EDIT (+ portal_event_type, portal_source)
+backend/modules/m12_affiliate/service.py                         EDIT (validation + metadata extension)
+backend/tests/modules/test_m6_recommend.py                       EDIT (+1 cache-bust, -1 seed-demo)
+backend/tests/modules/test_m12_affiliate.py                      EDIT (+2 portal-event-type)
+scripts/seed_portal_bonuses_demo.py                              DELETED
+docs/PHASES.md                                                   EDIT (3g-B ✅, demo-seed retro)
+docs/CHANGELOG.md                                                EDIT (this entry + last-updated header)
+docs/TESTING.md                                                  EDIT (+test totals)
+docs/CARD_REWARDS.md                                             EDIT (deferred → Shipped 3g + mock refresh)
+docs/FEATURES.md                                                 EDIT (Portal bonus row)
+CLAUDE.md                                                        EDIT (separate compaction commit + 3g-B row + KDL + version)
+```
 
 ---
 

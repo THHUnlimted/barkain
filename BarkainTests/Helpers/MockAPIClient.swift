@@ -92,6 +92,8 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     var getAffiliateURLLastRetailerId: String?
     var getAffiliateURLLastProductURL: String?
     var getAffiliateURLLastActivationSkipped: Bool?
+    var getAffiliateURLLastPortalEventType: String?
+    var getAffiliateURLLastPortalSource: String?
     var getAffiliateStatsCallCount = 0
 
     // MARK: - Recommendation (Step 3e)
@@ -104,6 +106,7 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     var fetchRecommendationCallCount = 0
     var fetchRecommendationLastProductId: UUID?
     var fetchRecommendationLastForceRefresh: Bool?
+    var fetchRecommendationLastUserMemberships: [String: Bool]?
     /// Optional delay so tests can verify the fetch fires AFTER all three
     /// settle flags have flipped.
     var fetchRecommendationDelay: TimeInterval = 0
@@ -243,13 +246,17 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
         productId: UUID?,
         retailerId: String,
         productURL: String,
-        activationSkipped: Bool
+        activationSkipped: Bool,
+        portalEventType: String?,
+        portalSource: String?
     ) async throws -> AffiliateURLResponse {
         getAffiliateURLCallCount += 1
         getAffiliateURLLastProductId = productId
         getAffiliateURLLastRetailerId = retailerId
         getAffiliateURLLastProductURL = productURL
         getAffiliateURLLastActivationSkipped = activationSkipped
+        getAffiliateURLLastPortalEventType = portalEventType
+        getAffiliateURLLastPortalSource = portalSource
         return try getAffiliateURLResult.get()
     }
 
@@ -259,11 +266,14 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     }
 
     func fetchRecommendation(
-        productId: UUID, forceRefresh: Bool
+        productId: UUID,
+        forceRefresh: Bool,
+        userMemberships: [String: Bool]?
     ) async throws -> Recommendation? {
         fetchRecommendationCallCount += 1
         fetchRecommendationLastProductId = productId
         fetchRecommendationLastForceRefresh = forceRefresh
+        fetchRecommendationLastUserMemberships = userMemberships
         if fetchRecommendationDelay > 0 {
             try? await Task.sleep(for: .seconds(fetchRecommendationDelay))
         }

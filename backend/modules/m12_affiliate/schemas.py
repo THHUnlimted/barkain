@@ -25,6 +25,14 @@ class AffiliateClickRequest(BaseModel):
     # the card-activation reminder. Persisted to affiliate_clicks.metadata
     # for post-demo analytics. Default false preserves the 2g contract.
     activation_skipped: bool = False
+    # Step 3g-B — when the click came via a portal CTA (Rakuten / TopCashback
+    # / BeFrugal), iOS sends both fields so funnel analytics can separate
+    # MEMBER_DEEPLINK detours, SIGNUP_REFERRAL conversions, and GUIDED_ONLY
+    # handoffs (the last is the signal that says "TopCashback approval would
+    # unlock revenue from X% of flows"). Direct retailer taps (no portal)
+    # leave both null. Validated server-side against the PortalCTAMode set.
+    portal_event_type: str | None = None
+    portal_source: str | None = None
 
 
 # MARK: - Response envelopes

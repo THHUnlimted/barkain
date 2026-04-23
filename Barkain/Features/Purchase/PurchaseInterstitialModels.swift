@@ -41,6 +41,14 @@ nonisolated struct PurchaseInterstitialContext: Identifiable, Equatable, Hashabl
     let activationRequired: Bool
     let activationUrl: String?
 
+    // MARK: - Portal CTAs (Step 3g-B)
+
+    /// Up to 3 portal CTAs sorted by bonus rate descending. Pre-populated
+    /// when built from the Recommendation winner; defaults [] for the
+    /// price-row entry path (the VM may fetch on demand via
+    /// `POST /api/v1/portal/cta` after presentation — Group 6).
+    let portalCTAs: [PortalCTA]
+
     // MARK: - Init — Recommendation winner path
 
     /// Build from the 3e Recommendation winner. `cards` is the same list
@@ -73,6 +81,11 @@ nonisolated struct PurchaseInterstitialContext: Identifiable, Equatable, Hashabl
         }
         self.activationRequired = match?.activationRequired ?? false
         self.activationUrl = match?.activationUrl
+        // Step 3g-B — winner carries the resolved portal CTAs from M6.
+        // StackedPath uses lowercase `portalCtas` to round-trip through
+        // `.convertFromSnakeCase`; the context type keeps the canonical
+        // Swift acronym style.
+        self.portalCTAs = winner.portalCtas
     }
 
     // MARK: - Init — Price row path
@@ -82,7 +95,8 @@ nonisolated struct PurchaseInterstitialContext: Identifiable, Equatable, Hashabl
         price: RetailerPrice,
         productId: UUID?,
         productName: String,
-        card: CardRecommendation?
+        card: CardRecommendation?,
+        portalCTAs: [PortalCTA] = []
     ) {
         self.productId = productId
         self.productName = productName
@@ -99,6 +113,7 @@ nonisolated struct PurchaseInterstitialContext: Identifiable, Equatable, Hashabl
         }
         self.activationRequired = card?.activationRequired ?? false
         self.activationUrl = card?.activationUrl
+        self.portalCTAs = portalCTAs
     }
 
     // MARK: - Formatting helpers

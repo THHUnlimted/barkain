@@ -25,15 +25,23 @@ struct ProfileView: View {
 
     private let apiClient: APIClientProtocol
     private let locationPreferences: LocationPreferences
+    private let portalMembershipPreferences: PortalMembershipPreferences
+
+    // Step 3g-B — local mirror of the portal-membership store. Read once
+    // on appear, written through `setMember` so toggling persists +
+    // refreshes the section row labels in the same flush.
+    @State private var portalMemberships: [String: Bool] = [:]
 
     // MARK: - Init
 
     init(
         apiClient: APIClientProtocol = APIClient(),
-        locationPreferences: LocationPreferences = LocationPreferences()
+        locationPreferences: LocationPreferences = LocationPreferences(),
+        portalMembershipPreferences: PortalMembershipPreferences = PortalMembershipPreferences()
     ) {
         self.apiClient = apiClient
         self.locationPreferences = locationPreferences
+        self.portalMembershipPreferences = portalMembershipPreferences
     }
 
     // MARK: - Body
@@ -48,6 +56,7 @@ struct ProfileView: View {
                 await loadCards()
                 await loadAffiliateStats()
                 savedLocation = locationPreferences.current()
+                portalMemberships = portalMembershipPreferences.current()
             }
             .sheet(isPresented: $showEditSheet, onDismiss: {
                 Task { await loadProfile() }
@@ -101,6 +110,7 @@ struct ProfileView: View {
                     subscriptionSection
                     marketplaceLocationSection
                     cardsSection
+                    portalMembershipsSection
                 }
                 .padding(Spacing.lg)
             }
@@ -461,6 +471,62 @@ struct ProfileView: View {
                 .fill(Color.barkainSurfaceContainerLowest)
         )
         .barkainShadowSoft()
+    }
+
+    // MARK: - Portal memberships (Step 3g-B)
+    //
+    // Three toggles for the active shopping portals. Toggling persists
+    // through `PortalMembershipPreferences.setMember`; the next
+    // `/recommend` call picks up the change because the M6 cache key
+    // includes a hash of active memberships. No fetch trigger here —
+    // ScannerViewModel reads the prefs at fetch time.
+
+    private var portalMembershipsSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            HStack(spacing: Spacing.sm) {
+                Image(systemName: "tag.fill")
+                    .font(.title3)
+                    .foregroundStyle(Color.barkainPrimary)
+                Text("Portal memberships")
+                    .font(.barkainHeadline)
+                    .foregroundStyle(Color.barkainOnSurface)
+            }
+            Text(
+                "Toggle on the cashback portals you're already a member "
+                    + "of. We'll show you a 1-tap deeplink instead of a "
+                    + "signup pitch when you check out."
+            )
+            .font(.barkainCaption)
+            .foregroundStyle(Color.barkainOnSurfaceVariant)
+            ForEach(PortalMembershipPreferences.knownPortals, id: \.self) { portal in
+                portalMembershipToggle(for: portal)
+            }
+        }
+        .padding(Spacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous)
+                .fill(Color.barkainSurfaceContainerLowest)
+        )
+        .barkainShadowSoft()
+    }
+
+    @ViewBuilder
+    private func portalMembershipToggle(for portal: String) -> some View {
+        let displayName = PortalMembershipPreferences.displayNames[portal] ?? portal
+        let binding = Binding<Bool>(
+            get: { portalMemberships[portal] == true },
+            set: { newValue in
+                portalMembershipPreferences.setMember(portal, isMember: newValue)
+                portalMemberships[portal] = newValue
+            }
+        )
+        Toggle(isOn: binding) {
+            Text(displayName)
+                .font(.barkainBody)
+                .foregroundStyle(Color.barkainOnSurface)
+        }
+        .accessibilityIdentifier("portalMembershipToggle_\(portal)")
     }
 
     private func chipsSection(title: String, chips: [String]) -> some View {

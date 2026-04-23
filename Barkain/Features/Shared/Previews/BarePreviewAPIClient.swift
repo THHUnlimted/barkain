@@ -132,7 +132,9 @@ class BarePreviewAPIClient: APIClientProtocol, @unchecked Sendable {
         productId: UUID?,
         retailerId: String,
         productURL: String,
-        activationSkipped: Bool
+        activationSkipped: Bool,
+        portalEventType: String?,
+        portalSource: String?
     ) async throws -> AffiliateURLResponse {
         AffiliateURLResponse(
             affiliateUrl: productURL,
@@ -150,7 +152,8 @@ class BarePreviewAPIClient: APIClientProtocol, @unchecked Sendable {
 
     func fetchRecommendation(
         productId: UUID,
-        forceRefresh: Bool
+        forceRefresh: Bool,
+        userMemberships: [String: Bool]?
     ) async throws -> Recommendation? {
         nil
     }

@@ -39,6 +39,7 @@ from modules.m6_recommend.schemas import (
     Recommendation,
     StackedPath,
 )
+from modules.m13_portal.service import PortalMonetizationService
 
 logger = logging.getLogger("barkain.m6")
 
@@ -92,6 +93,7 @@ class RecommendationService:
         self.price_service = PriceAggregationService(db, redis)
         self.identity_service = IdentityService(db)
         self.card_service = CardService(db)
+        self.portal_service = PortalMonetizationService(db)
 
     # MARK: - Public entry point
 
@@ -101,19 +103,23 @@ class RecommendationService:
         product_id: UUID,
         *,
         force_refresh: bool = False,
+        user_memberships: dict[str, bool] | None = None,
     ) -> Recommendation:
         """Build the full recommendation. Raises on insufficient data."""
         started = time.perf_counter()
+        memberships = user_memberships or {}
 
-        # Step 3f Pre-Fix #6: cache key includes user-state hashes so adding
-        # a card or flipping an identity flag busts stale recommendations.
-        # These lookups are cheap (~5 ms combined, both indexed by user_id).
+        # Step 3f Pre-Fix #6 + 3g-B: cache key includes user-state hashes so
+        # adding a card / flipping an identity flag / toggling a portal
+        # membership all bust stale recs. Lookups are cheap (~5 ms combined,
+        # all indexed by user_id; memberships hash is a pure-Python sort).
         user_card_hash = await self._user_card_hash(user_id)
         identity_hash = await self._identity_flag_hash(user_id)
+        portal_hash = _portal_membership_hash(memberships)
 
         if not force_refresh:
             cached = await self._read_cache(
-                user_id, product_id, user_card_hash, identity_hash
+                user_id, product_id, user_card_hash, identity_hash, portal_hash
             )
             if cached is not None:
                 return cached.model_copy(update={"cached": True})
@@ -167,6 +173,19 @@ class RecommendationService:
         winner = candidates[0]
         alternatives = candidates[1:3]
 
+        # Step 3g-B: actionable portal CTAs for the winner. Only the winner
+        # carries CTAs to keep the response payload tight; secondary-row
+        # taps fetch their own CTAs via POST /api/v1/portal/cta if needed.
+        # Failure → empty list (silent — same contract as identity/cards).
+        try:
+            winner_ctas = await self.portal_service.resolve_cta_list(
+                retailer_id=winner.retailer_id,
+                user_memberships=memberships,
+            )
+            winner = winner.model_copy(update={"portal_ctas": winner_ctas})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("portal CTA fold-in failed (non-fatal): %s", exc)
+
         # Brand-direct callout (scans identity, not retailer prices).
         callout = _build_brand_direct_callout(identity_resp.eligible_discounts)
 
@@ -190,7 +209,7 @@ class RecommendationService:
         )
 
         await self._write_cache(
-            user_id, product_id, rec, user_card_hash, identity_hash
+            user_id, product_id, rec, user_card_hash, identity_hash, portal_hash
         )
         return rec
 
@@ -299,17 +318,26 @@ class RecommendationService:
         product_id: UUID,
         user_card_hash: str,
         identity_hash: str,
+        portal_hash: str,
     ) -> str:
-        """Cache key scoped to user + product + card portfolio + identity flags.
+        """Cache key scoped to user + product + card portfolio + identity flags
+        + portal-membership state.
 
-        Version bumped to v4 in 3f-hotfix — v2/v3 entries were built against
-        buggy identity_savings math (v2: used global lowest price; v3: still
-        treated Prime Student membership-fee discounts as product savings).
-        v1/v2/v3 keys are not read and expire on their 15-min TTL.
+        Version bumped to v5 in 3g-B to add the `:p<portal_hash>` segment.
+        Without it, toggling "I'm a Rakuten member" in Profile leaves the
+        recommendation cached with the SIGNUP_REFERRAL CTA for up to the
+        15-min TTL — same class of bug as "adding a card doesn't bust stale
+        recs" that 3f's `:c<card_hash>` solved.
+
+        Earlier versions:
+        * v2 — used global lowest price (incorrect).
+        * v3 — Prime Student membership_fee was scoped as product savings.
+        * v4 — fixed identity scoping; no portal-membership signal.
+        v1–v4 keys are not read and expire on their 15-min TTL naturally.
         """
         return (
             f"{_CACHE_KEY_PREFIX}{user_id}:product:{product_id}"
-            f":c{user_card_hash}:i{identity_hash}:v4"
+            f":c{user_card_hash}:i{identity_hash}:p{portal_hash}:v5"
         )
 
     async def _user_card_hash(self, user_id: str) -> str:
@@ -360,10 +388,13 @@ class RecommendationService:
         product_id: UUID,
         user_card_hash: str,
         identity_hash: str,
+        portal_hash: str,
     ) -> Recommendation | None:
         try:
             raw = await self.redis.get(
-                self._cache_key(user_id, product_id, user_card_hash, identity_hash)
+                self._cache_key(
+                    user_id, product_id, user_card_hash, identity_hash, portal_hash
+                )
             )
             if raw is None:
                 return None
@@ -382,10 +413,13 @@ class RecommendationService:
         rec: Recommendation,
         user_card_hash: str,
         identity_hash: str,
+        portal_hash: str,
     ) -> None:
         try:
             await self.redis.setex(
-                self._cache_key(user_id, product_id, user_card_hash, identity_hash),
+                self._cache_key(
+                    user_id, product_id, user_card_hash, identity_hash, portal_hash
+                ),
                 _CACHE_TTL_SECONDS,
                 rec.model_dump_json(),
             )
@@ -575,3 +609,14 @@ def _decimal_to_float(value) -> float:
 def _stable_hash(value: str) -> str:
     """Short SHA-1 digest used for cache-suffix tests."""
     return hashlib.sha1(value.encode("utf-8")).hexdigest()[:12]
+
+
+def _portal_membership_hash(memberships: dict[str, bool]) -> str:
+    """8-char SHA-1 over the user's *active* portal memberships.
+
+    Falsy entries are dropped before hashing so {"rakuten": False} hashes
+    the same as {} — flipping a toggle off and back on shouldn't bust
+    cache twice. Empty memberships hash to the same digest every call.
+    """
+    active = sorted(k for k, v in memberships.items() if v)
+    return _stable_hash(",".join(active))[:8]

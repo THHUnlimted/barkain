@@ -31,6 +31,14 @@ PASSTHROUGH_NETWORK = "passthrough"
 
 EBAY_RETAILERS: frozenset[str] = frozenset({"ebay_new", "ebay_used"})
 
+# Step 3g-B — accepted values for AffiliateClickRequest.portal_event_type.
+# Mirrors PortalCTAMode at the wire boundary so a typo on the iOS side gets
+# rejected with 422 instead of silently polluting analytics. Stays a string
+# enum (not a re-imported PortalCTAMode) to keep m12 free of m13 imports.
+_VALID_PORTAL_EVENT_TYPES: frozenset[str] = frozenset(
+    {"member_deeplink", "signup_referral", "guided_only"}
+)
+
 
 class AffiliateService:
     """Tag retailer URLs + log clicks + compute per-user stats."""
@@ -137,6 +145,24 @@ class AffiliateService:
         # `affiliate_network` column is NOT NULL — use a sentinel for untagged.
         network_for_db = tagged.network or PASSTHROUGH_NETWORK
 
+        # Step 3g-B: validate portal_event_type at the boundary so a bad
+        # value doesn't silently pollute analytics. Caller hits 422.
+        if (
+            request.portal_event_type is not None
+            and request.portal_event_type not in _VALID_PORTAL_EVENT_TYPES
+        ):
+            from app.errors import raise_http_error
+
+            raise_http_error(
+                status_code=422,
+                code="AFFILIATE_INVALID_PORTAL_EVENT_TYPE",
+                message=(
+                    f"portal_event_type must be one of "
+                    f"{sorted(_VALID_PORTAL_EVENT_TYPES)}, got "
+                    f"{request.portal_event_type!r}"
+                ),
+            )
+
         await self.db.execute(
             text(
                 "INSERT INTO users (id) VALUES (:id) "
@@ -145,9 +171,14 @@ class AffiliateService:
             {"id": user_id},
         )
 
-        metadata_payload = json.dumps(
-            {"activation_skipped": request.activation_skipped}
-        )
+        metadata_dict: dict[str, object] = {
+            "activation_skipped": request.activation_skipped,
+        }
+        if request.portal_event_type is not None:
+            metadata_dict["portal_event_type"] = request.portal_event_type
+        if request.portal_source is not None:
+            metadata_dict["portal_source"] = request.portal_source
+        metadata_payload = json.dumps(metadata_dict)
 
         await self.db.execute(
             text(
