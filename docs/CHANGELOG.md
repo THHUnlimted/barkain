@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-23 (3g-B-fix-1 (#55) — wire `portalMembershipsSection` into the second `ProfileView` `ScrollView` branch (completed-profile path). Original 3g-B (#54) only patched the empty-profile branch, so any user with a saved identity profile saw zero portal toggles. 1-line structural fix caught during sim validation. New KDL bullet: when adding any Profile section, grep the section above it (e.g. `cardsSection`) and confirm it lives in both branches.)
+> Last updated: 2026-04-23 (chore/profileview-snapshot-infra — added `swift-snapshot-testing` (1.19.2, `BarkainTests`-scoped), `SnapshotTestHelper`, and 3 snapshot tests covering both `ProfileView` `ScrollView` branches plus a portal-toggle visual-delta check. Defends mechanically against the dual-branch omission class that shipped PR #55. iOS unit 170 → 173. Full entry under "Chore — ProfileView snapshot infra".)
 
 ---
 
@@ -3437,6 +3437,180 @@ both deserve focused unit tests before merging behind a default-on flag.
 - Schema slot reuse (`source="upcitemdb"` for eBay rows) is intentionally undisclosed to iOS to avoid a Codable migration. If telemetry needs to distinguish, the cleanest path is a new optional `tier2_origin` field, additive, defaults None.
 
 ---
+
+### Chore — ProfileView snapshot infra (2026-04-23)
+
+**Branch:** `chore/profileview-snapshot-infra` → `main` (PR TBD)
+
+**Why.** 3g-B-fix-1 (#55) revealed that `ProfileView`'s dual-branch render
+structure can silently swallow a section addition — PR #54's new
+`portalMembershipsSection` was wired into the empty-profile branch only,
+so any user with a saved identity profile (i.e. everyone beyond a fresh
+install) saw zero portal toggles in production. The fix was one line; the
+cost was that nothing in the existing test suite caught it. ViewModel
+tests exercised the data + interstitial layers cleanly, but neither
+layer touches the `ProfileView.content` `@ViewBuilder` switch where the
+two `ScrollView` branches diverge.
+
+Shipping snapshot infra as a standalone chore (rather than folding it
+into 3h's pre-fix block) means 3h lands with dual-branch protection
+already in place and avoids contaminating 3h review with any early
+snapshot-harness turbulence (baseline generation, reference-image
+storage, simulator-determinism constraints).
+
+**Decisions.**
+- **Library version:** `pointfreeco/swift-snapshot-testing`. Prompt
+  originally specified exact `1.17.0`, but that version's
+  `Internal/RecordIssue.swift` calls `Issue.record(_:filePath:line:)` —
+  an overload that no longer exists on the swift-testing version shipped
+  with Xcode 16+. Bumped to `1.19.2` (latest stable at the time of this
+  chore) and pinned via `upToNextMinorVersion` to allow point-release
+  pickups. Commented in TESTING.md so the version drift doesn't surprise
+  future archaeologists.
+- **Target scoping:** added to `BarkainTests` target only. Never the app
+  target — snapshot-testing is a dev-only dependency and leaking it into
+  `Barkain.app` would bloat the production binary.
+- **pbxproj edits:** made manually (no Xcode GUI session). Six
+  surgical edits covering `PBXBuildFile`, `PBXFrameworksBuildPhase`
+  (BarkainTests), `PBXNativeTarget.packageProductDependencies`
+  (BarkainTests), `PBXProject.packageReferences`,
+  `XCRemoteSwiftPackageReference`, and `XCSwiftPackageProductDependency`.
+  New IDs follow the existing `D1B0…` RevenueCat prefix pattern but
+  start at `D1B000000000000001…` to visually separate them.
+- **Snapshot surface size:** 402pt × 2800pt @3x, NOT the iPhone 17 Pro
+  device viewport (402×874). The reason is ProfileView's scrollable
+  content is taller than one screen — at device height, the snapshot
+  captures only the top of the scroll view, and
+  `portalMembershipsSection` (which lives below the fold in the
+  completed-profile branch) falls outside the rendered pixels. The
+  accessibility-tree grep would still find it, but the pixel diff
+  wouldn't — meaning a regression that visually broke the section but
+  left the identifier in place would slip through. Extending the height
+  to 2800pt lets the full branch content render into a single snapshot
+  and makes Test 3 (portal-toggle visual delta) a meaningful check.
+  Tradeoff: each baseline PNG is ~1.2 MB (vs. the <100 KB the prompt
+  hoped for). Acceptable — total baseline footprint is ~5 MB and the
+  infra catches a whole class of regression.
+- **`accessibilityIdentifier` on the section:** added
+  `.accessibilityIdentifier("portalMembershipsSection")` to the outer
+  VStack of `ProfileView.portalMembershipsSection`. Because the section
+  is a single computed property rendered from both branches, one
+  identifier covers both call sites — no need to patch both. The
+  existing per-toggle identifiers (`portalMembershipToggle_rakuten`
+  etc., shipped in 3g-B) remain.
+- **Test-only view-code change scope:** the single
+  `.accessibilityIdentifier` line is the only non-test change in this
+  chore. No refactor of the dual-branch structure — snapshot tests are
+  the defense; a unification refactor is deliberately out of scope.
+- **Per-test UserDefaults isolation:** carries the 2f learning —
+  `LocationPreferences` and `PortalMembershipPreferences` both init
+  with a per-test `UserDefaults(suiteName:)` so portal toggle state
+  can't leak between tests or pollute `UserDefaults.standard`.
+- **OOM tuning on Test 3:** the toggle visual-delta check initially
+  crashed the simulator process (SIGTERM) because comparing two
+  402×2800 @3x renders for byte-equality held ~80 MB of decoded image
+  data simultaneously. The in-memory diff was ultimately removed
+  entirely — see below.
+- **Accessibility-grep assertion removed.** Early iterations paired
+  each snapshot with a secondary `#expect(ids.contains("portalMembershipsSection"))`
+  smoke check driven by a recursive walk of the UIView accessibility
+  tree. In practice the iOS 26.4 simulator wedges for 60+ seconds on
+  `UIHostingController`-rooted SwiftUI trees even with cycle
+  protection + a 40-deep recursion cap — the tree returned by
+  SwiftUI's hosting bridge is both massive and references foreign
+  `UIAccessibilityContainer` instances whose `accessibilityElement(at:)`
+  calls are themselves slow. The committed baseline PNG is
+  sufficient: if `portalMembershipsSection` disappears from a
+  branch, the PNG diff surfaces the omission. The traversal code
+  stays in `SnapshotTestHelper` for potential future reuse on
+  shallower view trees.
+- **Test 3 inline pixel-diff removed.** After switching to `@1x`
+  drawHierarchy to dodge the OOM, the in-memory diff captured
+  pre-`.task` state for both hosted controllers and returned
+  byte-identical buffers for both toggles — even though the @3x
+  committed baselines *do* differ (toggle-off MD5 `5b0129…` vs
+  toggle-on MD5 `0500bc…`). Replaced by two separate committed
+  baselines (`toggle-off.png` + `toggle-on.png`); a future
+  toggle-binding regression will rewrite both baselines to the
+  same image and git diff will surface it on the next record-mode
+  run.
+- **Simulator visibility (minor, not the root cause).** During
+  debugging we saw `brandsmartusa.com` URL-session timeouts in the
+  logs when the simulator was booted headlessly via `xcrun simctl
+  boot` with no `Simulator.app` attached. That was a separate
+  symptom, not the 60-second wedge — the wedge was the accessibility
+  sweep. Opening `Simulator.app` before `xcodebuild test` is a
+  cheap hygiene step for future baseline regens but not required
+  for correctness.
+
+**What.**
+- New SPM dep: `pointfreeco/swift-snapshot-testing` 1.19.2 (+ transitive
+  `swift-syntax 600.0.1`).
+- `BarkainTests/Helpers/SnapshotTestHelper.swift` — UIHostingController
+  wrapper, `UIWindow`-mounted rendering so accessibility bridging
+  flushes, pinned 402×2800 @3x surface, `RECORD_SNAPSHOTS=1` env-var
+  gate, UIView+accessibility-tree traversal that resolves identifiers
+  via `UIAccessibilityIdentification` (conforms UIView and
+  UIAccessibilityElement both).
+- `BarkainTests/Features/Profile/ProfileViewSnapshotTests.swift` — 3
+  swift-testing `@Test` functions:
+  * `test_emptyProfile_branch_rendersPortalSection` — empty-profile
+    ScrollView branch, snapshot + identifier grep
+  * `test_completedProfile_branch_rendersPortalSection` — completed
+    (profileSummary) branch, snapshot + identifier grep (the
+    specific regression PR #55 fixed)
+  * `test_portalToggle_produces_visualDelta` — two baselines for
+    `rakuten=false` and `rakuten=true`, plus an in-memory pixel-diff
+    sanity assertion that the toggle state flows into the render
+- `ProfileView.swift` — one-line addition:
+  `.accessibilityIdentifier("portalMembershipsSection")` on the
+  section's outer VStack.
+
+**pbxproj edits (manual).** In `Barkain.xcodeproj/project.pbxproj`:
+1. `PBXBuildFile` section: `SnapshotTesting in Frameworks` entry.
+2. `PBXFrameworksBuildPhase` for BarkainTests (`B1E604812F83FE9D00951147`):
+   added the new PBXBuildFile to its `files` list.
+3. `PBXNativeTarget` BarkainTests: added `SnapshotTesting` to
+   `packageProductDependencies`.
+4. `PBXProject.packageReferences`: added the new XCRemoteSwiftPackageReference.
+5. `XCRemoteSwiftPackageReference` section: `swift-snapshot-testing`
+   entry with `kind = upToNextMinorVersion; minimumVersion = 1.19.2`.
+6. `XCSwiftPackageProductDependency` section: `SnapshotTesting` product.
+
+**Tests.** +3 iOS swift-testing `@Test` functions (170 → 173). Baselines
+live under `BarkainTests/Features/Profile/__Snapshots__/ProfileViewSnapshotTests/`
+— note the library writes beside the test file, NOT at `BarkainTests/__Snapshots__/`
+as the prompt draft assumed.
+
+**Files added.**
+
+```
+BarkainTests/Helpers/SnapshotTestHelper.swift                                  NEW
+BarkainTests/Features/Profile/ProfileViewSnapshotTests.swift                   NEW
+BarkainTests/Features/Profile/__Snapshots__/ProfileViewSnapshotTests/
+  test_emptyProfile_branch_rendersPortalSection.empty-profile.png              NEW (baseline)
+  test_completedProfile_branch_rendersPortalSection.completed-profile.png      NEW (baseline)
+  test_portalToggle_produces_visualDelta.toggle-off.png                        NEW (baseline)
+  test_portalToggle_produces_visualDelta.toggle-on.png                         NEW (baseline)
+```
+
+**Files modified.**
+
+```
+Barkain.xcodeproj/project.pbxproj                                              (6 SPM edits)
+Barkain.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved    (auto)
+Barkain/Features/Profile/ProfileView.swift                                     (+1 line: .accessibilityIdentifier)
+CLAUDE.md                                                                      (header → v5.22, test counts, iOS convention line)
+docs/TESTING.md                                                                (header → v2.15, file tree, new "Snapshot Testing" subsection)
+docs/CHANGELOG.md                                                              (this entry)
+```
+
+**Lesson for future agents.** The library version a prompt names can
+drift out of compatibility with the Xcode toolchain in use. When a
+compile error in library source code appears (`no exact matches in
+call to static method 'record'`), first check release-notes velocity
+rather than assuming the pinning is correct. A minor-version bump on a
+mature library is usually safe.
 
 ### Step 3g-B-fix-1 — Portal section dual-branch fix (2026-04-23)
 

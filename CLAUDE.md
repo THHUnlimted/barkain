@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** 2026-04-23 (v5.21 — 3g-B follow-up (#55): wire `portalMembershipsSection` into the completed-profile `ScrollView` branch as well — original 3g-B (#54) only added it to the empty-profile branch, so any user with a saved identity profile saw zero portal toggles. 1-line structural fix caught during sim validation)
+> **Last updated:** 2026-04-23 (v5.22 — chore/profileview-snapshot-infra: `swift-snapshot-testing` 1.19.2 added as an SPM dep scoped to `BarkainTests`, plus `SnapshotTestHelper` + 3 snapshot tests covering `ProfileView`'s two `ScrollView` branches (empty-profile + completed-profile) and a portal-toggle visual-delta check. Guards the dual-branch omission class that shipped PR #55. iOS unit: 170 → 173.)
 
 ---
 
@@ -172,6 +172,7 @@ python3 scripts/run_worker.py price-process     # long-poll worker
 - **Simulator `API_BASE_URL`:** `http://127.0.0.1:8000`, NOT `localhost:8000` (skips IPv6 happy-eyeballs)
 - **SSE debug:** subsystem `com.barkain.app` / category `SSE` os_log captures everything; watch with `xcrun simctl spawn booted log stream --level debug --predicate 'subsystem == "com.barkain.app" AND category == "SSE"'`
 - **Hiding `.searchable` nav bar:** `.searchable(isPresented:)` only toggles focus; apply `.toolbar(.hidden, for: .navigationBar)` on the root view to actually hide it (SearchView pattern, ui-refresh-v1)
+- **Snapshot tests for branched render paths:** any view with more than one top-level render branch (like `ProfileView`'s empty vs `profileSummary` `ScrollView` branches) gets a snapshot test per branch in `BarkainTests/Features/<feature>/…SnapshotTests.swift`. Baselines live beside the test file under `__Snapshots__/`. Record with `RECORD_SNAPSHOTS=1` in the scheme env; CI runs without it so missing baselines fail the build. See `ProfileViewSnapshotTests` precedent (chore/profileview-snapshot-infra). **Implementation note:** accessibility-identifier-tree grep assertions were tried as a secondary smoke check but hang the iOS 26.4 simulator on `UIHostingController`-rooted SwiftUI trees — the snapshot PNG itself is the regression signal
 
 ### Git
 - Branch per step `phase-N/step-Na`; conventional commits (`feat:`/`fix:`/`docs:`/`test:`/`refactor:`); tags at phase boundaries `v0.N.0`
@@ -225,7 +226,7 @@ Two-tier AI workflow: **Planner** (Claude Opus via claude.ai) authors prompt pac
 | 3g-B | Portal Live Integration iOS: `PortalCTA` model + interstitial row (≤3 sorted, FTC disclosure on SIGNUP_REFERRAL, amber promo); `PortalMembershipPreferences` + Profile toggles; M6 cache key adds `:p<sha1(active_portals)>:v5` so toggles bust stale recs; `affiliate_clicks.metadata` gains `portal_event_type`/`portal_source` for funnel split; demo seed deleted | +2 | +14 | #54 |
 | 3g-B-fix-1 | Wire `portalMembershipsSection` into `ProfileView`'s second `ScrollView` branch (completed-profile path) — original 3g-B only patched the empty-profile branch. Sim screenshot during validation showed zero toggles for users with a saved identity. 1-line structural fix | — | — | #55 |
 
-**Test totals:** 585 backend + 170 iOS unit + 6 iOS UI (with experiment flags off — see L-Experiment-flags-default-off). `ruff check` clean. `xcodebuild` clean.
+**Test totals:** 585 backend + 173 iOS unit + 6 iOS UI (with experiment flags off — see L-Experiment-flags-default-off). `ruff check` clean. `xcodebuild` clean.
 
 **Migrations:** 0001 (initial, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert + failure counter) → 0006 (`chk_subscription_tier` CHECK) → 0007 (pg_trgm + trgm GIN idx) → 0008 (`affiliate_clicks.metadata` JSONB) → 0009 (`discount_programs.scope` — product / membership_fee / shipping) → 0010 (`is_young_adult` on `user_discount_profiles`) → 0011 (`fb_marketplace_locations` — city→FB Page ID cache w/ tombstoning) → 0012 (`portal_configs` — display + signup-promo + alerting state for shopping portals). Drift marker in `tests/conftest.py::_ensure_schema` now checks `portal_configs`.
 
