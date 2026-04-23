@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-23 (3g-B — Portal Live Integration iOS slice: M6 cache-key extension w/ portal-membership hash so toggles bust stale recs (`:c<...>:i<...>:p<sha1>:v5`), `PortalCTA` model + winner-only `portal_ctas` on `StackedPath`, interstitial row w/ FTC disclosure on SIGNUP_REFERRAL + amber promo, `PortalMembershipPreferences` + Profile toggles, `affiliate_clicks.metadata.portal_event_type`/`portal_source` for funnel split (no migration — uses existing 0008 JSONB), `seed_portal_bonuses_demo.py` deleted. CLAUDE.md compacted 33,952 → 26,095 chars before 3g-B kickoff.)
+> Last updated: 2026-04-23 (3g-B-fix-1 (#55) — wire `portalMembershipsSection` into the second `ProfileView` `ScrollView` branch (completed-profile path). Original 3g-B (#54) only patched the empty-profile branch, so any user with a saved identity profile saw zero portal toggles. 1-line structural fix caught during sim validation. New KDL bullet: when adding any Profile section, grep the section above it (e.g. `cardsSection`) and confirm it lives in both branches.)
 
 ---
 
@@ -3435,6 +3435,79 @@ both deserve focused unit tests before merging behind a default-on flag.
 - Sanitizer is unconditional inside `_ebay_search` — if anyone wants the raw eBay title for debugging, it's only a `print(raw_title)` away.
 - M2 partial-listing regex covers electronics noise. Apparel / collectibles use different vocabulary ("size only listed", "swatch") — extend if those categories matter.
 - Schema slot reuse (`source="upcitemdb"` for eBay rows) is intentionally undisclosed to iOS to avoid a Codable migration. If telemetry needs to distinguish, the cleanest path is a new optional `tier2_origin` field, additive, defaults None.
+
+---
+
+### Step 3g-B-fix-1 — Portal section dual-branch fix (2026-04-23)
+
+**Branch:** `fix/3g-b-profile-section-second-branch` → `main` (PR #55)
+
+**Why.** Caught during the sim validation pass right after #54 merged.
+Mike scrolled to the bottom of Kennel and reported "the options don't
+appear to be there." Symbol grep confirmed `Portal memberships`,
+`portalMembershipsSection`, and `PortalMembershipPreferences` were all
+in the built bundle (`Barkain.app/Barkain.debug.dylib`) but the section
+was missing from the rendered scroll view.
+
+**Root cause.** `ProfileView` has two `ScrollView` branches selected at
+the `content` `@ViewBuilder` switch (around line 92):
+
+* **Empty-profile branch** (line 105): the early-return CTA path shown
+  to users without any identity flag set. Renders
+  `kennelHeader → scentTrailsCard → emptyProfileCTA → subscriptionSection
+  → marketplaceLocationSection → cardsSection`.
+* **Completed-profile branch** (`profileSummary`, around line 339): the
+  full layout for users who've toggled at least one identity flag —
+  `subscriptionSection → marketplaceLocationSection → chipsSection ×3
+  → cardsSection → Edit Profile button`.
+
+The 3g-B PR added `portalMembershipsSection` to the empty-profile branch
+only. Mike's profile had identity flags set, so the completed-profile
+branch was rendering and the new section was nowhere to be seen.
+
+**What.** One-line addition in the `profileSummary` branch:
+
+```swift
+                cardsSection
+                portalMembershipsSection   // NEW
+
+                Button { showEditSheet = true } label: { … "Edit profile"
+```
+
+**Tests.** None added — this is a structural copy-paste fix, not a logic
+change. The existing `PortalMembershipPreferencesTests` cover the data
+layer; the existing `PurchaseInterstitialPortalTests` cover the
+interstitial render. A `ProfileView` snapshot test would catch this
+specific class of regression but introducing the snapshot infra is out
+of scope for an in-flight follow-up — flagged as a Phase 4 hardening
+candidate.
+
+**Lesson.** Documented in CLAUDE.md KDL: when adding any future Profile
+section, grep for the section above it (e.g. `cardsSection`) to confirm
+it appears in BOTH `ProfileView` `ScrollView` branches. A future
+contributor unaware of the dual-branch split will hit this same bug.
+
+**Validation.** Live-tested on the iPhone 17 Pro simulator after the fix
+landed — full 3g-B feature surface lit up: Profile toggles render +
+persist, hero card stacks portal savings (`+$1.38 via Befrugal`),
+interstitial shows all three CTA modes simultaneously (BeFrugal
+SIGNUP_REFERRAL with FTC disclosure, TopCashback GUIDED_ONLY, Rakuten
+MEMBER_DEEPLINK), all three rows tap through to correct URLs, funnel
+attribution lands in `affiliate_clicks.metadata` with the right
+`portal_event_type` per CTA. Cache-bust verified by toggling Rakuten off
+and watching the row switch from MEMBER_DEEPLINK to SIGNUP_REFERRAL on
+next fetch (no 15-min TTL wait).
+
+Also verified end-to-end on Mike's physical iPhone 15 (LAN-targeted
+backend) — all 3g-B feature requests landed cleanly from `192.168.1.242`.
+
+**Test data added (DB only, not seeded into a script).** During the
+session I INSERTed three `ebay_used` `portal_bonuses` rows (Rakuten 1%,
+TopCashback 1.5%, BeFrugal 2%) so the AirPods Pro test product (whose
+M6 winner is `ebay_used`) had something to render. Pre-existing demo
+seed only had `ebay_new`. Worth folding into a future
+`scripts/seed_portal_bonuses_dev.sql` or extending the live worker's
+mapping.
 
 ---
 
