@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-23 (chore/profileview-snapshot-infra — added `swift-snapshot-testing` (1.19.2, `BarkainTests`-scoped), `SnapshotTestHelper`, and 3 snapshot tests covering both `ProfileView` `ScrollView` branches plus a portal-toggle visual-delta check. Defends mechanically against the dual-branch omission class that shipped PR #55. iOS unit 170 → 173. Full entry under "Chore — ProfileView snapshot infra".)
+> Last updated: 2026-04-23 (chore/profileview-snapshot-infra-smoke — followup to the snapshot-infra chore. +3 `ProfileView` snapshot tests covering the loading/error/kitchen-sink branches that the original chore left unmapped, +5 `.accessibilityIdentifier` modifiers on shared sections (`kennelHeader`/`scentTrailsCard`/`subscriptionSection`/`marketplaceLocationSection`/`cardsSection`). Attempted an accessibility-tree grep assertion as the cheap secondary smoke check that the original chore also aborted on; three walker variants (UIView-only, `accessibilityElements` array read, bounded-bridge probe with wall-clock budget) all returned 0 identifiers on iOS 26.4 — SwiftUI's `.accessibilityIdentifier` only lands behind the `UIAccessibilityContainer` recursion that wedges the runtime. Snapshot PNGs remain the regression signal. iOS unit 173 → 176. Full entry under "Chore — ProfileView snapshot smoke followup".)
 
 ---
 
@@ -3435,6 +3435,51 @@ both deserve focused unit tests before merging behind a default-on flag.
 - Sanitizer is unconditional inside `_ebay_search` — if anyone wants the raw eBay title for debugging, it's only a `print(raw_title)` away.
 - M2 partial-listing regex covers electronics noise. Apparel / collectibles use different vocabulary ("size only listed", "swatch") — extend if those categories matter.
 - Schema slot reuse (`source="upcitemdb"` for eBay rows) is intentionally undisclosed to iOS to avoid a Codable migration. If telemetry needs to distinguish, the cleanest path is a new optional `tier2_origin` field, additive, defaults None.
+
+---
+
+### Chore — ProfileView snapshot smoke followup (2026-04-23)
+
+**Branch:** `chore/profileview-snapshot-infra-smoke` → `main` (PR TBD)
+
+**Why.** The original snapshot-infra chore (see entry below) only covered 2 of the 4 branches in `ProfileView.content` (empty-profile + `profileSummary`) and exercised `profileSummary` with a single-flag fixture that rendered only one of the three `chipsSection` rows. It also abandoned an accessibility-tree grep as a cheap secondary check. A same-day review called out both gaps — "we missed quite a few smoke tests can you review which ones" — so this followup covers the remaining branches and state permutations that would materially change the rendered tree, and makes one more documented attempt at the grep before formally giving up on it.
+
+**What shipped.**
+- **3 new snapshot tests** in `ProfileViewSnapshotTests.swift`:
+  - `test_loadingBranch_rendersLoadingState` — captures the `isLoading == true && profile == nil` branch via a long-delayed mock + a smaller `flushTaskIterations` count (3) so the snapshot fires before the identity load resolves.
+  - `test_errorBranch_rendersEmptyState` — injects `APIError.server(...)` so the `loadError` branch renders the `EmptyState` with "Try again".
+  - `test_kitchenSinkProfile_rendersAllChipRows` — a profile with `isStudent + isVeteran + isCostcoMember + isAaaMember + idMeVerified` triggers all three `chipsSection` rows in `profileSummary`.
+- **5 new `.accessibilityIdentifier`** modifiers on shared sections: `kennelHeader`, `scentTrailsCard`, `subscriptionSection`, `marketplaceLocationSection`, `cardsSection`. `portalMembershipsSection` already had one from the original chore. These are kept in the view for future XCUITest coverage and as a self-documenting contract.
+- **`MockAPIClient.getIdentityProfileDelay`** — new test-only knob, mirrors `getPricesDelay`. Lets the loading-state test hold the identity load open long enough for `.task` to flip `isLoading = true` before the snapshot fires.
+- **New PNG baselines** at `BarkainTests/Features/Profile/__Snapshots__/ProfileViewSnapshotTests/`: `loading.png` (~250 KB — compact because the `LoadingState` view is mostly whitespace + a spinner), `error.png` (~390 KB), `kitchen-sink.png` (~1.3 MB). The original 4 baselines are unchanged bit-for-bit (the new identifiers don't affect visual layout).
+- **Test totals.** iOS unit 173 → 176. `BarkainTests/Features/Profile/ProfileViewSnapshotTests` is now 6 `@Test` cases. Full suite: 147 XCTest + 29 swift-testing = 176 passing in ~45 s on iPhone 17 Pro simulator.
+
+**The accessibility-grep dead-end (documented).** Three walker variants were attempted in order, each intended to catch a different theory about where SwiftUI lands its identifiers in the rendered UIKit tree:
+
+| Variant | Theory | Result |
+|--|--|--|
+| **v1 (original chore's walker, reapplied)** | `UIAccessibilityContainer` recursion via `accessibilityElementCount` + `accessibilityElement(at:)` with cycle protection + depth 40 | Wedged the runtime for 60+ s, same as the original chore. The 40-deep cap didn't help — the slowness is per-level. |
+| **v2 (UIView.subviews only)** | SwiftUI propagates `.accessibilityIdentifier` to the rendered `UIView.accessibilityIdentifier` property. | Returned 0 identifiers across both branches. SwiftUI does NOT propagate to the direct property. |
+| **v3 (UIView.subviews + `accessibilityElements` array, no `accessibilityElement(at:)`)** | Identifiers land on `UIAccessibilityElement` children attached via the array. | Still 0 identifiers. The array is nil on SwiftUI-hosted views for this use case. |
+| **v4 (bounded bridge probe: one `accessibilityElementCount` + `accessibilityElement(at:)` pass per UIView, no recursion into elements, with a 5 s wall-clock budget)** | A shallow container probe can reach the identifiers without the recursion blow-up. | Still 0 identifiers within budget — the bridge either synthesizes lazily on first enumeration and the budget expires before the whole tree is walked, OR the identifiers live deeper than the shallow probe reaches. |
+
+Conclusion: iOS 26.4's SwiftUI hosting bridge surfaces `.accessibilityIdentifier` ONLY through the full recursive `UIAccessibilityContainer` path — the same path that wedges the runtime. There's no compact walker we can write that works in snapshot-test time. The dual-branch PNG baselines remain the only mechanical regression signal. The grep test was deleted; the helper's `accessibilityIdentifiers(in:)` function (v1-style) is kept for future non-SwiftUI views that might tolerate it. The new identifiers in ProfileView are still useful — both for XCUITest queries in future UI test work AND as self-documenting markers for "sections that must appear in multiple branches."
+
+**Learnings.**
+- **L-smoke-1 — Branched render-path coverage is a spectrum, not a binary.** Snapshotting the 2 `ScrollView` branches was only 2 of 4 `content` branches; the loading/error branches shipped unprotected. When a view has a switch statement, every arm gets a test, including the "things are going badly" arms. Added the 4-way count to CLAUDE.md's snapshot-tests bullet.
+- **L-smoke-2 — State permutations inside a branch matter when they change layout materially.** `studentProfile` → 1 chip row; `kitchenSinkProfile` → 3 chip rows. The baselines for those two renders are meaningfully different — one doesn't substitute for the other.
+- **L-smoke-3 — SwiftUI's accessibility bridge is effectively opaque to UIKit-style walkers.** After 4 walker variants across 2 chores, the verdict is clear: `.accessibilityIdentifier` is only reachable via a path we can't afford at test time. Future snapshot infra should NOT spec a grep assertion as a fallback — the PNG diff is the signal. If a cheaper secondary check is ever needed, investigate `ViewInspector` (new SPM dep) or a SwiftUI `PreferenceKey`-based test shim rather than another accessibility-tree walker.
+- **L-smoke-4 — MockAPIClient can own time-based test shims.** `getIdentityProfileDelay` mirrors `getPricesDelay`. A sleep-based mock is simpler than a Continuation-based "never returns" API and avoids the cognitive cost of manual Task cancellation at test exit.
+
+**Files modified (6).**
+- `Barkain/Features/Profile/ProfileView.swift` (+5 lines — 5 `.accessibilityIdentifier` modifiers)
+- `BarkainTests/Helpers/SnapshotTestHelper.swift` (no net behavior change — a new helper was added, then deleted after the grep approach was abandoned)
+- `BarkainTests/Helpers/MockAPIClient.swift` (+9 lines — `getIdentityProfileDelay` + delay branch in `getIdentityProfile`)
+- `BarkainTests/Features/Profile/ProfileViewSnapshotTests.swift` (+~110 lines — kitchen-sink fixture, 2 new host helpers, 3 new `@Test` functions, updated comment block documenting the a11y-grep dead-end)
+- `CLAUDE.md` (header v5.22 → v5.23, test count 173 → 176, expanded snapshot-tests convention bullet)
+- `docs/TESTING.md` (header v2.15 → v2.16, §Snapshot Testing updated to v2 state with 4-way branch framing + MockAPIClient delay pattern + a11y-grep dead-end table summary)
+
+**Files added.** 3 PNG baselines at `BarkainTests/Features/Profile/__Snapshots__/ProfileViewSnapshotTests/`: `test_loadingBranch_rendersLoadingState.loading.png`, `test_errorBranch_rendersEmptyState.error.png`, `test_kitchenSinkProfile_rendersAllChipRows.kitchen-sink.png`.
 
 ---
 

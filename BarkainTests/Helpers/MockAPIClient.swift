@@ -173,8 +173,18 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
         return try getPricesResult.get()
     }
 
+    /// Delay applied inside `getIdentityProfile()` before the result
+    /// is returned. Snapshot tests use this to capture ProfileView in
+    /// its loading state (`isLoading == true && profile == nil`) by
+    /// holding the mock open long enough for `.task` to flip the flag
+    /// but never long enough to finish the load.
+    var getIdentityProfileDelay: TimeInterval = 0
+
     func getIdentityProfile() async throws -> IdentityProfile {
         getIdentityProfileCallCount += 1
+        if getIdentityProfileDelay > 0 {
+            try await Task.sleep(for: .seconds(getIdentityProfileDelay))
+        }
         return try getIdentityProfileResult.get()
     }
 

@@ -140,6 +140,7 @@ struct ProfileView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.lg)
+        .accessibilityIdentifier("kennelHeader")
     }
 
     private var kennelSubtitle: String {
@@ -193,6 +194,7 @@ struct ProfileView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadiusLarge, style: .continuous))
         .barkainShadowGlow()
+        .accessibilityIdentifier("scentTrailsCard")
     }
 
     private var scentTrailsSubtitle: String {
@@ -270,6 +272,7 @@ struct ProfileView: View {
                 .fill(Color.barkainSurfaceContainerLowest)
         )
         .barkainShadowSoft()
+        .accessibilityIdentifier("subscriptionSection")
     }
 
     // MARK: - Marketplace Location (fb-marketplace-location)
@@ -309,6 +312,7 @@ struct ProfileView: View {
             .barkainShadowSoft()
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("marketplaceLocationSection")
     }
 
     private var marketplaceLocationSubtitle: String {
@@ -472,6 +476,7 @@ struct ProfileView: View {
                 .fill(Color.barkainSurfaceContainerLowest)
         )
         .barkainShadowSoft()
+        .accessibilityIdentifier("cardsSection")
     }
 
     // MARK: - Portal memberships (Step 3g-B)
