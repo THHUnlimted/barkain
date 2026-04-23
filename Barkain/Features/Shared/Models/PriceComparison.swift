@@ -94,10 +94,59 @@ nonisolated struct RetailerPrice: Codable, Identifiable, Equatable, Sendable {
     let isAvailable: Bool
     let isOnSale: Bool
     let lastChecked: Date
+    /// Set ONLY on the fb_marketplace row, ONLY when the user has not
+    /// saved a Marketplace location (so the container fell back to the
+    /// baked `sanfrancisco` default). Drives the "Using SF default —
+    /// set your city in Profile" pill in `PriceRow`. Optional + decoded
+    /// via `decodeIfPresent` so other retailers' payloads are unaffected
+    /// and pre-followup cache entries decode cleanly.
+    let locationDefaultUsed: Bool?
 
     private enum CodingKeys: String, CodingKey {
         case retailerId, retailerName, price, originalPrice, currency
         case url, condition, isAvailable, isOnSale, lastChecked
+        case locationDefaultUsed
+    }
+
+    init(
+        retailerId: String,
+        retailerName: String,
+        price: Double,
+        originalPrice: Double? = nil,
+        currency: String = "USD",
+        url: String? = nil,
+        condition: String = "new",
+        isAvailable: Bool = true,
+        isOnSale: Bool = false,
+        lastChecked: Date,
+        locationDefaultUsed: Bool? = nil
+    ) {
+        self.retailerId = retailerId
+        self.retailerName = retailerName
+        self.price = price
+        self.originalPrice = originalPrice
+        self.currency = currency
+        self.url = url
+        self.condition = condition
+        self.isAvailable = isAvailable
+        self.isOnSale = isOnSale
+        self.lastChecked = lastChecked
+        self.locationDefaultUsed = locationDefaultUsed
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.retailerId = try c.decode(String.self, forKey: .retailerId)
+        self.retailerName = try c.decode(String.self, forKey: .retailerName)
+        self.price = try c.decode(Double.self, forKey: .price)
+        self.originalPrice = try c.decodeIfPresent(Double.self, forKey: .originalPrice)
+        self.currency = try c.decode(String.self, forKey: .currency)
+        self.url = try c.decodeIfPresent(String.self, forKey: .url)
+        self.condition = try c.decode(String.self, forKey: .condition)
+        self.isAvailable = try c.decode(Bool.self, forKey: .isAvailable)
+        self.isOnSale = try c.decode(Bool.self, forKey: .isOnSale)
+        self.lastChecked = try c.decode(Date.self, forKey: .lastChecked)
+        self.locationDefaultUsed = try c.decodeIfPresent(Bool.self, forKey: .locationDefaultUsed)
     }
 }
 

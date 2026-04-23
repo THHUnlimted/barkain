@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     # Tier resolution is cached in Redis for 60s; webhook handlers bust the key
     # on state changes so upgrades take effect within the cache TTL.
     RATE_LIMIT_PRO_MULTIPLIER: int = 2
+    # FB Marketplace location resolver. Hard cap, no pro multiplier — this
+    # bucket protects a shared external-budget resource (Decodo bytes +
+    # search-engine tokens), not a user-tier feature. Singleflight only
+    # dedupes identical (country, state, city) triples; distinct cities
+    # from one bursty client still hit every engine.
+    RATE_LIMIT_FB_LOCATION_RESOLVE: int = 5
 
     # Billing (Step 2f — M11 Billing / RevenueCat)
     REVENUECAT_WEBHOOK_SECRET: str = ""

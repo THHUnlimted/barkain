@@ -96,12 +96,35 @@ struct LocationPickerSheet: View {
                 busyRow(title: "Finding \(label) on Marketplace…")
             case .resolved(let label, let canonicalName):
                 resolvedRow(label: label, canonicalName: canonicalName)
-            case .failed(let message):
+            case .failed(let message, _):
                 Text(message)
                     .font(.barkainCaption)
                     .foregroundStyle(Color.barkainError)
+                if viewModel.canRetry {
+                    retryRow
+                }
             }
         }
+    }
+
+    /// "Try again" affordance shown on `failed`. Suppressed after
+    /// `LocationPickerViewModel.maxConsecutiveRetries` consecutive
+    /// failures so we don't invite users to bash on a resolver that
+    /// has already determined the input is unresolvable (L9).
+    @ViewBuilder
+    private var retryRow: some View {
+        Button {
+            viewModel.retry()
+        } label: {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "arrow.clockwise")
+                Text("Try again")
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .tint(Color.barkainPrimary)
+        .disabled(viewModel.retryInFlight)
     }
 
     private var radiusSection: some View {
@@ -164,17 +187,28 @@ struct LocationPickerSheet: View {
         // When FB's canonical name differs from the user's input (classic
         // unincorporated-area case: "Ding Dong, TX" → "Killeen, TX"), show
         // a soft warning so they know which metro their listings are
-        // coming from. No confirm dialog — saving with the redirect is
-        // the pragmatic choice (FB isn't going to give us a separate
-        // Marketplace for Ding Dong), we just make it visible.
+        // coming from. The implicit "accept" is just tapping Save; the
+        // explicit "Don't use this" button (L11 — fb-resolver-followups)
+        // resets the picker to idle so they can re-share location or
+        // change which physical location they're at.
         if let canonicalName, !Self.isSimilar(canonicalName, label) {
-            HStack(spacing: Spacing.xs) {
-                Image(systemName: "info.circle")
-                    .foregroundStyle(Color.barkainOnSurfaceVariant)
-                Text("Marketplace shows this area as \(canonicalName).")
-                    .font(.barkainCaption)
-                    .foregroundStyle(Color.barkainOnSurfaceVariant)
-                Spacer()
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(Color.barkainOnSurfaceVariant)
+                    Text("Marketplace shows this area as \(canonicalName).")
+                        .font(.barkainCaption)
+                        .foregroundStyle(Color.barkainOnSurfaceVariant)
+                    Spacer()
+                }
+                Button {
+                    viewModel.dismissCanonicalRedirect()
+                } label: {
+                    Text("Don't use this — start over")
+                        .font(.barkainCaption)
+                }
+                .buttonStyle(.borderless)
+                .tint(Color.barkainPrimary)
             }
         }
     }
@@ -182,8 +216,10 @@ struct LocationPickerSheet: View {
     /// Cheap "are these the same place?" check — normalize to lowercase
     /// alphanumerics and see if the FB name starts with (or contains) the
     /// user-picked city. Avoids the warning banner for trivial
-    /// capitalization / punctuation differences.
-    private static func isSimilar(_ a: String, _ b: String) -> Bool {
+    /// capitalization / punctuation differences. Internal so the VM
+    /// can reuse the same predicate when computing
+    /// `showsCanonicalRedirectAffordance`.
+    static func isSimilar(_ a: String, _ b: String) -> Bool {
         func norm(_ s: String) -> String {
             s.lowercased().unicodeScalars
                 .filter { CharacterSet.alphanumerics.contains($0) }
@@ -197,6 +233,15 @@ struct LocationPickerSheet: View {
 
 // MARK: - LocationPickerViewModel
 
+/// Why a resolve failed — drives copy on the failed-state retry button.
+/// `rateLimited` is the dedicated `fb_location_resolve` bucket firing
+/// (5/min hard cap, no pro multiplier). `generic` covers everything
+/// else (network, geocode miss, tombstone, unknown error).
+enum LocationFailureKind: Equatable, Sendable {
+    case generic
+    case rateLimited
+}
+
 /// Resolve flow states. Each transition is driven by either CoreLocation
 /// / CLGeocoder / the API — no user-driven text entry, so the state
 /// machine is small.
@@ -205,7 +250,7 @@ enum LocationResolveState: Equatable, Sendable {
     case geocoding                                         // CoreLocation → CLGeocoder pending
     case resolving(displayLabel: String)                   // city resolved, awaiting /fb-location/resolve
     case resolved(displayLabel: String, canonicalName: String?)
-    case failed(message: String)
+    case failed(message: String, kind: LocationFailureKind)
 }
 
 @MainActor
@@ -216,6 +261,16 @@ final class LocationPickerViewModel: NSObject {
 
     var radiusMiles: Int = LocationPreferences.defaultRadiusMiles
     var resolveState: LocationResolveState = .idle
+    /// Number of consecutive resolve failures since the last successful
+    /// resolve (or sheet open). Reset to 0 on success, on `clear()`,
+    /// or when the sheet is reopened. Suppresses the retry button after
+    /// `maxConsecutiveRetries` so we don't invite users to bash on a
+    /// resolver that has already determined the input is unresolvable.
+    private(set) var retryAttemptCount: Int = 0
+    /// True while a retry is in flight (resolving or geocoding triggered
+    /// from the failed state). Drives the disabled state of the retry
+    /// button so it can't be double-tapped.
+    private(set) var retryInFlight: Bool = false
 
     // MARK: - Private State
 
@@ -225,6 +280,14 @@ final class LocationPickerViewModel: NSObject {
     private var displayLabel: String?
     private var fbLocationId: String?
     private var canonicalName: String?
+    /// Last successful CLGeocoder result: city + 2-letter state + the
+    /// label we showed the user. Set on every successful reverse
+    /// geocode; cleared by `clear()`. When set, retry skips
+    /// CLGeocoder entirely and re-calls `/fb-location/resolve` with
+    /// these values — no permission prompt, no GPS fix.
+    private var lastResolveTarget: (city: String, state: String, label: String)?
+
+    static let maxConsecutiveRetries = 3
 
     // MARK: - Dependencies
 
@@ -270,18 +333,96 @@ final class LocationPickerViewModel: NSObject {
         fbLocationId != nil
     }
 
+    /// True only when the resolver returned a canonical name that
+    /// differs from what the user originally chose (Ding Dong → Killeen).
+    /// Compares against the **pre-canonical** user label cached in
+    /// `lastResolveTarget`, NOT the displayed `.resolved` label
+    /// (which has already been overwritten with the canonical for UX
+    /// reasons). Drives the "Don't use this — start over" banner
+    /// action (L11). The CoreLocation-driven picker has no text input,
+    /// so the banner restarts the GPS flow rather than re-focusing
+    /// typed text — same intent, surgical surface change.
+    var showsCanonicalRedirectAffordance: Bool {
+        guard case let .resolved(_, canonical) = resolveState,
+              let canonical,
+              let originalLabel = lastResolveTarget?.label,
+              !LocationPickerSheet.isSimilar(canonical, originalLabel)
+        else { return false }
+        return true
+    }
+
+    /// True when retry should be offered. Suppressed while in flight
+    /// AND after `maxConsecutiveRetries` consecutive failures so we
+    /// don't loop the user against a genuinely unresolvable city.
+    var canRetry: Bool {
+        guard case .failed = resolveState else { return false }
+        return !retryInFlight && retryAttemptCount < Self.maxConsecutiveRetries
+    }
+
     // MARK: - Actions
 
     func requestLocation() {
+        retryAttemptCount = 0
         resolveState = .geocoding
         let status = manager.authorizationStatus
         if status == .notDetermined {
             manager.requestWhenInUseAuthorization()
         } else if status == .denied || status == .restricted {
-            resolveState = .failed(message: "Location access is denied. Enable it in Settings to auto-fill your city.")
+            resolveState = .failed(
+                message: "Location access is denied. Enable it in Settings to auto-fill your city.",
+                kind: .generic
+            )
             return
         }
         manager.requestLocation()
+    }
+
+    /// Retry from a `failed` state. Cheap path when we already have a
+    /// good (city, state) cached — re-call the resolver directly so
+    /// the user doesn't pay the CLGeocoder round-trip again. Falls
+    /// back to a fresh CLLocationManager request when there's no
+    /// cached city (failure happened during the geocoding phase).
+    func retry() {
+        guard canRetry else { return }
+        retryAttemptCount += 1
+        retryInFlight = true
+        if let target = lastResolveTarget {
+            Task { @MainActor in
+                await resolveFbLocation(
+                    city: target.city, state: target.state, label: target.label
+                )
+                retryInFlight = false
+            }
+        } else {
+            // No cached city — reset and fall through CLLocationManager
+            // again. This re-uses requestLocation but preserves the
+            // running retry-attempt count (requestLocation resets it,
+            // so call its inner pieces directly).
+            resolveState = .geocoding
+            manager.requestLocation()
+            // requestLocation is async via the delegate; clear the
+            // in-flight flag once the delegate transitions us back
+            // to a non-geocoding state. Simpler shortcut: clear it
+            // now and rely on `canRetry` checking `.failed` — we'll
+            // re-enter `failed` if the delegate fails.
+            retryInFlight = false
+        }
+    }
+
+    /// "Don't use this — start over" affordance shown when the
+    /// resolver returned a canonical name that doesn't match the
+    /// label we showed (Ding Dong → Killeen). Drops back to idle so
+    /// the user can re-tap "Share My Current Location" or change
+    /// their physical location. The CoreLocation-driven picker
+    /// doesn't expose a text-input override; that surface change is
+    /// out of scope for this follow-up bundle (L11).
+    func dismissCanonicalRedirect() {
+        fbLocationId = nil
+        canonicalName = nil
+        displayLabel = nil
+        retryAttemptCount = 0
+        retryInFlight = false
+        resolveState = .idle
     }
 
     func save() {
@@ -310,6 +451,9 @@ final class LocationPickerViewModel: NSObject {
         radiusMiles = LocationPreferences.defaultRadiusMiles
         hasStoredPreference = false
         resolveState = .idle
+        retryAttemptCount = 0
+        retryInFlight = false
+        lastResolveTarget = nil
     }
 
     // MARK: - Reverse Geocoding + Resolve
@@ -319,7 +463,10 @@ final class LocationPickerViewModel: NSObject {
         do {
             let placemarks = try await geocoder.reverseGeocodeLocation(location)
             guard let place = placemarks.first else {
-                resolveState = .failed(message: "Couldn't identify your city. Try again in a moment.")
+                resolveState = .failed(
+                    message: "Couldn't identify your city. Try again in a moment.",
+                    kind: .generic
+                )
                 return
             }
             let city = place.locality ?? place.subLocality ?? "Your location"
@@ -329,17 +476,29 @@ final class LocationPickerViewModel: NSObject {
             // Only proceed to /resolve when we have a 2-letter state code —
             // backend rejects anything else anyway.
             guard region.count == 2 else {
-                resolveState = .failed(message: "Couldn't get a state code. Try again.")
+                resolveState = .failed(
+                    message: "Couldn't get a state code. Try again.",
+                    kind: .generic
+                )
                 return
             }
             await resolveFbLocation(city: city, state: region, label: label)
         } catch {
-            resolveState = .failed(message: "Couldn't look up your city name. Try again in a moment.")
+            resolveState = .failed(
+                message: "Couldn't look up your city name. Try again in a moment.",
+                kind: .generic
+            )
         }
     }
 
+    /// Internal so unit tests can drive the resolve flow without going
+    /// through CoreLocation. Production callers always reach this via
+    /// `requestLocation()` → `reverseGeocode()` → here.
     @MainActor
-    private func resolveFbLocation(city: String, state: String, label: String) async {
+    func resolveFbLocation(city: String, state: String, label: String) async {
+        // Cache the (city, state) pair so retry can re-fire the
+        // resolver without paying the CLGeocoder round-trip again.
+        lastResolveTarget = (city: city, state: state, label: label)
         resolveState = .resolving(displayLabel: label)
         do {
             let resolved = try await apiClient.resolveFbLocation(
@@ -349,7 +508,10 @@ final class LocationPickerViewModel: NSObject {
                 // Tombstone response: city exists but FB has no Marketplace
                 // for it (unincorporated area, typo, etc.). Surface a
                 // specific message so the user can try a neighbor.
-                resolveState = .failed(message: "Facebook doesn't have Marketplace listings for \(label). Try a nearby city.")
+                resolveState = .failed(
+                    message: "Facebook doesn't have Marketplace listings for \(label). Try a nearby city.",
+                    kind: .generic
+                )
                 return
             }
             fbLocationId = id
@@ -362,11 +524,24 @@ final class LocationPickerViewModel: NSObject {
                 displayLabel: effectiveLabel,
                 canonicalName: resolved.canonicalName
             )
+            // Successful resolve clears the retry budget so a later
+            // failure starts fresh from 0/3.
+            retryAttemptCount = 0
         } catch APIError.rateLimited {
-            // Transient: resolver's search engines are all throttled.
-            resolveState = .failed(message: "Marketplace is busy right now. Try again in a minute.")
+            // Transient: resolver's search engines are all throttled
+            // OR the per-user fb_location_resolve bucket fired
+            // (5/min hard cap, no pro multiplier — see backend
+            // app/dependencies.py). Either way, retry hint is "wait
+            // a minute" not "try again now".
+            resolveState = .failed(
+                message: "Marketplace is busy right now. Try again in a minute.",
+                kind: .rateLimited
+            )
         } catch {
-            resolveState = .failed(message: "Couldn't reach Marketplace. Check your connection and try again.")
+            resolveState = .failed(
+                message: "Couldn't reach Marketplace. Check your connection and try again.",
+                kind: .generic
+            )
         }
     }
 }
@@ -412,7 +587,7 @@ extension LocationPickerViewModel: CLLocationManagerDelegate {
             message = error.localizedDescription
         }
         Task { @MainActor in
-            self.resolveState = .failed(message: message)
+            self.resolveState = .failed(message: message, kind: .generic)
         }
     }
 }

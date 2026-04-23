@@ -32,9 +32,16 @@ nonisolated struct ResolveFbLocationRequest: Encodable, Sendable {
 /// `verified` is true when the resolver got a canonical name back from a
 /// search result (belt-and-suspenders signal that the ID is real), false
 /// for tombstone responses or partial matches.
+///
+/// `resolutionPath` is the API-stable enum
+/// `{cache, live, seed, unresolved, throttled}`. The backend collapses
+/// engine-specific internal values (`startpage` / `ddg` / `brave` /
+/// `user`) to `live` so we can swap or add resolver engines server-side
+/// without bumping this Codable shape. Used for debug logging only;
+/// no UI branches on it.
 nonisolated struct ResolvedFbLocation: Codable, Equatable, Sendable {
     let locationId: String?
     let canonicalName: String?
     let verified: Bool
-    let source: String
+    let resolutionPath: String
 }

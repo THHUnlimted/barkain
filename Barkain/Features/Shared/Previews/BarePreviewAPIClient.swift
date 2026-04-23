@@ -67,7 +67,7 @@ class BarePreviewAPIClient: APIClientProtocol, @unchecked Sendable {
             locationId: "108271525863730",
             canonicalName: "\(city), \(state)",
             verified: true,
-            source: "preview"
+            resolutionPath: "live"
         )
     }
 

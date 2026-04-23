@@ -656,6 +656,69 @@ async def test_stream_endpoint_accepts_location_query_params(client, db_session)
     }
 
 
+async def test_stream_fb_marketplace_flags_default_when_no_location_id(
+    db_session, fake_redis
+):
+    """When the user hasn't picked a Marketplace location, the container
+    falls back to its baked `sanfrancisco` env default. The fb_marketplace
+    price payload must carry `location_default_used=True` so iOS can show
+    a "Using SF default" pill (fb-resolver-followups L12)."""
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon", "fb_marketplace"])
+
+    fake = _FakeContainerClient(
+        responses={
+            "amazon": _success_response("amazon"),
+            "fb_marketplace": _success_response("fb_marketplace"),
+        }
+    )
+    service = PriceAggregationService(
+        db=db_session, redis=fake_redis, container_client=fake
+    )
+
+    fb_payload = None
+    amazon_payload = None
+    async for event_type, payload in service.stream_prices(product.id):
+        if event_type != "retailer_result":
+            continue
+        if payload["retailer_id"] == "fb_marketplace":
+            fb_payload = payload
+        elif payload["retailer_id"] == "amazon":
+            amazon_payload = payload
+
+    assert fb_payload is not None
+    assert fb_payload["price"]["location_default_used"] is True
+    # Other retailers' payloads must be unchanged — no flag pollution.
+    assert amazon_payload is not None
+    assert "location_default_used" not in amazon_payload["price"]
+
+
+async def test_stream_fb_marketplace_does_not_flag_when_location_id_present(
+    db_session, fake_redis
+):
+    """When the user has saved a Marketplace location, the flag is
+    omitted — iOS hides the pill (fb-resolver-followups L12)."""
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["fb_marketplace"])
+
+    fake = _FakeContainerClient(
+        responses={"fb_marketplace": _success_response("fb_marketplace")}
+    )
+    service = PriceAggregationService(
+        db=db_session, redis=fake_redis, container_client=fake
+    )
+
+    fb_payload = None
+    async for event_type, payload in service.stream_prices(
+        product.id, fb_location_id="112111905481230", fb_radius_miles=25
+    ):
+        if event_type == "retailer_result" and payload["retailer_id"] == "fb_marketplace":
+            fb_payload = payload
+
+    assert fb_payload is not None
+    assert "location_default_used" not in fb_payload["price"]
+
+
 async def test_stream_endpoint_422_on_bad_location_id(client, db_session):
     """Non-numeric id must 422 at the router boundary before SSE opens.
 

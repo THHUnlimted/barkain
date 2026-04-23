@@ -61,12 +61,38 @@ class ResolveFbLocationResponse(BaseModel):
     """Response body. ``location_id`` is a string because FB IDs are
     bigints and iOS ``Int`` round-tripping through ``JSONDecoder`` can
     silently narrow for IDs > 2^53. Cheap to stringify, safer over the
-    wire."""
+    wire.
+
+    ``resolution_path`` collapses the resolver's internal engine
+    granularity to the API-stable enum
+    ``{cache, live, seed, unresolved, throttled}``. Engine-specific
+    values (``startpage`` / ``ddg`` / ``brave`` / ``user``) are
+    server-side observability only; they never reach iOS so we can swap
+    or add engines without bumping the iOS Codable shape. The DB column
+    keeps the engine name for analytics and incident triage.
+    """
 
     location_id: str | None
     canonical_name: str | None
     verified: bool
-    source: str
+    resolution_path: str
+
+
+# Internal engine names → public ``resolution_path`` enum. Anything not
+# listed (``cache`` / ``seed`` / ``unresolved`` / ``throttled``) passes
+# through unchanged. Keep the public set tight: adding a new engine on
+# the server requires no client change as long as it folds into one of
+# these buckets.
+_RESOLUTION_PATH_COLLAPSE: dict[str, str] = {
+    "startpage": "live",
+    "ddg": "live",
+    "brave": "live",
+    "user": "live",
+}
+
+
+def _collapse_resolution_path(internal_source: str) -> str:
+    return _RESOLUTION_PATH_COLLAPSE.get(internal_source, internal_source)
 
 
 # MARK: - Endpoint
@@ -84,11 +110,13 @@ class ResolveFbLocationResponse(BaseModel):
 async def resolve_fb_location(
     req: ResolveFbLocationRequest,
     user: dict = Depends(get_current_user),
-    # Writes burn Decodo + search-engine tokens, so use the 'write' bucket
-    # (default 30/min free, pro multiplied). Typical user hits this once
-    # when they pick a location, and cache covers subsequent reads from
-    # the same client.
-    _rate: None = Depends(get_rate_limiter("write")),
+    # Dedicated bucket — protects the shared Decodo + search-engine token
+    # pool. Hard cap, no pro multiplier (see _NO_PRO_MULTIPLIER_CATEGORIES
+    # in app.dependencies). Singleflight only dedupes identical
+    # (country, state, city) triples; a bursty client throwing distinct
+    # cities at the resolver still hits every engine, so the per-user
+    # cap is the only thing standing between us and a CAPTCHA storm.
+    _rate: None = Depends(get_rate_limiter("fb_location_resolve")),
     db: AsyncSession = Depends(get_db),
     redis_client: aioredis.Redis = Depends(get_redis),
 ) -> ResolveFbLocationResponse:
@@ -140,5 +168,5 @@ async def resolve_fb_location(
         location_id=str(resolved.location_id) if resolved.location_id else None,
         canonical_name=resolved.canonical_name,
         verified=resolved.verified,
-        source=resolved.source,
+        resolution_path=_collapse_resolution_path(resolved.source),
     )

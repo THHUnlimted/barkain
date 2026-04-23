@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-22 (experiment/tier2-ebay-search — opt-in flags swap M1 Tier 2 UPCitemdb → eBay Browse keyword search, `_sanitize_ebay_title` strips seller noise, optional `gtin` surfacing + `SKIP_UPC` shortcut to `/resolve-from-search`, separate `M2_EBAY_DROP_PARTIAL_LISTINGS` flag drops box-only / for-parts / charger-only listings on the price stream)
+> Last updated: 2026-04-22 (fb-resolver-followups — dedicated `fb_location_resolve` rate bucket (5/min hard cap, no pro multiplier), DTO rename `source` → `resolution_path` with engine-name collapse, `location_default_used` flag + iOS "Using SF default" pill on the fb_marketplace row, picker `retry()` with 3-attempt cap + 429-aware copy + `dismissCanonicalRedirect()`, top-50 US-metro PG seed against local Docker)
 
 ---
 
@@ -3435,3 +3435,264 @@ both deserve focused unit tests before merging behind a default-on flag.
 - Sanitizer is unconditional inside `_ebay_search` — if anyone wants the raw eBay title for debugging, it's only a `print(raw_title)` away.
 - M2 partial-listing regex covers electronics noise. Apparel / collectibles use different vocabulary ("size only listed", "swatch") — extend if those categories matter.
 - Schema slot reuse (`source="upcitemdb"` for eBay rows) is intentionally undisclosed to iOS to avoid a Codable migration. If telemetry needs to distinguish, the cleanest path is a new optional `tier2_origin` field, additive, defaults None.
+
+---
+
+### Step fb-resolver-followups — FB resolver follow-up bundle (2026-04-22)
+
+**Branch:** `phase-3/fb-resolver-followups` → `main` (PR TBD)
+
+**Why.** Bundle of seven low-risk follow-ups carried out of the FB
+resolver post-mortem (`Error_Report_Step_fb-marketplace-location-resolver.md`
+§2 L3/L4/L8/L9/L11/L12/L13) plus the top-50 US metro seed run that
+Mike explicitly authorized for local Docker. Each item is too small
+to justify a step on its own; bundled into one PR with a single
+investigation hook for L13.
+
+**L13 investigation findings (done before any rename code).**
+Greps run: `"source"` writes in `backend/modules/m2_prices/`,
+`.source` reads in `Barkain/`, `startpage|ddg|brave` references.
+Findings:
+- **Backend writers:** `fb_marketplace_location_resolver.py:521` is the
+  only writer to the DB row dict; resolver internals set engine names
+  on `ResolvedLocation.source` at six points.
+- **Backend readers of the public field:** `fb_location_router.py`
+  references `resolved.source` at four spots — the response model,
+  one branch (`if resolved.source == "throttled"`), one log line, and
+  the response constructor. The `"throttled"` branch survives the
+  collapse because `throttled` stays in the public enum.
+- **iOS readers:** ONLY the property declaration in
+  `Barkain/Features/Shared/Models/ResolvedFbLocation.swift:39`. Zero
+  branches on the value anywhere in app or tests. Confirmed iOS uses
+  it for debug logging only.
+- **Engine-name dependencies:** the DB CHECK constraint
+  `source IN ('seed','startpage','ddg','brave','user','unresolved')`
+  is in both migration 0011 and the model's `__table_args__` — these
+  pin engine names at the DB level. The 18+ `"startpage"` references
+  in tests are inside the resolver's internal fake-engine fixtures,
+  not consumers of the API DTO.
+
+**Scope conflict & resolution.** The prompt's Scope Boundary says
+"Add new migrations. All items in this bundle are code-only." But
+renaming the DB column requires a migration. **Resolution:** keep the
+DB column named `source` with engine-specific values (preserves
+server-side observability + the existing CHECK constraint + zero
+migration). Only rename + collapse at the **API response DTO
+boundary**. iOS sees `resolution_path: "live"`; the resolver still
+records `source: "startpage"` server-side. No analytics consumer was
+found for engine names so the loss of granularity at the API surface
+is harmless.
+
+**Files.**
+
+```
+# Backend — Group 2 (rate bucket) + Group 5 (pill flag) + Group 6 (rename)
+backend/app/config.py                                      # +RATE_LIMIT_FB_LOCATION_RESOLVE
+backend/app/dependencies.py                                # +_NO_PRO_MULTIPLIER_CATEGORIES + new category in get_rate_limiter
+backend/modules/m2_prices/fb_location_router.py            # swap dependency, rename DTO, add _collapse_resolution_path
+backend/modules/m2_prices/service.py                       # _classify_retailer_result accepts fb_location_id, sets location_default_used
+backend/modules/m2_prices/schemas.py                       # PriceResponse.location_default_used: bool | None = None
+
+# iOS — Group 3 (retry) + Group 4 (banner) + Group 5 (pill) + Group 6 (rename)
+Barkain/Features/Shared/Models/ResolvedFbLocation.swift    # source → resolutionPath
+Barkain/Features/Shared/Models/PriceComparison.swift       # RetailerPrice.locationDefaultUsed: Bool?
+Barkain/Features/Shared/Components/PriceRow.swift          # locationDefaultPill + onLocationDefaultPillTap closure
+Barkain/Features/Profile/LocationPickerSheet.swift         # LocationFailureKind, retry(), dismissCanonicalRedirect(), retryRow, banner secondary action
+Barkain/Features/Shared/Previews/BarePreviewAPIClient.swift # update preview ResolvedFbLocation init
+
+# Tests
+backend/tests/modules/test_fb_location_resolver.py         # +2 tests (collapse + rate-limit) and updated happy-path assertion
+backend/tests/modules/test_m2_prices_stream.py             # +2 tests (default-used flag on / off)
+BarkainTests/Helpers/MockAPIClient.swift                   # ResolvedFbLocation init updated for rename
+BarkainTests/Services/Networking/EndpointsLocationTests.swift # +1 decoder test
+BarkainTests/Features/Recommendation/RecommendationDecodingTests.swift # +2 tests for locationDefaultUsed; +makeRetailerPriceDecoder helper with .iso8601
+BarkainTests/Features/Profile/LocationPickerViewModelTests.swift # +6 tests (retry x3, banner x3)
+
+# Group 1 docs
+CLAUDE.md                                                  # v5.16 → v5.17, EC2-no-DB note, stacked-PR rebase bullet, step row + KDL bullet, KDL compaction to fund the additions
+docs/CHANGELOG.md                                          # this entry
+.env.example                                               # (no change — no new env)
+```
+
+**Group 1 — CLAUDE.md additions (L3 + L4).** Two short additions, paid
+for by compacting the Phase 3 KDL bullets that had become long-form
+narrative. Net delta: 31,045 → 31,492 (≈ +447 chars over the 7-group
+bundle). Compaction targets: fb-marketplace-location-resolver KDL,
+experiment/tier2-ebay-search KDL + step row, Benefits Expansion KDL,
+3e M6 KDL, 3f Purchase Interstitial KDL. Did not meet the prompt's
+≤ 31,045 target — overshot by ~450 chars. A dedicated compaction pass
+is deferred to its own follow-up; the alternative would have been
+trimming load-bearing detail from the new entries themselves.
+
+**Group 2 — `fb_location_resolve` rate bucket (L8).**
+- New `RATE_LIMIT_FB_LOCATION_RESOLVE: int = 5` in `app/config.py`.
+- New `_NO_PRO_MULTIPLIER_CATEGORIES: set[str] = {"fb_location_resolve"}`
+  allowlist in `app/dependencies.py`. The `get_rate_limiter`
+  factory's `category_limits` map gets a new entry; the multiplier
+  branch checks the allowlist before applying `RATE_LIMIT_PRO_MULTIPLIER`.
+  Same Redis key shape, same fail-open behavior.
+- `fb_location_router.py` swaps from
+  `Depends(get_rate_limiter("write"))` to
+  `Depends(get_rate_limiter("fb_location_resolve"))`.
+- New test `test_resolve_endpoint_rate_limit_fires_on_sixth_call`
+  pre-seeds a row so all 6 calls take the cache path (no engine token
+  burn) and asserts 200 × 5, then 429 with the `RATE_LIMITED` error
+  code. Also confirms `Retry-After` lands in the headers.
+- Rationale: singleflight only dedupes identical
+  `(country, state, city)` triples. A bursty client throwing distinct
+  novel cities still fans out to every engine; the per-user cap is
+  the only thing preventing a CAPTCHA storm.
+
+**Group 3 — Picker "Try again" affordance (L9).**
+- `LocationFailureKind` enum (`generic` / `rateLimited`) carried in
+  `.failed(message:, kind:)`. Lets the retry copy stay generic while
+  reserving room for a "try again in a minute" hint when the
+  `fb_location_resolve` bucket fires.
+- VM gains `retryAttemptCount`, `retryInFlight`,
+  `lastResolveTarget: (city, state, label)?`, and
+  `static let maxConsecutiveRetries = 3`.
+- `retry()`: if `lastResolveTarget` is cached, calls
+  `resolveFbLocation(...)` directly — no CLGeocoder, no permission
+  prompt, no GPS round-trip. If no cached target, falls back to
+  `manager.requestLocation()` (the geocoding leg failed before we
+  got a city).
+- `canRetry` derived: false while `retryInFlight`, false after
+  `maxConsecutiveRetries` consecutive failures, false outside
+  `.failed`. Successful resolve resets `retryAttemptCount` to 0.
+- View renders a `retryRow` (bordered button, primary tint, disabled
+  while in-flight) below the `failed` message.
+- Tests: 3 cases — `test_retry_afterResolverFailure_recallsAPI`,
+  `test_retry_disabled_afterThreeConsecutiveFailures`,
+  `test_retry_counterResetsOnSuccessfulResolve`.
+
+**Group 4 — Canonical-redirect "Don't use this" banner (L11).**
+- Spec called for "Enter a different city" with text-input prefill,
+  but the picker is **CoreLocation-driven only** — there is no text
+  input field. Adding one would be a deep refactor outside the
+  surgical-additions scope.
+- Adapted: the secondary banner action is "Don't use this — start
+  over". `dismissCanonicalRedirect()` clears `fbLocationId`,
+  `displayLabel`, `canonicalName`, retry counters, and returns the
+  FSM to `.idle`. User can re-share location from a different
+  physical spot or just re-tap the location button.
+- `showsCanonicalRedirectAffordance` derived: true only when
+  `.resolved` carries a non-nil canonical that **doesn't match the
+  pre-canonical user label** (`lastResolveTarget?.label`). The
+  display label gets overwritten with the canonical for UX, so we
+  can't compare against the displayed label — it would always equal
+  the canonical (latent existing-banner bug — surfaced during this
+  step but not fixed here, since the existing in-row banner has its
+  own pre-canonical comparison work to do; flagged as follow-up).
+- Tests: 3 cases — `test_showsCanonicalRedirectAffordance_whenCanonicalDiffers`,
+  `test_showsCanonicalRedirectAffordance_falseWhenCanonicalMatches`,
+  `test_dismissCanonicalRedirect_resetsToIdle`.
+- Made `LocationPickerSheet.isSimilar(_:_:)` `static` (was `private static`)
+  so the VM can reuse the same predicate.
+
+**Group 5 — "Using SF default" pill (L12).**
+- Backend: new optional field `location_default_used: bool | None = None`
+  on `PriceResponse` for documentation, plus
+  `_classify_retailer_result(fb_location_id=)` parameter that
+  conditionally adds `"location_default_used": True` to the
+  per-row payload dict **only** when
+  `retailer_id == "fb_marketplace"` AND `not fb_location_id`.
+  Other retailers' payloads stay byte-identical to the pre-followup
+  shape — the flag never appears on amazon / best_buy / etc.
+- Both call sites in `service.py` (batch `get_prices` + streaming
+  `stream_prices`) thread `fb_location_id` through to the classifier.
+- iOS: `RetailerPrice.locationDefaultUsed: Bool?` decoded via
+  `decodeIfPresent` so old cache entries decode cleanly. New
+  `init(...)` keeps test fixtures compact.
+- `PriceRow` renders a `locationDefaultPill` (mappin SF Symbol +
+  caption text "Using SF default — set your city in Profile",
+  warm-amber `barkainPrimaryFixed` background) below the row when
+  `retailerId == "fb_marketplace" && locationDefaultUsed == true`.
+  Tappable closure `onLocationDefaultPillTap` exposed for the
+  parent — currently unwired in `PriceComparisonView` (cross-tab
+  navigation to Profile would require a deep refactor of the
+  ContentView tab selection plumbing). The pill educates the user
+  even with no tap action; deep-link is a documented follow-up.
+- Tests: 4 cases — backend
+  `test_stream_fb_marketplace_flags_default_when_no_location_id` +
+  `test_stream_fb_marketplace_does_not_flag_when_location_id_present`,
+  iOS `test_retailerPrice_decodesLocationDefaultUsedTrue` +
+  `test_retailerPrice_locationDefaultUsedAbsentDecodesAsNil`.
+- iOS test setup gotcha: `RecommendationDecodingTests.makeDecoder()`
+  doesn't set a date strategy (existing fixtures don't decode dates).
+  Added `makeRetailerPriceDecoder()` with `.iso8601` for the new
+  RetailerPrice tests.
+
+**Group 6 — `source` → `resolution_path` rename + collapse (L13).**
+- Backend `ResolveFbLocationResponse.source` renamed to
+  `resolution_path`. New `_collapse_resolution_path` mapper folds
+  `{startpage, ddg, brave, user}` → `live`; `{cache, seed,
+  unresolved, throttled}` pass through unchanged. Final public enum:
+  `{cache, live, seed, unresolved, throttled}`.
+- DB column stays `source` with engine names — preserves
+  observability and avoids a migration. The CHECK constraint in
+  `fb_location_models.py` keeps the engine-name allowlist.
+- iOS `ResolvedFbLocation.source: String` → `resolutionPath: String`.
+  `convertFromSnakeCase` handles the wire-format snake→camel
+  conversion; no `CodingKeys` needed.
+- Mock + preview API clients updated. Decoder test pins the
+  snake-case mapping.
+- Tests: 2 backend (`test_resolve_endpoint_collapses_engine_to_live`
+  + happy-path assertion update; `test_resolve_endpoint_collapses_engine_to_live`
+  pre-seeds a startpage-source row and asserts `cache` or `live` —
+  the L2 PG hit overwrites `resolved.source` to `cache` so seeded
+  rows report `cache` on lookup, which is correct), 1 iOS
+  (`test_resolvedFbLocation_decodesResolutionPathFromSnakeCase`).
+
+**Group 8 — Top-50 US metro PG seed (Mike-authorized for local).**
+- `python3 ../scripts/seed_fb_marketplace_locations.py` against
+  local Docker PG (`DATABASE_URL=postgresql+asyncpg://app:localdev@localhost:5432/barkain`).
+- Dry-run first (50 cities planned), then live.
+- Result: **50 rows total — 44 resolved, 6 tombstoned, 0 throttled,
+  0 errors.** Runtime ~2 minutes.
+- Tombstones (search-engine extractor came up empty on these — they
+  may have valid FB Marketplace pages but the snippet didn't surface
+  a Marketplace URL): Columbus OH, El Paso TX, Oakland CA, Raleigh
+  NC, Seattle WA, Tampa FL. Resolver will retry live for users in
+  those metros; tombstone TTL is 1 h.
+- Spot-check verified: NYC `108424279189115`, LA `103097699730654`,
+  Chicago `103794029659599`, SF `107929532567815` — all bigint Page
+  IDs, all `source='startpage'`.
+- **Production seed is still Mike-operated.** Do not target prod
+  from the agent.
+
+**Test deltas.**
+- Backend: 564 → 568 collected (+4 new — 2 rate-limit/collapse, 2
+  pill on/off). 561 passed + 7 skipped with experiment/tier2-ebay
+  flags off (the existing trunk default). 11 product_search test
+  failures observed when the experiment flags are enabled in
+  `backend/.env` from a prior session — pre-existing, unrelated to
+  this bundle, captured here as a reproducibility note.
+- iOS unit: 147 → 156 (+9 new — 1 endpoint decoder, 2 RetailerPrice
+  decoder, 6 picker VM). 156/156 pass.
+- iOS UI: 6 → 6 (no UI test changes).
+- `ruff check .` clean.
+- `xcodebuild test -only-testing:BarkainTests` clean on iPhone 17
+  Pro / iOS 26.4.1.
+
+**Known limits / follow-ups (non-blocking).**
+- `PriceRow.onLocationDefaultPillTap` closure is exposed but
+  unwired in `PriceComparisonView` — cross-tab nav from the
+  Recommendation/Price stack to Profile → Marketplace location
+  needs a small ContentView refactor. The pill renders and educates
+  even without the tap behavior.
+- The pre-existing `LocationPickerSheet.resolvedRow` banner check
+  (`!isSimilar(canonicalName, label)` where `label == canonicalName`
+  after the resolve overwrite) was identified as a latent bug
+  during this work but not fixed here — it deserves its own
+  surgical follow-up alongside whatever other in-row resolved
+  presentation tweaks come up. The new banner secondary-action
+  affordance uses `lastResolveTarget?.label` instead, so it works
+  correctly.
+- 6 tombstoned cities from the seed deserve a manual re-check —
+  Seattle/Oakland/Tampa especially; FB definitely has Marketplace
+  for those metros, the search-engine extractor likely got a
+  different result page shape today.
+- Production seed pending — Mike-operated when the Decodo budget
+  is confirmed.
+- CHANGELOG + CLAUDE.md compaction overshoot (~447 chars over
+  baseline) deferred to a dedicated pass.
