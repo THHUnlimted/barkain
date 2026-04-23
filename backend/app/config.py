@@ -167,5 +167,21 @@ class Settings(BaseSettings):
     DISCOUNT_VERIFICATION_STALE_DAYS: int = 7
     DISCOUNT_VERIFICATION_FAILURE_THRESHOLD: int = 3
 
+    # Portal Monetization (Step 3g)
+    # Feature flag — when False, PortalMonetizationService.resolve_cta_list
+    # short-circuits to GUIDED_ONLY for every portal, regardless of membership
+    # toggles or populated referral URLs. Demo / test environments leave it
+    # off so signup-attribution links never fire from a non-prod surface.
+    PORTAL_MONETIZATION_ENABLED: bool = False
+    RAKUTEN_REFERRAL_URL: str = ""
+    BEFRUGAL_REFERRAL_URL: str = ""
+    TOPCASHBACK_FLEXOFFERS_PUB_ID: str = ""
+    TOPCASHBACK_FLEXOFFERS_LINK_TEMPLATE: str = ""
+
+    # Resend (Step 3g — ops alerts for portal worker failures)
+    RESEND_API_KEY: str = ""
+    RESEND_ALERT_FROM: str = ""
+    RESEND_ALERT_TO: str = ""
+
 
 settings = Settings()
