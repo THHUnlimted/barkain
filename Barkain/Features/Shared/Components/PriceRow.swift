@@ -13,6 +13,11 @@ struct PriceRow: View {
     /// container border + a slight lift — matches the HTML's
     /// "Best Barkain" treatment.
     var isBest: Bool = false
+    /// Tapping the "Using SF default" pill (fb_marketplace + no
+    /// fb_location_id) calls this — parent wires it up to deep-link
+    /// into Profile → Marketplace location. Optional; pill is
+    /// non-interactive when nil.
+    var onLocationDefaultPillTap: (() -> Void)? = nil
 
     // MARK: - Body
 
@@ -23,6 +28,9 @@ struct PriceRow: View {
                 retailerInfo
                 Spacer(minLength: 0)
                 priceInfo
+            }
+            if showsLocationDefaultPill {
+                locationDefaultPill
             }
             if let rec = cardRecommendation {
                 cardRecommendationRow(rec)
@@ -42,6 +50,43 @@ struct PriceRow: View {
                 )
         )
         .barkainShadowSoft()
+    }
+
+    // MARK: - Location default pill (fb-resolver-followups L12)
+
+    /// Visible only on the fb_marketplace row when the backend tells us
+    /// the container fell back to its baked SF default — i.e., the user
+    /// never picked a Marketplace location.
+    private var showsLocationDefaultPill: Bool {
+        retailerPrice.retailerId == "fb_marketplace"
+            && retailerPrice.locationDefaultUsed == true
+    }
+
+    private var locationDefaultPill: some View {
+        Button {
+            onLocationDefaultPillTap?()
+        } label: {
+            HStack(spacing: Spacing.xxs) {
+                Image(systemName: "mappin.and.ellipse")
+                    .font(.caption2)
+                Text("Using SF default — set your city in Profile")
+                    .font(.barkainCaption)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(Color.barkainOnSurface)
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: Spacing.cornerRadiusSmall, style: .continuous)
+                    .fill(Color.barkainPrimaryFixed.opacity(0.45))
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(onLocationDefaultPillTap == nil)
+        .accessibilityLabel("Using San Francisco default location. Tap to set your city in Profile.")
     }
 
     // MARK: - Card recommendation

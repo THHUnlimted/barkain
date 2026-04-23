@@ -316,7 +316,7 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
             locationId: "108271525863730",
             canonicalName: "Accident, MD",
             verified: true,
-            source: "mock"
+            resolutionPath: "live"
         )
     )
     var resolveFbLocationCallCount = 0

@@ -418,6 +418,75 @@ async def test_resolve_endpoint_happy_path(client, db_session, fake_redis) -> No
     assert body["location_id"] == "112111905481230"
     assert body["verified"] is True
     assert body["canonical_name"] == "Brooklyn, NY"
+    # Renamed in fb-resolver-followups L13. The DB column stays `source`
+    # for analytics; the wire-format key is `resolution_path` and the
+    # value set is the public enum (no engine names). Seeded rows
+    # report `cache` because the L2 PG hit overwrites resolved.source
+    # to "cache".
+    assert "source" not in body
+    assert body["resolution_path"] == "cache"
+
+
+@pytest.mark.asyncio
+async def test_resolve_endpoint_collapses_engine_to_live(
+    client, db_session, fake_redis
+) -> None:
+    """Engine-specific values (startpage / ddg / brave / user) collapse to
+    `live` on the wire so the iOS Codable enum stays stable as we add or
+    swap engines server-side. The DB column keeps the engine name."""
+    row = FbMarketplaceLocation(
+        country="US",
+        state_code="NY",
+        city="brooklyn",
+        location_id=112111905481230,
+        canonical_name="Brooklyn, NY",
+        verified=True,
+        source="startpage",  # engine-specific internal value
+    )
+    db_session.add(row)
+    await db_session.flush()
+
+    resp = await client.post(
+        "/api/v1/fb-location/resolve",
+        json={"city": "Brooklyn", "state": "NY"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    # cache hit on a startpage-sourced row → `cache` (the L2 path
+    # overwrites resolved.source to "cache" on hit).
+    assert body["resolution_path"] in {"cache", "live"}
+    assert body["resolution_path"] not in {"startpage", "ddg", "brave", "user"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_endpoint_rate_limit_fires_on_sixth_call(
+    client, db_session, fake_redis
+) -> None:
+    """`fb_location_resolve` bucket caps at 5/min. Hard cap, no pro
+    multiplier (the bucket protects shared external budget, not user
+    throughput). Pre-seed a row so all 6 calls take the cache path and
+    don't burn engine tokens during the test."""
+    row = FbMarketplaceLocation(
+        country="US",
+        state_code="NY",
+        city="brooklyn",
+        location_id=112111905481230,
+        canonical_name="Brooklyn, NY",
+        verified=True,
+        source="seed",
+    )
+    db_session.add(row)
+    await db_session.flush()
+
+    payload = {"city": "Brooklyn", "state": "NY"}
+    for i in range(5):
+        resp = await client.post("/api/v1/fb-location/resolve", json=payload)
+        assert resp.status_code == 200, f"call {i + 1} unexpectedly throttled"
+
+    resp = await client.post("/api/v1/fb-location/resolve", json=payload)
+    assert resp.status_code == 429
+    body = resp.json()
+    assert body["detail"]["error"]["code"] == "RATE_LIMITED"
 
 
 @pytest.mark.asyncio

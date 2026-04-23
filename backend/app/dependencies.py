@@ -182,11 +182,21 @@ async def _resolve_user_tier(
     return resolved
 
 
+# Categories that bypass the pro tier multiplier. These protect shared
+# external-budget resources (third-party API quotas, scraping proxies)
+# rather than user-facing throughput, so a paying user shouldn't get a
+# bigger window — that just lets one abusive pro account exhaust the
+# pool faster.
+_NO_PRO_MULTIPLIER_CATEGORIES: set[str] = {"fb_location_resolve"}
+
+
 def get_rate_limiter(category: str = "general"):
     """Return a dependency that enforces rate limiting for the given category.
 
     Free users get the base thresholds from `settings.RATE_LIMIT_*`. Pro users
-    get those thresholds multiplied by `settings.RATE_LIMIT_PRO_MULTIPLIER`.
+    get those thresholds multiplied by `settings.RATE_LIMIT_PRO_MULTIPLIER`,
+    except for categories in `_NO_PRO_MULTIPLIER_CATEGORIES` which are hard
+    caps regardless of tier (typically external-budget protection buckets).
     Tier is resolved via a 60s Redis cache backed by a single DB SELECT on
     miss — the DB query is only hit when a user's rate window starts fresh.
     """
@@ -200,14 +210,18 @@ def get_rate_limiter(category: str = "general"):
             "general": settings.RATE_LIMIT_GENERAL,
             "write": settings.RATE_LIMIT_WRITE,
             "ai": settings.RATE_LIMIT_AI,
+            "fb_location_resolve": settings.RATE_LIMIT_FB_LOCATION_RESOLVE,
         }
         base_limit = limits.get(category, 60)
-        tier = await _resolve_user_tier(user["user_id"], redis_client, db)
-        limit = (
-            base_limit * settings.RATE_LIMIT_PRO_MULTIPLIER
-            if tier == "pro"
-            else base_limit
-        )
+        if category in _NO_PRO_MULTIPLIER_CATEGORIES:
+            limit = base_limit
+        else:
+            tier = await _resolve_user_tier(user["user_id"], redis_client, db)
+            limit = (
+                base_limit * settings.RATE_LIMIT_PRO_MULTIPLIER
+                if tier == "pro"
+                else base_limit
+            )
 
         key = f"rate:{user['user_id']}:{category}"
         now = time.time()

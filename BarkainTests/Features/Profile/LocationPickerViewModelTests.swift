@@ -103,4 +103,160 @@ final class LocationPickerViewModelTests: XCTestCase {
         XCTAssertEqual(vm.resolveState, .idle)
         XCTAssertEqual(vm.radiusMiles, LocationPreferences.defaultRadiusMiles)
     }
+
+    // MARK: - Retry on resolver failure (fb-resolver-followups L9)
+
+    /// Seed a `.failed` state via a real failing resolve so the VM
+    /// caches `lastResolveTarget`. Then a retry must call the API
+    /// again — caller didn't have to re-share location.
+    func test_retry_afterResolverFailure_recallsAPI() async {
+        let mock = MockAPIClient()
+        mock.resolveFbLocationResult = .failure(.network(URLError(.notConnectedToInternet)))
+        let (vm, _) = makeVM(mock: mock)
+
+        await vm.resolveFbLocation(city: "Brooklyn", state: "NY", label: "Brooklyn, NY")
+        guard case .failed = vm.resolveState else {
+            XCTFail("expected .failed after first resolve, got \(vm.resolveState)")
+            return
+        }
+        XCTAssertTrue(vm.canRetry)
+        XCTAssertEqual(mock.resolveFbLocationCallCount, 1)
+
+        // Retry succeeds this time.
+        mock.resolveFbLocationResult = .success(
+            ResolvedFbLocation(
+                locationId: "112111905481230",
+                canonicalName: "Brooklyn, NY",
+                verified: true,
+                resolutionPath: "live"
+            )
+        )
+        vm.retry()
+        // retry() spawns an async Task; await one MainActor turn so it
+        // completes before we assert.
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertEqual(mock.resolveFbLocationCallCount, 2,
+                       "retry must call /fb-location/resolve again")
+        if case let .resolved(label, _) = vm.resolveState {
+            XCTAssertEqual(label, "Brooklyn, NY")
+        } else {
+            XCTFail("expected .resolved after successful retry, got \(vm.resolveState)")
+        }
+        XCTAssertTrue(vm.canSave)
+    }
+
+    /// After 3 consecutive failures, the retry button must be hidden
+    /// — `canRetry` flips false. Stops the user from looping against
+    /// a genuinely unresolvable city.
+    func test_retry_disabled_afterThreeConsecutiveFailures() async {
+        let mock = MockAPIClient()
+        mock.resolveFbLocationResult = .failure(.network(URLError(.notConnectedToInternet)))
+        let (vm, _) = makeVM(mock: mock)
+
+        await vm.resolveFbLocation(city: "Ding Dong", state: "TX", label: "Ding Dong, TX")
+        XCTAssertTrue(vm.canRetry, "retry available after 1st failure")
+
+        for i in 1...LocationPickerViewModel.maxConsecutiveRetries {
+            vm.retry()
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            if i < LocationPickerViewModel.maxConsecutiveRetries {
+                XCTAssertTrue(vm.canRetry, "retry still available after \(i) attempts")
+            }
+        }
+
+        XCTAssertFalse(vm.canRetry,
+                       "retry must be suppressed after maxConsecutiveRetries")
+    }
+
+    /// Successful resolve clears the retry budget — a later failure
+    /// starts fresh from 0/3.
+    func test_retry_counterResetsOnSuccessfulResolve() async {
+        let mock = MockAPIClient()
+        mock.resolveFbLocationResult = .failure(.network(URLError(.notConnectedToInternet)))
+        let (vm, _) = makeVM(mock: mock)
+
+        await vm.resolveFbLocation(city: "Brooklyn", state: "NY", label: "Brooklyn, NY")
+        vm.retry()
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        // Two failures so far.
+
+        // Now succeed.
+        mock.resolveFbLocationResult = .success(
+            ResolvedFbLocation(
+                locationId: "112111905481230",
+                canonicalName: "Brooklyn, NY",
+                verified: true,
+                resolutionPath: "live"
+            )
+        )
+        await vm.resolveFbLocation(city: "Brooklyn", state: "NY", label: "Brooklyn, NY")
+        XCTAssertEqual(vm.retryAttemptCount, 0,
+                       "successful resolve must reset retry budget")
+    }
+
+    // MARK: - Canonical-redirect dismiss banner (fb-resolver-followups L11)
+
+    /// When FB's canonical name differs from the user's label,
+    /// `showsCanonicalRedirectAffordance` flips true so the sheet
+    /// surfaces the "Don't use this — start over" button.
+    func test_showsCanonicalRedirectAffordance_whenCanonicalDiffers() async {
+        let mock = MockAPIClient()
+        mock.resolveFbLocationResult = .success(
+            ResolvedFbLocation(
+                locationId: "108271525863730",
+                canonicalName: "Killeen, TX",
+                verified: true,
+                resolutionPath: "live"
+            )
+        )
+        let (vm, _) = makeVM(mock: mock)
+        await vm.resolveFbLocation(city: "Ding Dong", state: "TX", label: "Ding Dong, TX")
+        XCTAssertTrue(vm.showsCanonicalRedirectAffordance)
+    }
+
+    /// When canonical name matches the user's label, no banner
+    /// affordance — the redirect flag is silent.
+    func test_showsCanonicalRedirectAffordance_falseWhenCanonicalMatches() async {
+        let mock = MockAPIClient()
+        mock.resolveFbLocationResult = .success(
+            ResolvedFbLocation(
+                locationId: "112111905481230",
+                canonicalName: "Brooklyn, NY",
+                verified: true,
+                resolutionPath: "live"
+            )
+        )
+        let (vm, _) = makeVM(mock: mock)
+        await vm.resolveFbLocation(city: "Brooklyn", state: "NY", label: "Brooklyn, NY")
+        XCTAssertFalse(vm.showsCanonicalRedirectAffordance)
+    }
+
+    /// Tapping "Don't use this — start over" returns the picker to
+    /// idle, drops the resolved id (so canSave goes false), and
+    /// resets the retry budget.
+    func test_dismissCanonicalRedirect_resetsToIdle() async {
+        let mock = MockAPIClient()
+        mock.resolveFbLocationResult = .success(
+            ResolvedFbLocation(
+                locationId: "108271525863730",
+                canonicalName: "Killeen, TX",
+                verified: true,
+                resolutionPath: "live"
+            )
+        )
+        let (vm, _) = makeVM(mock: mock)
+        await vm.resolveFbLocation(city: "Ding Dong", state: "TX", label: "Ding Dong, TX")
+        XCTAssertTrue(vm.canSave)
+
+        vm.dismissCanonicalRedirect()
+
+        XCTAssertEqual(vm.resolveState, .idle)
+        XCTAssertFalse(vm.canSave)
+        XCTAssertFalse(vm.showsCanonicalRedirectAffordance)
+        XCTAssertEqual(vm.retryAttemptCount, 0)
+    }
 }

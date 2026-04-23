@@ -464,7 +464,8 @@ class PriceAggregationService:
         for retailer_id, response in responses.items():
             retailer_name = all_retailer_names.get(retailer_id, retailer_id)
             result, price_payload, best_listing = self._classify_retailer_result(
-                retailer_id, retailer_name, response, product, now
+                retailer_id, retailer_name, response, product, now,
+                fb_location_id=fb_location_id,
             )
             retailer_results.append(result)
 
@@ -655,7 +656,8 @@ class PriceAggregationService:
                 retailer_id, response = await fut
                 retailer_name = names.get(retailer_id, retailer_id)
                 result, price_payload, best_listing = self._classify_retailer_result(
-                    retailer_id, retailer_name, response, product, now
+                    retailer_id, retailer_name, response, product, now,
+                    fb_location_id=fb_location_id,
                 )
                 retailer_results.append(result)
 
@@ -947,6 +949,7 @@ class PriceAggregationService:
         response: ContainerResponse,
         product: Product,
         now: datetime,
+        fb_location_id: str | None = None,
     ) -> tuple[dict, dict | None, ContainerListing | None]:
         """Classify a single container response into normalized output.
 
@@ -958,6 +961,12 @@ class PriceAggregationService:
         already drifted apart slightly (stream embedded ``retailer_name``
         in the price payload directly while batch added it later) and the
         risk was that a bug fix in one wouldn't propagate.
+
+        ``fb_location_id`` (when provided) is used for one thing only:
+        flagging the fb_marketplace row's ``location_default_used`` so iOS
+        can show a "Using SF default — set your city in Profile" pill when
+        the user never picked a location. The flag is added only to the
+        fb_marketplace row to keep other retailers' payloads unchanged.
 
         Returns a tuple of ``(retailer_result, price_payload, best_listing)``:
 
@@ -1011,6 +1020,12 @@ class PriceAggregationService:
             "last_checked": now.isoformat(),
             "relevance_score": relevance,
         }
+        # Scope the flag to fb_marketplace so other retailers' payloads
+        # stay byte-identical to the pre-followup shape. Only emit when
+        # the container fell back to its baked default (no location_id
+        # supplied at request time) — the iOS pill key.
+        if retailer_id == "fb_marketplace" and not fb_location_id:
+            price_payload["location_default_used"] = True
         return (
             {"retailer_id": retailer_id, "retailer_name": retailer_name, "status": "success"},
             price_payload,

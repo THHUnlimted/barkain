@@ -150,6 +150,12 @@ class PriceResponse(BaseModel):
     is_available: bool = True
     is_on_sale: bool = False
     last_checked: datetime
+    # Set ONLY on the fb_marketplace row, ONLY when no fb_location_id was
+    # supplied at request time (so the container fell back to its baked
+    # `sanfrancisco` default). iOS surfaces a "Using SF default — set
+    # your city in Profile" pill when this is true. Optional + default
+    # None so other retailers' payloads are unchanged.
+    location_default_used: bool | None = None
 
 
 class RetailerStatus(str, Enum):

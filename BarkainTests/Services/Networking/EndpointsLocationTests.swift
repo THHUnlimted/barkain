@@ -116,4 +116,27 @@ final class EndpointsLocationTests: XCTestCase {
         XCTAssertEqual(json["state"] as? String, "NY")
         XCTAssertEqual(json["country"] as? String, "US")
     }
+
+    // MARK: - ResolvedFbLocation decoding (L13 rename)
+
+    /// Wire format renamed `source` → `resolution_path` in
+    /// fb-resolver-followups. Pin the snake-case decode so a future
+    /// JSONDecoder swap can't silently break the field.
+    func test_resolvedFbLocation_decodesResolutionPathFromSnakeCase() throws {
+        let json = """
+        {
+          "location_id": "112111905481230",
+          "canonical_name": "Brooklyn, NY",
+          "verified": true,
+          "resolution_path": "live"
+        }
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let resolved = try decoder.decode(ResolvedFbLocation.self, from: json)
+        XCTAssertEqual(resolved.locationId, "112111905481230")
+        XCTAssertEqual(resolved.canonicalName, "Brooklyn, NY")
+        XCTAssertTrue(resolved.verified)
+        XCTAssertEqual(resolved.resolutionPath, "live")
+    }
 }
