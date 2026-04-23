@@ -108,99 +108,17 @@ enum SnapshotTestHelper {
         )
     }
 
-    // MARK: - Accessibility-identifier sweep
-    //
-    // SwiftUI's `.accessibilityIdentifier(_:)` modifier flows through
-    // to the UIKit accessibility tree after layout. This traversal
-    // collects identifiers from the UIView hierarchy AND any attached
-    // `accessibilityElements` / indexed accessibility children, so we
-    // can assert "section X is present" as an XCTest-style smoke check
-    // without depending on the visual diff.
-
-    @MainActor
-    static func accessibilityIdentifiers(in controller: UIViewController) -> Set<String> {
-        var ids: Set<String> = []
-        var visited = Set<ObjectIdentifier>()
-        collect(from: controller.view, into: &ids, visited: &visited, depth: 0)
-        return ids
-    }
-
-
-    /// Max traversal depth. SwiftUI's rendered UIView tree is
-    /// typically 15–25 deep; UIAccessibilityElement containers add a
-    /// few more layers. 40 is comfortably above the real ceiling
-    /// while still being a hard brake against cyclic accessibility
-    /// graphs (which *can* happen when SwiftUI's internal hosting
-    /// containers expose `accessibilityElements` that reach back up
-    /// through a parent).
-    private static let maxTraversalDepth = 40
-
-    @MainActor
-    private static func collect(
-        from node: Any?,
-        into ids: inout Set<String>,
-        visited: inout Set<ObjectIdentifier>,
-        depth: Int
-    ) {
-        guard let node, depth < maxTraversalDepth else { return }
-
-        // Cycle protection — without this, SwiftUI's hosting views
-        // can infinite-loop the traversal via their backward-pointing
-        // accessibility element children, eating the test's time
-        // limit before the #expect assertion even runs.
-        if let reference = node as? AnyObject {
-            let key = ObjectIdentifier(reference)
-            if visited.contains(key) { return }
-            visited.insert(key)
-        }
-
-        // Both UIView and UIAccessibilityElement conform to
-        // UIAccessibilityIdentification.
-        if let identifiable = node as? any UIAccessibilityIdentification {
-            if let id = identifiable.accessibilityIdentifier, !id.isEmpty {
-                ids.insert(id)
-            }
-        }
-
-        if let view = node as? UIView {
-            for subview in view.subviews {
-                collect(from: subview, into: &ids, visited: &visited, depth: depth + 1)
-            }
-            if let elements = view.accessibilityElements {
-                for element in elements {
-                    collect(from: element, into: &ids, visited: &visited, depth: depth + 1)
-                }
-            }
-            let count = view.accessibilityElementCount()
-            if count > 0 {
-                for index in 0..<count {
-                    collect(
-                        from: view.accessibilityElement(at: index),
-                        into: &ids,
-                        visited: &visited,
-                        depth: depth + 1
-                    )
-                }
-            }
-            return
-        }
-
-        // UIAccessibilityContainer is an informal protocol (NSObject
-        // category); probe via selector rather than casting.
-        if let nsObject = node as? NSObject,
-           nsObject.responds(to: #selector(NSObject.accessibilityElementCount)) {
-            let count = nsObject.accessibilityElementCount()
-            if count > 0 {
-                for index in 0..<count {
-                    collect(
-                        from: nsObject.accessibilityElement(at: index),
-                        into: &ids,
-                        visited: &visited,
-                        depth: depth + 1
-                    )
-                }
-            }
-        }
-    }
+    // An `accessibilityIdentifiers(in:)` helper lived here across two
+    // chores — it tried to grep the rendered SwiftUI tree for section
+    // IDs as a cheap secondary smoke check. Four walker variants (full
+    // `UIAccessibilityContainer` recursion, UIView-only,
+    // `accessibilityElements` array read, bounded-bridge probe w/
+    // wall-clock budget) all failed on iOS 26.4: SwiftUI surfaces
+    // `.accessibilityIdentifier` ONLY through the slow container
+    // recursion that wedges the runtime. The helper has no callers
+    // and no plausible path back to viability; deleted. Snapshot
+    // PNGs are the regression signal. See docs/CHANGELOG.md entry
+    // "Chore — ProfileView snapshot smoke followup" for the full
+    // walker-variant matrix.
 
 }
