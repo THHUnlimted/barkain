@@ -2,7 +2,7 @@
 
 > Source: Project Planning Questionnaire + Architecture Sessions, March–April 2026
 > Scope: All planned phases, current position, infrastructure dependencies
-> Last updated: 2026-04-21 (v3.4 — Phase 3 through Step 3f; Purchase Interstitial + Activation Reminder; migration 0008)
+> Last updated: 2026-04-22 (v3.5 — Phase 3 through fb-resolver-followups + extractor post-fix; migrations 0008–0011)
 >
 > For per-step file inventories and decision rationale, see `docs/CHANGELOG.md`.
 
@@ -187,6 +187,11 @@
 | 3h | M8 Image scanning: Claude Vision for product ID from photos (not just barcodes) | ⬜ |
 | 3i | M8+M10 Receipt scanning: on-device OCR (Vision framework) → structured text to backend → item extraction → savings calculation → dashboard | ⬜ |
 | ~~3j~~ | ~~Identity discount stacking in recommendations~~ — **folded into 3e brand-direct callout** 2026-04-22 | ✅ |
+| fb-marketplace-location | Per-user FB Marketplace city + radius override; iOS picker via CoreLocation; query-param plumbing through `/prices/{id}/stream` | ✅ |
+| fb-marketplace-location-resolver | Numeric FB Page ID end-to-end (slug retired). Migration 0011 + 3-tier `FbLocationResolver` (Redis→PG→Startpage/DDG/Brave); GCRA token bucket; singleflight w/ subscribe-before-recheck; iOS bigint-safe `Stored.fbLocationId`; storage v1→v2; canonical-name redirect banner | ✅ |
+| experiment/tier2-ebay-search | Opt-in flags swap M1 Tier 2 UPCitemdb→eBay Browse keyword search; `_sanitize_ebay_title` strips seller noise; `M2_EBAY_DROP_PARTIAL_LISTINGS` filter on `ebay_browse_api`. All defaults off — A/B in dev | ✅ |
+| fb-resolver-followups | FB resolver follow-up bundle (L3/L4/L8/L9/L11/L12/L13). Dedicated `fb_location_resolve` rate bucket (5/min hard cap, no pro multiplier); DTO `source` → `resolution_path` rename + engine-name collapse to `{cache, live, seed, unresolved, throttled}`; `location_default_used` flag + iOS "Using SF default" pill on fb_marketplace; picker `retry()` + 3-attempt cap + 429-aware copy + canonical-redirect "Don't use this — start over"; top-50 US-metro local PG seed (50/50 after hand-resolve of Oakland/Raleigh/Seattle) | ✅ |
+| fb-resolver-postfix-1 | Canonical-name validation in `_parse_result_html` (rejects sub-region IDs like West Raleigh for Raleigh queries). New verb-agnostic `\bin\s+...\| Facebook` extractor pattern that handles full state names ("Raleigh, North Carolina"). Three-way decision: VALIDATED > FALLBACK > REJECTED. Live-verified Seattle resolves end-to-end via Brave post-fix | ✅ |
 | 3k | Savings dashboard populated with real receipt data | ⬜ |
 | 3l | Coupon discovery + validation: agent-browser batch scraping of coupon sites, on-demand validation, confidence scoring | ⬜ |
 | 3m | Hardening: AI integration tests with mock responses, tag v0.3.0 | ⬜ |
