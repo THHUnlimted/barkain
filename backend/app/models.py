@@ -25,3 +25,4 @@ from modules.m5_identity.models import (  # noqa: F401
 from modules.m9_notify.models import WatchedItem  # noqa: F401
 from modules.m10_savings.models import Receipt, ReceiptItem  # noqa: F401
 from modules.m12_affiliate.models import AffiliateClick  # noqa: F401
+from modules.m13_portal.models import PortalConfig  # noqa: F401

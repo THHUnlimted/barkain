@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-22 (fb-resolver-followups — dedicated `fb_location_resolve` rate bucket (5/min hard cap, no pro multiplier), DTO rename `source` → `resolution_path` with engine-name collapse, `location_default_used` flag + iOS "Using SF default" pill on the fb_marketplace row, picker `retry()` with 3-attempt cap + 429-aware copy + `dismissCanonicalRedirect()`, top-50 US-metro PG seed against local Docker)
+> Last updated: 2026-04-22 (3g-A — Portal Live Integration backend slice: migration 0012 `portal_configs`, `m13_portal` module with 5-step CTA decision tree, `POST /api/v1/portal/cta`, Resend alerting on 3 consecutive empty portal runs with 24h throttle, AWS Lambda infrastructure files + deploy runbook (Mike runs `deploy.sh`). iOS interstitial portal row + recommendation cache-key bump deferred to 3g-B.)
 
 ---
 
@@ -3435,6 +3435,194 @@ both deserve focused unit tests before merging behind a default-on flag.
 - Sanitizer is unconditional inside `_ebay_search` — if anyone wants the raw eBay title for debugging, it's only a `print(raw_title)` away.
 - M2 partial-listing regex covers electronics noise. Apparel / collectibles use different vocabulary ("size only listed", "swatch") — extend if those categories matter.
 - Schema slot reuse (`source="upcitemdb"` for eBay rows) is intentionally undisclosed to iOS to avoid a Codable migration. If telemetry needs to distinguish, the cleanest path is a new optional `tier2_origin` field, additive, defaults None.
+
+---
+
+### Step 3g-A — Portal Live Integration: backend slice (2026-04-22)
+
+**Branch:** `phase-3/step-3g` → `main` (PR TBD)
+
+**Why.** Step 3f deferred portal guidance to 3g; the existing
+`portal_rates` worker (Step 2h) already populates `portal_bonuses` but
+nothing reads it from a user-facing surface, no portal worker runs on a
+schedule outside dev, and there's no alerting when a portal stops
+returning rows. 3g-A delivers the backend half: schema + service + alert
+plumbing + Lambda deploy artifacts. The user-facing iOS layer (interstitial
+portal row, recommendation cache-key bump from `:v4`→`:v5`, `portal_used`
+affiliate metadata, demo-seed deletion) lands in 3g-B so the blast radius
+of either side is bounded — backend can be exercised against `curl`
+without touching the iOS app, iOS work can lean on a stable endpoint
+contract.
+
+**What.**
+
+1. **Migration 0012** (`portal_configs`). One table holds display-layer
+   metadata (display_name, homepage_url, signup_promo_amount/copy/ends_at,
+   is_active) plus alerting state (consecutive_failures, last_alerted_at).
+   Alerting columns live here because the worker already touches one row
+   per portal per run — incrementing the counter is a free side effect of
+   the upsert path. Mirror in `PortalConfig.__table_args__` per the 0003
+   / 0006 / 0009 / 0010 / 0011 parity convention; drift marker in
+   `tests/conftest.py::_ensure_schema` flips from `fb_marketplace_locations`
+   → `portal_configs`.
+
+2. **`scripts/seed_portal_configs.py`** — five rows. Rakuten / TopCashback
+   / BeFrugal active (Rakuten with the current `$50 on $30 within 90 days`
+   promo expiring 2026-06-30; TopCashback + BeFrugal with no promo until
+   their referral programs land); Chase Shop Through Chase + Capital One
+   Shopping seeded inactive (auth-gated, deferred). Idempotent
+   ON CONFLICT (portal_source) UPSERT, mirrors `seed_discount_catalog.py`.
+
+3. **`backend/modules/m13_portal/`** — new module (`__init__.py`,
+   `models.py`, `schemas.py`, `service.py`, `router.py`, `alerting.py`).
+   Folded into `app/models.py` for FK flush parity. Router registered in
+   `app/main.py` as the 10th included router.
+
+4. **`PortalMonetizationService.resolve_cta_list(retailer_id,
+   user_memberships)`** — 5-step decision tree:
+
+   1. `PORTAL_MONETIZATION_ENABLED=False` → GUIDED_ONLY (homepage URL).
+      Demo / test / unconfigured prod environments never leak signup
+      attribution.
+   2. `last_verified IS NULL` or older than 24h → skip the portal entirely.
+      Cron cadence is 6h; 24h = up to 3 missed runs before the pill
+      vanishes for that portal. Stale rates are worse than no rates —
+      users see the displayed number and complain when checkout doesn't
+      match.
+   3. User is a member (truthy entry in `user_memberships`) →
+      MEMBER_DEEPLINK with the portal's per-retailer store URL
+      (`https://www.rakuten.com/<slug>.htm`, `https://www.topcashback.com/<slug>/`,
+      `https://www.befrugal.com/store/<slug>/`). When the
+      `_RETAILER_TO_PORTAL_SLUG` dict has no entry for the (portal,
+      retailer) pair, fall through to step 4 — degrade cleanly, don't
+      drop the row.
+   4. Referral credential populated → SIGNUP_REFERRAL with
+      `disclosure_required=True` (FTC compliance) and `signup_promo_copy`
+      from `portal_configs`. TopCashback specifically requires both
+      `TOPCASHBACK_FLEXOFFERS_PUB_ID` and `TOPCASHBACK_FLEXOFFERS_LINK_TEMPLATE`;
+      half-configured → fall through to step 5.
+   5. Otherwise → GUIDED_ONLY (homepage URL).
+
+   Multiple portals for the same retailer sort by `(rate desc,
+   portal_source asc)` for a deterministic tiebreak; rejected candidates
+   logged at DEBUG with reason (`no_bonus_row`, `stale_bonus`).
+   **PR #52 lesson applied:** opaque first-match-wins ordering is a
+   latent bug; logging the rejected set means a future operator can see
+   why one portal won without re-instrumenting the code path.
+
+5. **`POST /api/v1/portal/cta`** — Clerk-gated, on the existing `general`
+   rate bucket. Body `{retailer_id, user_memberships}`; response
+   `{retailer_id, ctas[]}` capped at 3 per `_MAX_CTAS_PER_RETAILER`.
+   Endpoint exists for the secondary "tap any retailer" entry path that
+   bypasses `/recommend`; the common path (3g-B) folds CTAs into the
+   recommendation response so iOS doesn't double-fetch.
+
+6. **`alerting.py` — `send_failure_alert_if_warranted`**. Counter
+   increments on `row_count == 0`, resets on success. Alert fires at
+   `_FAILURE_ALERT_THRESHOLD = 3` consecutive failures; `_ALERT_THROTTLE
+   = 24h` on `last_alerted_at` keeps a stuck portal from spamming every
+   6h indefinitely. Empty `RESEND_API_KEY` → log a WARNING and return
+   without sending; `last_alerted_at` stays None so the next run with
+   creds populated still alerts. Mirrors the `AFFILIATE_WEBHOOK_SECRET`
+   permissive-placeholder convention from Step 2g. The `resend` package
+   is dynamically imported so a missing dep doesn't crash the worker on
+   environments that haven't installed it.
+
+7. **`infrastructure/lambda/portal_worker/`** (handler.py, requirements.txt,
+   Dockerfile, deploy.sh, README.md). AWS Lambda container image wrapping
+   `backend/workers/portal_rates.py` + the new alerting layer. EventBridge
+   cron `cron(0 */6 * * ? *)` fires every 6h; ~30s/invocation × 120/month
+   sits in the Lambda free tier vs. $5/month for EC2 or Fargate.
+   `deploy.sh` is idempotent — first run creates the ECR repo + Lambda
+   function + EventBridge rule + invoke permission; subsequent runs only
+   push a new image. **EC2 has no PG/Redis on this host** so the cron
+   *cannot* run on the existing scraper EC2 — it has to land on a
+   compute target with network reach to the production DB. Mike runs
+   `deploy.sh` post-merge with `LAMBDA_ROLE_ARN` and `SECRETS_ARN` set;
+   secrets live in AWS Secrets Manager keyed `barkain/portal-worker`.
+
+8. **`.env.example` + `app/config.py`** — 8 new vars under the `# ──
+   Portal Monetization (Step 3g) ─` block: `PORTAL_MONETIZATION_ENABLED`
+   (defaults False — flip in prod after creds populated),
+   `RAKUTEN_REFERRAL_URL`, `BEFRUGAL_REFERRAL_URL`,
+   `TOPCASHBACK_FLEXOFFERS_PUB_ID`, `TOPCASHBACK_FLEXOFFERS_LINK_TEMPLATE`,
+   `RESEND_API_KEY`, `RESEND_ALERT_FROM`, `RESEND_ALERT_TO`. All defaults
+   empty/false → resolver degrades to GUIDED_ONLY in any environment
+   where credentials aren't populated.
+
+**Tests.** +16 backend (11 m13_portal service + endpoint, 5 alerting).
+Hit pre-existing `SEARCH_TIER2_USE_EBAY=true` regression on first run
+(12 `test_product_search.py` failures — Pre-Fix #1, documented in PR #50);
+re-running with the flag overridden gives 583 passed / 7 skipped clean.
+
+**Decisions worth recording.**
+
+- **Alerting columns on `portal_configs` vs. a separate audit table.**
+  Counter + last_alerted_at are scoped per portal (3 active portals
+  → 3 rows ever) and the worker already writes the row each invocation.
+  A separate audit table would add a join for zero benefit.
+
+- **`general` rate bucket on `/portal/cta`** (not its own bucket like
+  `fb_location_resolve`). The endpoint hits a small constant table
+  + does no external IO; it's not protecting a shared external budget.
+  If a future dynamic-resolution layer adds external calls, lift it
+  to a dedicated bucket then.
+
+- **DEBUG logging of rejected candidates** (PR #52 lesson). When a future
+  operator sees an unexpected pill selection, the log shows which other
+  portals were considered and why each was skipped. Cheap visibility,
+  no instrumentation cost in the hot path (logger.isEnabledFor gate).
+
+- **Demo seed retained until 3g-B.** `seed_portal_bonuses_demo.py` still
+  exists. Deletion is folded into 3g-B because the iOS surface in 3g-B
+  needs at least one stable bonus row pattern to render against during
+  development; Mike can delete the script in the same PR that proves
+  the worker-driven path serves the same UX.
+
+- **Lambda over EC2/Fargate.** 30s every 6h, 120 invocations/month — sits
+  in Lambda free tier. EC2 is $5+/month for 24/7 uptime to do 1 minute
+  of work per six hours. No scaling story justifies a long-running host.
+
+**File inventory.**
+```
+infrastructure/migrations/versions/0012_portal_configs.py    NEW
+scripts/seed_portal_configs.py                                NEW
+backend/modules/m13_portal/__init__.py                        NEW
+backend/modules/m13_portal/models.py                          NEW
+backend/modules/m13_portal/schemas.py                         NEW
+backend/modules/m13_portal/service.py                         NEW
+backend/modules/m13_portal/router.py                          NEW
+backend/modules/m13_portal/alerting.py                        NEW
+backend/tests/modules/test_m13_portal.py                      NEW (+11 tests)
+backend/tests/workers/test_portal_rates_alerting.py           NEW (+5 tests)
+infrastructure/lambda/portal_worker/handler.py                NEW
+infrastructure/lambda/portal_worker/requirements.txt          NEW
+infrastructure/lambda/portal_worker/Dockerfile                NEW
+infrastructure/lambda/portal_worker/deploy.sh                 NEW (+x)
+infrastructure/lambda/portal_worker/README.md                 NEW
+backend/app/main.py                                            EDIT (+m13_portal_router)
+backend/app/models.py                                          EDIT (+PortalConfig)
+backend/app/config.py                                          EDIT (+8 settings)
+backend/tests/conftest.py                                      EDIT (drift marker → portal_configs)
+.env.example                                                   EDIT (+Portal Monetization block)
+CLAUDE.md                                                      EDIT (header v5.18, +3g-A row, +KDL bullet, backfill #51 + #52 rows)
+docs/CHANGELOG.md                                              EDIT (this entry + last-updated header)
+docs/PHASES.md                                                 EDIT (3g row half-flipped)
+docs/TESTING.md                                                EDIT (+test totals 568→583)
+docs/ARCHITECTURE.md                                           EDIT (endpoint table + portal monetization subsection)
+docs/DEPLOYMENT.md                                             EDIT (+Portal Worker Lambda section)
+```
+
+**Deferred to 3g-B.**
+
+- iOS `PortalCTA` model + interstitial portal row + Profile membership
+  toggles + recommendation cache-key bump from `:v4`→`:v5` + `portal_used`
+  affiliate metadata extension.
+- Deletion of `scripts/seed_portal_bonuses_demo.py` and the
+  `test_seed_portal_bonuses_demo_is_idempotent` test.
+- `docs/CARD_REWARDS.md` flip from "deferred to 3g" to "Shipped 3g" + mock
+  refresh.
+- `docs/FEATURES.md` Portal bonus row (Pillar 1, Phase 3, classification T).
 
 ---
 

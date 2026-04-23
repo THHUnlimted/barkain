@@ -489,6 +489,73 @@ The `SSE_HEADERS` constant in `backend/modules/m2_prices/sse.py` already sets `C
 
 ---
 
+## Portal Scrape Lambda (Step 3g-A)
+
+The portal_rates worker is wrapped in an AWS Lambda and triggered every 6
+hours by EventBridge. **EC2 has no PG/Redis on the scraper host**, so the
+Lambda is the production cron — it cannot share a host with the scraper
+fleet.
+
+### Why Lambda
+
+* 30s/invocation × 120/month = ~7 GB-seconds — Lambda free tier covers
+  400,000 GB-seconds.
+* EC2 / Fargate cost $5+/month for 24/7 uptime to do one minute of work
+  per six hours.
+* Single artifact: container image, deployed via one shell script.
+
+### Layout
+
+```
+infrastructure/lambda/portal_worker/
+  handler.py          # Lambda entry — wraps run_portal_scrape + alerting
+  requirements.txt    # Pinned deps (httpx, BS4, sqlalchemy, asyncpg, resend)
+  Dockerfile          # public.ecr.aws/lambda/python:3.12
+  deploy.sh           # ECR + Lambda + EventBridge wiring (idempotent)
+  README.md           # Full prerequisites + IAM + Secrets Manager runbook
+```
+
+### Deploy (Mike)
+
+```bash
+export AWS_REGION=us-east-1
+export LAMBDA_ROLE_ARN="arn:aws:iam::ACCT:role/barkain-portal-worker-role"
+export SECRETS_ARN="arn:aws:secretsmanager:us-east-1:ACCT:secret:barkain/portal-worker-XXXX"
+
+cd infrastructure/lambda/portal_worker && ./deploy.sh
+```
+
+Idempotent — re-run after every code change. First run also creates the
+ECR repo, Lambda function, EventBridge rule, and invoke permission.
+
+### Secrets Manager
+
+One JSON-shaped secret named `barkain/portal-worker` containing
+`DATABASE_URL`, the Resend creds, the feature flag, and the referral
+URLs. Updating the JSON propagates on the next cold-start (or invoke
+`update-function-configuration` to force a fresh container).
+
+### Verify
+
+```bash
+aws lambda invoke --function-name barkain-portal-worker \
+  --invocation-type Event --region us-east-1 /tmp/out.json
+aws logs tail /aws/lambda/barkain-portal-worker --region us-east-1 --since 5m
+```
+
+Look for `portal scrape complete: {rakuten: N, topcashback: N, befrugal: N}`.
+Zero rows for any portal increments `portal_configs.consecutive_failures`;
+3 consecutive zeros triggers a Resend email (24h throttle on
+`last_alerted_at`).
+
+### Rollback
+
+`aws events disable-rule --name barkain-portal-cron --region us-east-1` —
+stops scheduled invocations without deleting anything. Last good
+`portal_bonuses` rows continue to serve the iOS pill.
+
+---
+
 ## CI/CD Pipeline
 
 ### GitHub Actions

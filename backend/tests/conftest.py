@@ -55,7 +55,7 @@ async def _ensure_schema(engine):
     if _schema_ready:
         return
 
-    # Drift marker: fb_marketplace_locations table from migration 0011.
+    # Drift marker: portal_configs table from migration 0012.
     # Update this query when adding new migrations that introduce
     # constraints, columns, or indexes to existing tables.
     async with engine.begin() as conn:
@@ -64,7 +64,7 @@ async def _ensure_schema(engine):
         marker = await conn.execute(
             text(
                 "SELECT 1 FROM information_schema.tables "
-                "WHERE table_name = 'fb_marketplace_locations'"
+                "WHERE table_name = 'portal_configs'"
             )
         )
         schema_current = marker.scalar() is not None
