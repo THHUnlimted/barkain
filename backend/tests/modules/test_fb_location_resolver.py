@@ -93,6 +93,109 @@ def test_extract_canonical_from_marketplace_dash_city() -> None:
     assert canonical and "Killeen" in canonical
 
 
+# MARK: - Canonical-name validation (fb-resolver-postfix-1)
+#
+# The first numeric URL in HTML isn't always the right one. Search
+# engines mix in sub-region pages ("West Raleigh") that share the
+# Marketplace URL shape but represent a different metro. Without
+# validation, the resolver was caching sub-region IDs under canonical
+# city keys — Raleigh users would see West Raleigh listings.
+
+
+# Two result <div>s with ~800 chars of padding between them so the
+# canonical-near window (±400/+600) for each match doesn't bleed into
+# the other's snippet. Mirrors real Startpage / DDG / Brave result
+# layouts where each organic hit is its own block with wide
+# separation.
+_RESULT_PADDING = " " * 800
+_RALEIGH_MIXED_HTML = (
+    # Sub-region hit appears FIRST — would have won under the legacy
+    # first-match-wins behavior.
+    '<div class="result">'
+    '<a href="https://www.facebook.com/marketplace/110279135657365/">'
+    "Buy and Sell in West Raleigh, NC | Facebook Marketplace</a>"
+    "</div>" + _RESULT_PADDING +
+    # Then the canonical city Page ID, which is the right answer.
+    '<div class="result">'
+    '<a href="https://www.facebook.com/marketplace/103879976317396/cars/">'
+    "Cars for sale in Raleigh, North Carolina | Facebook Marketplace</a>"
+    "</div>"
+)
+
+
+def test_parse_result_html_picks_canonical_city_over_subregion() -> None:
+    """When multiple numeric IDs appear and one is a sub-region (West X)
+    while another is the requested city, accept the city-matching one
+    even though the sub-region appeared first in the HTML."""
+    result = _parse_result_html(_RALEIGH_MIXED_HTML, requested_city_norm="raleigh")
+    assert result is not None
+    loc_id, canonical = result
+    assert loc_id == 103879976317396, "must skip the West Raleigh sub-region"
+    assert canonical and "Raleigh" in canonical
+
+
+def test_parse_result_html_returns_none_when_only_subregion_validated() -> None:
+    """When the only numeric ID has a canonical that DIFFERS from the
+    requested city (West Raleigh vs Raleigh), return None — the
+    caller falls through to the next engine instead of persisting a
+    wrong-city ID. This is the win condition for the seed stragglers."""
+    only_subregion = (
+        '<div class="result">'
+        '<a href="https://www.facebook.com/marketplace/110279135657365/">'
+        "Buy and Sell in West Raleigh, NC | Facebook Marketplace</a>"
+        "</div>"
+    )
+    assert _parse_result_html(only_subregion, requested_city_norm="raleigh") is None
+
+
+def test_parse_result_html_falls_back_to_id_when_no_canonical_text() -> None:
+    """Real-world case (seen on Brave for Raleigh): the HTML has the
+    right numeric URL but the search engine didn't include enough
+    snippet text for the canonical patterns to fire. Strict
+    rejection would regress here because the ID is actually correct.
+    Fall back to the first numeric ID rather than tombstone — the
+    persistence layer sets verified=False so a weekly verifier
+    (Phase 4) can re-check later."""
+    bare_url_no_context = (
+        # 800 chars of padding before so the canonical-near window
+        # has nothing to grab onto either side of the URL.
+        "x" * 800 +
+        '<a href="https://www.facebook.com/marketplace/103879976317396/cars/">'
+        "</a>" +
+        "x" * 800
+    )
+    result = _parse_result_html(bare_url_no_context, requested_city_norm="raleigh")
+    assert result is not None
+    assert result[0] == 103879976317396
+    assert result[1] is None  # canonical correctly absent
+
+
+def test_parse_result_html_normalizes_st_paul() -> None:
+    """Normalization parity: 'St. Paul, MN' canonical matches a
+    'saint paul' request — same `_normalize_city` helper as elsewhere
+    in the resolver."""
+    html = (
+        '<a href="https://www.facebook.com/marketplace/100123456789012/">'
+        "Buy and Sell in St. Paul, MN | Facebook Marketplace</a>"
+    )
+    result = _parse_result_html(html, requested_city_norm="saint paul")
+    assert result is not None
+    assert result[0] == 100123456789012
+
+
+def test_parse_result_html_legacy_no_validation_when_arg_omitted() -> None:
+    """Backward-compat: omitting `requested_city_norm` preserves
+    first-match-wins behavior. Anyone calling the helper without
+    routing context (e.g., the existing happy-path test) gets the
+    same shape as before the post-fix."""
+    result = _parse_result_html(_RALEIGH_MIXED_HTML)
+    assert result is not None
+    # Legacy path returns the FIRST numeric URL — the sub-region —
+    # without validation. This documents the contract (callers that
+    # care about correctness must pass requested_city_norm).
+    assert result[0] == 110279135657365
+
+
 # MARK: - Resolver with fake engines
 
 
@@ -243,6 +346,47 @@ async def test_resolve_falls_back_to_next_engine(
 
     resolved = await resolver.resolve("Brooklyn", "NY")
     assert resolved.source == "ddg"
+    assert engine_a.calls == 1 and engine_b.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_resolve_skips_engine_returning_only_subregion_hits(
+    db_session, fake_redis, noop_http
+) -> None:
+    """Resolver-level integration of the canonical-name validation:
+    when engine A's HTML contains only sub-region IDs (West Raleigh)
+    that don't match the requested city (Raleigh), fall through to
+    engine B which has the canonical city ID. This is the case that
+    poisoned the seed for Oakland / Raleigh / Seattle pre-postfix."""
+    only_subregion_html = (
+        '<div class="result">'
+        '<a href="https://www.facebook.com/marketplace/110279135657365/">'
+        "Buy and Sell in West Raleigh, NC | Facebook Marketplace</a>"
+        "</div>"
+    )
+    canonical_html = (
+        '<div class="result">'
+        '<a href="https://www.facebook.com/marketplace/103879976317396/cars/">'
+        "Cars for sale in Raleigh, North Carolina | Facebook Marketplace</a>"
+        "</div>"
+    )
+    engine_a = _FakeEngine("startpage", [only_subregion_html])
+    engine_b = _FakeEngine("brave", [canonical_html])
+    resolver = FbLocationResolver(
+        db=db_session,
+        redis=fake_redis,
+        http=noop_http,
+        engines=[
+            _engine_spec("startpage", engine_a),
+            _engine_spec("brave", engine_b),
+        ],
+    )
+
+    resolved = await resolver.resolve("Raleigh", "NC")
+    assert resolved.location_id == 103879976317396, (
+        "must skip startpage's West Raleigh hit and accept brave's Raleigh hit"
+    )
+    assert resolved.source == "brave"
     assert engine_a.calls == 1 and engine_b.calls == 1
 
 

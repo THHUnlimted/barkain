@@ -240,6 +240,24 @@ async def _fetch_brave(
 
 
 _CANONICAL_PATTERNS: list[re.Pattern[str]] = [
+    # Verb-agnostic, full-or-short-state-name primary pattern
+    # (fb-resolver-postfix-1). Anchored to `\bin\s+` so the captured
+    # group starts at the actual city, not at the snippet's verb
+    # phrase ("Buy and Sell", "Free Stuff", "Cars for sale", etc.).
+    # Catches the snippet shapes the seed actually sees:
+    #   "Free Stuff in Oakland, California | Facebook Marketplace"
+    #   "Cars for sale in Raleigh, North Carolina | Facebook Marketplace"
+    #   "Buy and Sell in Brooklyn, NY | Facebook Marketplace"
+    # Without the `\bin\s+` anchor, the lazy character class would
+    # bleed across the verb prefix and produce canonicals like
+    # "Buy and Sell in Brooklyn, NY" — which loose `"Brooklyn" in
+    # canonical` checks tolerate but the new canonical-name validator
+    # in `_parse_result_html` does not.
+    re.compile(
+        r"\bin\s+([A-Z][A-Za-z .'\-]{2,60}?,\s*[A-Z][A-Za-z .'\-]{1,40})"
+        r"\s*[\|<&]\s*Facebook",
+        re.IGNORECASE,
+    ),
     re.compile(
         r"Buy and Sell in ([A-Z][A-Za-z .'\-]{2,60})\s*(?:\||<|&)",
         re.IGNORECASE,
@@ -267,14 +285,88 @@ def _extract_canonical_near(html: str, match_pos: int) -> str | None:
     return None
 
 
-def _parse_result_html(html: str) -> tuple[int, str | None] | None:
-    """Extract (location_id, canonical_name_or_None) from search-result HTML."""
-    m = _FB_ID_IN_URL.search(html)
-    if not m:
+def _parse_result_html(
+    html: str, requested_city_norm: str | None = None
+) -> tuple[int, str | None] | None:
+    """Extract (location_id, canonical_name_or_None) from search-result HTML.
+
+    When ``requested_city_norm`` is provided (the resolver-internal
+    normalized form, e.g. ``"raleigh"``), iterate **every** numeric
+    Marketplace URL in the HTML and accept the first one whose nearby
+    canonical name's city portion matches after normalization. This
+    rejects sub-region hits (e.g. ``"West Raleigh, NC"`` for a Raleigh
+    query) which would otherwise poison the L2 cache with a
+    non-canonical Page ID. Returns ``None`` when no validated match is
+    found, falling through to the next engine in the resolver's
+    cascade rather than persisting a wrong-city ID.
+
+    When ``requested_city_norm`` is ``None``, falls back to the
+    legacy "first match wins" behavior — preserves backward
+    compatibility for any external caller of this helper.
+
+    Backstory (fb-resolver-postfix-1, 2026-04-22): on the top-50
+    seed, Oakland / Raleigh / Seattle tombstoned even though the
+    raw HTML contained the right numeric IDs. Trace: the first
+    numeric URL Startpage returned for Raleigh was West Raleigh's
+    sub-region (``110279135657365``), not Raleigh proper
+    (``103879976317396``). Today we'd accept the first hit and
+    serve users in Raleigh listings from West Raleigh. With the
+    canonical-name validation we either pick Raleigh proper or
+    fall through to the next engine.
+    """
+    matches = list(_FB_ID_IN_URL.finditer(html))
+    if not matches:
         return None
-    loc_id = int(m.group(1))
-    canonical = _extract_canonical_near(html, m.start())
-    return loc_id, canonical
+
+    if requested_city_norm is None:
+        # Legacy behavior — first-match-wins, no validation.
+        m = matches[0]
+        return int(m.group(1)), _extract_canonical_near(html, m.start())
+
+    # Three-way decision over the candidate IDs:
+    #   - VALIDATED  : canonical present + city matches → accept best
+    #   - REJECTED   : canonical present + city DIFFERS → drop (sub-region)
+    #   - UNDECIDED  : canonical missing → keep as fallback if no
+    #                  validated match shows up later
+    #
+    # The fallback handles the real-world case (seen on Brave for
+    # Raleigh) where the search-result HTML carries the right numeric
+    # URL but no snippet text the canonical patterns can match. Strict
+    # rejection there would regress the seed even though the ID was
+    # correct. Falling back preserves the legacy first-match-wins
+    # behavior for that subset.
+    seen_ids: set[int] = set()
+    fallback: tuple[int, str | None] | None = None
+    for m in matches:
+        loc_id = int(m.group(1))
+        if loc_id in seen_ids:
+            continue
+        seen_ids.add(loc_id)
+        canonical = _extract_canonical_near(html, m.start())
+        if canonical is None:
+            # No nearby canonical text — undecided. Remember the first
+            # one as a fallback in case nothing else validates.
+            if fallback is None:
+                fallback = (loc_id, None)
+            continue
+        # canonical is "City, State" (or sometimes just "City").
+        # Compare just the city portion after normalization so
+        # "St. Paul, MN" matches a "Saint Paul" request, "West
+        # Raleigh, NC" rejects a "Raleigh" request, and capitalization
+        # / punctuation drift doesn't break recognition.
+        canonical_city = canonical.split(",", 1)[0].strip()
+        if _normalize_city(canonical_city) == requested_city_norm:
+            return loc_id, canonical
+        # Canonical present but doesn't match — REJECTED. Don't fall
+        # back to this one even if nothing else validates; we know
+        # it's the wrong city.
+
+    # No validated match. Use the fallback (a numeric URL with no
+    # canonical context) if we collected one — better to surface a
+    # likely-correct ID than tombstone the lookup. The persistence
+    # layer flags `verified=False` when canonical is None, so a
+    # weekly verifier (Phase 4) can re-check these later.
+    return fallback
 
 
 # MARK: - Proxy URL (mirrors walmart_http._build_proxy_url)
@@ -698,7 +790,11 @@ class FbLocationResolver:
             html = await engine.fetcher(http, q, proxy_url)
             if not html:
                 continue
-            parsed = _parse_result_html(html)
+            # Pass the normalized city so _parse_result_html can
+            # validate the match against the request — rejects
+            # sub-region IDs (e.g., West Raleigh for a Raleigh query)
+            # that would otherwise poison the L2 cache.
+            parsed = _parse_result_html(html, requested_city_norm=city_norm)
             if parsed is None:
                 continue
             loc_id, canonical = parsed
