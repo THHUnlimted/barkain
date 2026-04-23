@@ -125,6 +125,7 @@ enum SnapshotTestHelper {
         return ids
     }
 
+
     /// Max traversal depth. SwiftUI's rendered UIView tree is
     /// typically 15–25 deep; UIAccessibilityElement containers add a
     /// few more layers. 40 is comfortably above the real ceiling
@@ -201,4 +202,5 @@ enum SnapshotTestHelper {
             }
         }
     }
+
 }

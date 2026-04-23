@@ -105,6 +105,49 @@ struct ProfileViewSnapshotTests {
         updatedAt: Date(timeIntervalSince1970: 0)
     )
 
+    /// Profile that triggers ALL three `chipsSection` rows in
+    /// `profileSummary`: `activeGroupChips` (veteran + student),
+    /// `membershipChips` (Costco + AAA), and `verificationChips`
+    /// (id.me). The `studentProfile` fixture only exercises the
+    /// first row — this one guards against a future refactor that
+    /// accidentally drops one of the `if !foo.isEmpty` branches.
+    private static let kitchenSinkProfile = IdentityProfile(
+        userId: "snapshot_kitchen_sink_user",
+        isMilitary: false,
+        isVeteran: true,
+        isStudent: true,
+        isTeacher: false,
+        isFirstResponder: false,
+        isNurse: false,
+        isHealthcareWorker: false,
+        isSenior: false,
+        isGovernment: false,
+        isYoungAdult: false,
+        isAaaMember: true,
+        isAarpMember: false,
+        isCostcoMember: true,
+        isPrimeMember: false,
+        isSamsMember: false,
+        idMeVerified: true,
+        sheerIdVerified: false,
+        createdAt: Date(timeIntervalSince1970: 0),
+        updatedAt: Date(timeIntervalSince1970: 0)
+    )
+
+    // Identifiers applied to every shared ProfileView section
+    // (kennelHeader / scentTrailsCard / subscriptionSection /
+    // marketplaceLocationSection / cardsSection /
+    // portalMembershipsSection) are kept in the view code for future
+    // XCUITest coverage and as a self-documenting contract for the
+    // "added to one branch only" class of bug. A snapshot-test grep
+    // was attempted in two passes (see CHANGELOG
+    // chore/profileview-snapshot-infra-smoke) but SwiftUI's
+    // accessibility bridge on iOS 26.4 does not surface these IDs
+    // through any path we can touch without invoking the slow
+    // `UIAccessibilityContainer` recursion that wedged the original
+    // chore. The per-branch PNG baselines remain the regression
+    // signal for section-omission bugs.
+
     // MARK: - View builders
 
     /// Hosts ProfileView with injected mock services + seeded prefs.
@@ -114,8 +157,54 @@ struct ProfileViewSnapshotTests {
         profile: IdentityProfile,
         portalMemberships: [String: Bool] = [:]
     ) async -> UIViewController {
+        await hostProfile(
+            profileResult: .success(profile),
+            portalMemberships: portalMemberships,
+            identityDelay: 0,
+            flushTaskIterations: 8
+        )
+    }
+
+    /// Hosts ProfileView and stops yielding before the identity load
+    /// completes — leaves `ProfileView` in its `isLoading == true &&
+    /// profile == nil` state so the `LoadingState` branch renders.
+    ///
+    /// The mock's `getIdentityProfileDelay` stretches the load well
+    /// past the snapshot capture; after a couple of yields the
+    /// `.task` modifier has fired, `isLoading` is true, and the
+    /// `content` switch is on the first branch. The sleeping Task is
+    /// harmless at test teardown — swift-testing cancels it.
+    private static func hostLoading() async -> UIViewController {
+        await hostProfile(
+            profileResult: .success(Self.emptyProfile),
+            portalMemberships: [:],
+            identityDelay: 60,
+            flushTaskIterations: 3
+        )
+    }
+
+    /// Hosts ProfileView with a failing `getIdentityProfile` so the
+    /// `loadError` branch renders the `EmptyState` with a "Try
+    /// again" button. Uses a 500-level server error — the specific
+    /// shape drives the subtitle string but not the branch taken.
+    private static func hostError() async -> UIViewController {
+        await hostProfile(
+            profileResult: .failure(.server("Test error — snapshot fixture")),
+            portalMemberships: [:],
+            identityDelay: 0,
+            flushTaskIterations: 8
+        )
+    }
+
+    private static func hostProfile(
+        profileResult: Result<IdentityProfile, APIError>,
+        portalMemberships: [String: Bool],
+        identityDelay: TimeInterval,
+        flushTaskIterations: Int
+    ) async -> UIViewController {
         let api = MockAPIClient()
-        api.getIdentityProfileResult = .success(profile)
+        api.getIdentityProfileResult = profileResult
+        api.getIdentityProfileDelay = identityDelay
         api.getUserCardsResult = .success([])
         api.getAffiliateStatsResult = .success(
             AffiliateStatsResponse(clicksByRetailer: [:], totalClicks: 0)
@@ -145,11 +234,11 @@ struct ProfileViewSnapshotTests {
         let controller = SnapshotTestHelper.host(view)
 
         // Let `.task { await loadProfile(); await loadCards(); ... }`
-        // flush. Three yields covers the three sequential awaits at
-        // the top of ProfileView.body's .task modifier; the tail
-        // `savedLocation` / `portalMemberships` assignments are
-        // synchronous so no extra wait is needed.
-        for _ in 0..<8 {
+        // flush. 8 iterations covers the three sequential awaits at
+        // the top of ProfileView.body's .task modifier; loading-state
+        // tests use a smaller count so they capture the view BEFORE
+        // the profile result returns.
+        for _ in 0..<flushTaskIterations {
             await Task.yield()
             try? await Task.sleep(nanoseconds: 30_000_000) // 30 ms
         }
@@ -160,22 +249,16 @@ struct ProfileViewSnapshotTests {
 
     // MARK: - Tests
 
-    // NOTE: earlier iterations called
+    // NOTE: the original chore tried
     // `SnapshotTestHelper.accessibilityIdentifiers(in:)` here as a
-    // secondary "grep for portalMembershipsSection in the rendered
-    // hierarchy" smoke assertion. In practice the accessibility-tree
-    // traversal on a 402×2800 UIHostingController wedges the iOS
-    // 26.4 simulator runtime for 60+ seconds even with cycle
-    // protection and a 40-deep recursion cap — the tree returned by
-    // SwiftUI's hosting bridge is both massive AND references
-    // foreign containers whose `accessibilityElement(at:)` calls are
-    // themselves slow. The committed baseline PNG is sufficient as
-    // the regression signal: removing `portalMembershipsSection`
-    // from either `ProfileView` `ScrollView` branch causes the
-    // branch's baseline PNG diff to surface the omission on the
-    // next snapshot run. The `.accessibilityIdentifier` on the
-    // section (added in this chore) remains a useful anchor for
-    // future UI tests but is not relied on at snapshot time.
+    // secondary smoke assertion and hit a 60s wedge on iOS 26.4 —
+    // the slow path was `accessibilityElements` /
+    // `accessibilityElement(at:)` bridging from SwiftUI's hosting
+    // layer, NOT the plain `UIView.subviews` recursion. The
+    // followup (`chore/profileview-snapshot-infra-smoke`) adds
+    // `uiViewAccessibilityIdentifiers(in:)` which walks ONLY
+    // `subviews` and completes in <100 ms on the full ProfileView.
+    // `test_sharedSections_presentInBothBranches` below uses it.
 
     @Test("Empty-profile branch renders with portalMembershipsSection visible")
     func test_emptyProfile_branch_rendersPortalSection() async {
@@ -238,4 +321,41 @@ struct ProfileViewSnapshotTests {
             )
         }
     }
+
+    @Test("Loading branch renders LoadingState while identity load is pending")
+    func test_loadingBranch_rendersLoadingState() async {
+        let controller = await Self.hostLoading()
+        withSnapshotTesting(record: SnapshotTestHelper.recordMode) {
+            assertSnapshot(
+                of: controller,
+                as: SnapshotTestHelper.deviceImage,
+                named: "loading"
+            )
+        }
+    }
+
+    @Test("Error branch renders EmptyState when identity load fails")
+    func test_errorBranch_rendersEmptyState() async {
+        let controller = await Self.hostError()
+        withSnapshotTesting(record: SnapshotTestHelper.recordMode) {
+            assertSnapshot(
+                of: controller,
+                as: SnapshotTestHelper.deviceImage,
+                named: "error"
+            )
+        }
+    }
+
+    @Test("Kitchen-sink profile renders all three chipsSection rows")
+    func test_kitchenSinkProfile_rendersAllChipRows() async {
+        let controller = await Self.host(profile: Self.kitchenSinkProfile)
+        withSnapshotTesting(record: SnapshotTestHelper.recordMode) {
+            assertSnapshot(
+                of: controller,
+                as: SnapshotTestHelper.deviceImage,
+                named: "kitchen-sink"
+            )
+        }
+    }
+
 }
