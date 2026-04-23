@@ -3647,16 +3647,29 @@ trimming load-bearing detail from the new entries themselves.
 - `python3 ../scripts/seed_fb_marketplace_locations.py` against
   local Docker PG (`DATABASE_URL=postgresql+asyncpg://app:localdev@localhost:5432/barkain`).
 - Dry-run first (50 cities planned), then live.
-- Result: **50 rows total — 44 resolved, 6 tombstoned, 0 throttled,
-  0 errors.** Runtime ~2 minutes.
-- Tombstones (search-engine extractor came up empty on these — they
-  may have valid FB Marketplace pages but the snippet didn't surface
-  a Marketplace URL): Columbus OH, El Paso TX, Oakland CA, Raleigh
-  NC, Seattle WA, Tampa FL. Resolver will retry live for users in
-  those metros; tombstone TTL is 1 h.
+- **First pass:** 50 rows — 44 resolved, 6 tombstoned, 0 throttled.
+  Runtime ~2 min. Tombstones: Columbus OH, El Paso TX, Oakland CA,
+  Raleigh NC, Seattle WA, Tampa FL.
+- **Cleanup pass (per Mike's ask):** deleted the 6 tombstone rows
+  + flushed `fbmkt:*` Redis keys, re-ran the seed. Resolver
+  short-circuits the 44 already-good rows via L1/L2 cache so only
+  the 6 deleted hit the live engines.
+- **Final state:** 50 rows — **47 resolved, 3 tombstoned, 0
+  throttled.** Recovered: El Paso TX (transient extractor miss),
+  Tampa FL (transient), Columbus OH (Brave engine succeeded on
+  retry where Startpage had failed). Persistent failures: Oakland
+  CA, Raleigh NC, Seattle WA — all common city names where the
+  search-result snippet returns metro/state-level pages or
+  ambiguous results. This is an extractor-quality issue (not
+  transient); will not self-resolve on retry. Three options to
+  handle: (1) hand-resolve via FB Marketplace UI + manual
+  `INSERT INTO fb_marketplace_locations`, (2) tighten the
+  `_parse_result_html` extractor to handle these snippet shapes,
+  (3) leave them — users in those metros see the SF-default pill.
 - Spot-check verified: NYC `108424279189115`, LA `103097699730654`,
-  Chicago `103794029659599`, SF `107929532567815` — all bigint Page
-  IDs, all `source='startpage'`.
+  Chicago `103794029659599`, SF `107929532567815`, El Paso
+  (recovered), Tampa (recovered), Columbus `108450559178997`
+  (recovered) — all bigint Page IDs.
 - **Production seed is still Mike-operated.** Do not target prod
   from the agent.
 
@@ -3688,10 +3701,11 @@ trimming load-bearing detail from the new entries themselves.
   presentation tweaks come up. The new banner secondary-action
   affordance uses `lastResolveTarget?.label` instead, so it works
   correctly.
-- 6 tombstoned cities from the seed deserve a manual re-check —
-  Seattle/Oakland/Tampa especially; FB definitely has Marketplace
-  for those metros, the search-engine extractor likely got a
-  different result page shape today.
+- 3 persistent tombstones after the cleanup pass (Oakland, Raleigh,
+  Seattle) — common city names where the snippet extractor returns
+  ambiguous results. These won't self-resolve on retry; need either
+  hand-resolved INSERTs or a tightened `_parse_result_html`. Tampa,
+  El Paso, Columbus all recovered on the cleanup-pass retry.
 - Production seed pending — Mike-operated when the Decodo budget
   is confirmed.
 - CHANGELOG + CLAUDE.md compaction overshoot (~447 chars over
