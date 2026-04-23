@@ -1,7 +1,7 @@
 # CLAUDE.md — Barkain
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
-> **Last updated:** 2026-04-22 (v5.18 — 3g-A: `portal_configs` + `m13_portal` service/router + Resend alerting + Lambda infra files (Mike runs `deploy.sh`). Backend-only slice; iOS interstitial portal row + recommendation cache-key bump + demo-seed deletion land in 3g-B)
+> **Last updated:** 2026-04-22 (v5.19 — Pre-3g-B compaction: 33,952→26,095 chars (-23 %). Phase 3 step rows + KDL bullets + Conventions + Methodology + Tooling + Architecture all collapsed; full motivation/decisions/file inventories continue to live in `docs/CHANGELOG.md`. Headroom restored for 3g-B's iOS row + cache-key extension + `portal_event_type` analytics)
 
 ---
 
@@ -140,28 +140,13 @@ python3 scripts/run_worker.py price-process     # long-poll worker
 
 ## Architecture
 
-**Pattern:** MVVM (iOS) + Modular Monolith (Backend) + Containerized Scrapers
+**Pattern:** MVVM (iOS) + Modular Monolith (FastAPI Python 3.12+) + Containerized Scrapers (per-retailer Chromium + agent-browser).
 
-**iOS:** SwiftUI + `@Observable` ViewModels. Views → ViewModels → APIClient → Backend.
+**Walmart** uses an HTTP adapter (`WALMART_ADAPTER={decodo_http,firecrawl,container}`) since PerimeterX defeats headless Chromium — `__NEXT_DATA__` is server-rendered before JS. Firecrawl is currently 100% CHALLENGE'd; kept selectable.
 
-**Backend:** FastAPI (Python 3.12+). Per-module layout: `router.py`, `service.py`, `schemas.py`. Modules communicate via direct imports. All LLM calls go through `backend/ai/abstraction.py` — never import `google.genai` / `anthropic` / `openai` directly from a module.
+**Zero-LLM matching:** identity discounts, card rewards, rotating categories, portal bonuses all resolve via pure SQL joins. LLMs are only at the M1 boundary (product resolution) and M6 has been deterministic since 3e.
 
-**Scrapers:** Per-retailer Docker containers (Chromium + agent-browser CLI + extraction script + Watchdog). Walmart uses an HTTP adapter (`WALMART_ADAPTER={decodo_http (default),firecrawl,container}`) instead of the browser container — PerimeterX defeats headless Chromium but the `__NEXT_DATA__` JSON is server-rendered before JS runs. Firecrawl is currently non-functional (100% CHALLENGE response) as of 2026-04-17; kept selectable for future recovery.
-
-**Zero-LLM matching:** Identity discounts, card rewards, rotating categories, and portal bonuses are stored in PostgreSQL and resolved via pure SQL joins at query time. Claude Sonnet is only used for the final recommendation synthesis (Phase 3+).
-
-**Data flow:**
-```
-User scans barcode (iOS)
-  → APIClient POST /products/resolve
-    → M1 resolves product (Gemini + UPCitemdb cross-validation → PG cache)
-  → APIClient GET /prices/{id}/stream (SSE)
-    → M2 dispatches to 11 retailers in parallel; each event lands as it completes
-    → On done: APIClient GET /identity/discounts?product_id=
-    →          APIClient GET /cards/recommendations?product_id=
-  → PriceComparisonView renders: price / where / which card / identity discount
-  → Tap retailer → POST /affiliate/click → SFSafariViewController with tagged URL
-```
+**Data flow (barcode):** iOS → `POST /products/resolve` (M1: Gemini + UPCitemdb cross-val + PG cache) → `GET /prices/{id}/stream` (SSE; M2 fans out to 9 retailers in parallel) → on done `GET /identity/discounts` + `GET /cards/recommendations` → `POST /api/v1/recommend` for the M6 stack → `PriceComparisonView` renders. Tap retailer → `POST /affiliate/click` → `SFSafariViewController` with tagged URL.
 
 **Concurrency:** Python `async`/`await` throughout. Swift structured concurrency on iOS.
 
@@ -170,38 +155,28 @@ User scans barcode (iOS)
 ## Conventions
 
 ### Backend (Python)
-- **FastAPI** with Pydantic v2 models for all request/response schemas
-- **Alembic** migrations in `infrastructure/migrations/` — backward-compatible only
-- **SQLAlchemy 2.0** async ORM; `Base.metadata.create_all` is used by the test DB, so every constraint added via migration must be mirrored in the model's `__table_args__`
-- Each module has: `router.py`, `service.py`, `schemas.py`
-- All AI calls through `ai/abstraction.py`
-- Background workers use SQS (LocalStack in dev, real AWS in prod) + standalone scripts invoked via `scripts/run_worker.py <subcommand>`. Not Celery.
-- Per-retailer adapters in `m2_prices/adapters/` normalize to a common price schema
-- **`session.refresh()` does NOT autoflush** — rely on the SQLAlchemy identity map for in-memory mutation assertions in tests (2h learning)
-- **Three-mode optional params** (unset / override / force-None): use `_UNSET = object()` sentinel, not `or`-chains (2h learning)
-- **Workers translate queue messages to existing service calls** — reuse services, don't duplicate logic (price_ingestion reuses `PriceAggregationService.get_prices(force_refresh=True)`)
-- **SQS error handling:** don't ack on service failure (rely on visibility-timeout retry); ack+delete only permanently-bad data
-- **BeautifulSoup** for structured HTML parsing; `re` for simple pattern extraction
-- **Divergence documentation:** when a worker or service intentionally diverges from a planning doc, document it in three places — code docstring, architecture doc annotation, CHANGELOG entry (example: `workers/portal_rates.py` uses httpx+BS4 instead of the Job 1 agent-browser pseudocode)
+- FastAPI + Pydantic v2 schemas; Alembic migrations in `infrastructure/migrations/` (backward-compatible only); SQLAlchemy 2.0 async; **constraints mirrored in `__table_args__`** for test `create_all` parity
+- Per-module layout `router.py` / `service.py` / `schemas.py`; modules import each other directly (no event bus)
+- All AI calls go through `ai/abstraction.py` — never import `google.genai` / `anthropic` / `openai` directly
+- Background workers = SQS (LocalStack dev / real AWS prod) + `scripts/run_worker.py <subcmd>`, not Celery; workers translate messages to existing service calls (`price_ingestion` reuses `PriceAggregationService`); ack only on success or permanently-bad data
+- Per-retailer adapters in `m2_prices/adapters/` normalize to a common price schema; BS4 for structured HTML, `re` for patterns
+- **`session.refresh()` does NOT autoflush** — assert against the in-memory object via the identity map (2h learning)
+- **Three-mode optional params** (unset / override / force-None): `_UNSET = object()` sentinel, not `or`-chains
+- **Divergence docs in 3 places** (code docstring + arch doc + CHANGELOG) when a worker/service diverges from planning pseudocode (e.g. `portal_rates` uses httpx+BS4 not agent-browser)
 
 ### iOS (Swift)
-- **SwiftUI** declarative views, `@Observable` ViewModels (iOS 17+)
-- **No force unwraps** except in Preview providers
-- `// MARK: -` sections in every file
-- Extract subviews when body exceeds ~40 lines
-- Services injected via `.environment(...)` (SwiftUI 17+ native for `@Observable`); `APIClient` uses a custom `EnvironmentKey` because it's a Sendable protocol
-- **SPM only** — no CocoaPods
-- **SSE consumer:** use a manual byte-level splitter over `URLSession.AsyncBytes`, NOT `bytes.lines` — `.lines` buffers aggressively for small payloads (2c-val-L6)
-- **Simulator `API_BASE_URL`:** use `http://127.0.0.1:8000`, NOT `localhost:8000` — skips IPv6 happy-eyeballs fallback
-- **SSE debugging:** `com.barkain.app`/`SSE` os_log category captures every line + parse + decode + fallback. Watch with `xcrun simctl spawn booted log stream --level debug --predicate 'subsystem == "com.barkain.app" AND category == "SSE"'`
-- **Hiding a `.searchable` nav bar:** `.searchable(isPresented:)` with `.navigationBarDrawer(.always)` only toggles focus, **not** visibility. To actually remove the bar, apply `.toolbar(.hidden, for: .navigationBar)` on the root view (SearchView hides its whole nav chrome — title + drawer — during price streaming, then restores on pull-down / stream close) (ui-refresh-v1)
+- SwiftUI + `@Observable` VMs (iOS 17+); no force unwraps except Previews; `// MARK: -` sections; extract subviews past ~40 lines
+- Services injected via `.environment(...)`; `APIClient` uses a custom `EnvironmentKey` because the protocol is Sendable
+- SPM only; no CocoaPods
+- **SSE consumer:** manual byte-level splitter over `URLSession.AsyncBytes`, NOT `bytes.lines` (buffers aggressively, 2c-val-L6)
+- **Simulator `API_BASE_URL`:** `http://127.0.0.1:8000`, NOT `localhost:8000` (skips IPv6 happy-eyeballs)
+- **SSE debug:** subsystem `com.barkain.app` / category `SSE` os_log captures everything; watch with `xcrun simctl spawn booted log stream --level debug --predicate 'subsystem == "com.barkain.app" AND category == "SSE"'`
+- **Hiding `.searchable` nav bar:** `.searchable(isPresented:)` only toggles focus; apply `.toolbar(.hidden, for: .navigationBar)` on the root view to actually hide it (SearchView pattern, ui-refresh-v1)
 
 ### Git
-- Branch per step: `phase-N/step-Na`
-- Conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`
-- Tags at phase boundaries: `v0.N.0`
-- Developer handles all git operations — agent never commits without an explicit request
-- Stacked PR conflicts after lower PR squash-merge: `git rebase origin/main && git push --force-with-lease`. Git auto-detects patch-equivalence and skips the already-applied commit.
+- Branch per step `phase-N/step-Na`; conventional commits (`feat:`/`fix:`/`docs:`/`test:`/`refactor:`); tags at phase boundaries `v0.N.0`
+- **Developer handles all git ops — agent never commits without explicit request**
+- Stacked-PR conflicts after lower squash-merge: `git rebase origin/main && git push --force-with-lease` (git auto-detects patch equivalence)
 
 ### Classification Rule
 Before implementing any feature, check `docs/FEATURES.md` for its AI/Traditional/Hybrid classification. If classified as Traditional, do NOT use LLM calls. If Hybrid, AI generates and code validates/executes.
@@ -210,67 +185,43 @@ Before implementing any feature, check `docs/FEATURES.md` for its AI/Traditional
 
 ## Development Methodology
 
-This project uses a **two-tier AI workflow:**
-
-1. **Planner (Claude Opus via claude.ai):** Architecture, prompt engineering, step reviews, deployment troubleshooting
-2. **Executor (Claude Code / Sonnet or Opus):** Implementation — writes code, runs tests, follows structured prompt packages
-
-**The loop:** Planner creates prompt package → Developer pastes step into coding agent → Agent plans, builds, tests → Developer writes error report → Planner reviews and evolves prompt → Repeat.
-
-**Key rules:**
-- Every step includes a FINAL section that mandates guiding-doc updates
-- Pre-fix blocks carry known issues from prior steps into the next step's prompt
-- This file must pass the "new session" test after every step
-- Error reports are structured (numbered issues, not narrative)
-- Prompt packages live in `prompts/` (NOT in repo)
+Two-tier AI workflow: **Planner** (Claude Opus via claude.ai) authors prompt packages, reviews error reports, evolves prompts. **Executor** (Claude Code) implements + tests. Loop: Planner → Agent plans + builds + tests → Developer writes error report → Planner reviews. Prompt packages live in `prompts/` (not in repo). Every step includes a FINAL section mandating guiding-doc updates. Pre-fix blocks carry known issues forward.
 
 ---
 
 ## Tooling
 
-### MCP Servers
-- **Postgres MCP Pro** — schema inspection, query testing, migration validation
-- **Redis MCP** — cache key inspection, TTL verification
-- **Context7** — library documentation lookup
-- **Clerk** — user management, JWT inspection
-- **XcodeBuildMCP** — iOS build, test, clean, UI automation
-
-### CLIs
-- Day 1: `gh`, `docker`, `ruff`, `alembic`, `pytest`, `swiftlint`, `jq`, `xcodes`
-- First deploy: `aws`, `railway`
-- Phase 4+: `fastlane`, `vercel`
+**MCP:** Postgres MCP Pro · Redis MCP · Context7 · Clerk · XcodeBuildMCP.
+**CLIs:** `gh` `docker` `ruff` `alembic` `pytest` `swiftlint` `jq` `xcodes`; deploy adds `aws` `railway`; Phase 4+ adds `fastlane` `vercel`.
 
 ---
 
 ## Current State
 
-**Phase 1 — Foundation: COMPLETE** (tagged `v0.1.0`, 2026-04-08)
-Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; lowes + sams_club scrapers retired 2026-04-18) → iOS display. Amazon + Best Buy + Walmart validated on physical iPhone (2026-04-10).
+**Phase 1 — Foundation:** ✅ tagged `v0.1.0` (2026-04-08). Barcode → Gemini UPC → 9-retailer price comparison (was 11; lowes + sams_club retired 2026-04-18) → iOS display. Validated on physical iPhone.
 
-**Phase 2 — Intelligence Layer: COMPLETE** (tagged `v0.2.0`, 2026-04-16). 2a–2i shipped across PRs #3–#21: Watchdog supervisor, Walmart HTTP adapter, UPCitemdb cross-val, SSE streaming + iOS byte splitter, M5 Identity + 52-program catalog, Card portfolio + 30 cards, M11 Billing (RC + webhook), M12 Affiliate router, Background workers (SQS), code-quality sweep (`_classify_retailer_result` extraction, migrations 0004–0006), EC2 redeploy + UITests smoke. Full per-step breakdown in `docs/CHANGELOG.md`.
+**Phase 2 — Intelligence Layer:** ✅ tagged `v0.2.0` (2026-04-16). 2a–2i shipped across PRs #3–#21: Watchdog, Walmart HTTP adapter, UPCitemdb cross-val, SSE + iOS byte splitter, M5 Identity (52 programs), Card portfolio (30 cards), M11 Billing (RC + webhook), M12 Affiliate, SQS workers, code-quality sweep, EC2 redeploy + UITests. Per-step in `docs/CHANGELOG.md`.
 
 **Phase 3 — Recommendation Intelligence: IN PROGRESS**
 
-| Step | What | Backend tests | iOS tests | PR |
+> Step rows below are 1-line indices. Full motivation + decisions + file inventory live per-step in `docs/CHANGELOG.md`.
+
+| Step | What | BE | iOS | PR |
 |------|------|:-:|:-:|:-:|
-| 3a | M1 Product Text Search: `POST /products/search` + pg_trgm + Gemini fallback + SearchView | +10 | +6 unit/+1 UI | #22, #23 |
-| 3b | eBay Browse API adapter (replaces `ebay_new`/`ebay_used` containers, sub-second) + GDPR deletion webhook + FastAPI deploy on scraper EC2 (Caddy+LE) | +13 | — | #24 |
-| demo/post-demo prep | Walmart `decodo_http` default + CHALLENGE retry + Decodo-scoping; Best Buy Products API adapter; Decodo Scraper API for Amazon (~3 s); lowes/sams_club retired | +127 | — | #25–#31 |
-| 3c | M1 Search v2: 3-tier cascade (DB → [BBY+UPCitemdb parallel] → Gemini), brand-only routing, `force_gemini` deep-search, variant collapse, price-stream `?query=` override, eBay affiliate fix (rover pixel → EPN params) | +14 | +5 | #32 |
-| 3c-hardening | Amazon platform-suffix + service/repair filter; Walmart 5× CHALLENGE retry; BBY 429/5xx retry + `_sanitize_query`; Redis device→UPC 24h + scoped query cache 30 min; iOS sheet-anchoring fix | +26 | — | #32 |
-| 3d | Autocomplete: `actor AutocompleteService` (sorted-array binary search) + `.searchable` + `RecentSearches` + `scripts/generate_autocomplete_vocab.py` (4,448 terms / 128 KB). Removed 300 ms auto-debounce; submit-driven | +23 | +34 / +1 UI | #34 |
-| 3d-noise-filter | `_is_tier2_noise` category+title denylist → Gemini escalation when Tier 2 is accessories-only. Extended in ui-refresh-v2-fix with brand+model relevance | +4 | — | #36 |
-| ui-refresh-v1 | HTML-style-guide design pass: warm-gold palette, rounded system fonts, shadow/shimmer helpers. Glowing-paw `SniffingHeroSection` during price loading. Retailer rows stream in live with spring price-sort (Best Barkain tracks current cheapest). Nav bar hides during streaming | — | — | #37 |
-| ui-refresh-v2 | Whole-app makeover: new Home tab (hero + quick-actions + "Recently sniffed" rail backed by `RecentlyScannedStore`). Scanner overlay redesign. Profile → "The Kennel" with real `/affiliate/stats` gradient card. Savings "coming soon" hero. Onboarding gradient stepper. Shared `UITabBarAppearance` blur | — | — | #38 |
-| ui-refresh-v2-fix | SearchView mid-stream dismissal (`.searchable` setter fires `""` on nav-bar hide — guarded) + Tier 2 off-brand fuzzy match noise (`_is_tier2_noise` strict-majority + model-code verbatim gate) | +4 | — | #39, #40 |
-| 3e | M6 Recommendation Engine (deterministic, no LLM). `POST /api/v1/recommend` stacks identity + card + portal via `asyncio.gather`, p95 < 150 ms. Brand-direct callout ≥15 % `*_direct`. iOS hero gated on 3 settle flags; silent fallback on failure. `scripts/seed_portal_bonuses_demo.py` (3g replaces). M6 reclassified AI → T | +14 | +8 / +1 UI | #41 |
-| 3f (+hotfix) | Purchase Interstitial + Activation Reminder. `PurchaseInterstitialSheet` from hero CTA + row taps. `POST /affiliate/click` gains `activation_skipped` (migration 0008). Pre-fixes: `BarePreviewAPIClient` + `_db_url.py` + `without_demo_mode`. Hotfix: per-retailer `estimated_savings` w/ highest-scraped fallback; migration 0009 adds `discount_programs.scope`; Prime Student → `membership_fee` | +7 | +9 | #42 |
-| Benefits Expansion (+follow-ups) | +10 student-tech + Prime YA (`scope='membership_fee'`), +4 `*_direct`, `is_young_adult` axis (0010). 52→63 programs / 8→12 retailers / 9→10 eligibility types. Follow-ups: `program_type='membership'` retired; `_dedup_best_per_retailer_scope` + `BRAND_ALIASES` name-gate (ThinkPad hides Asus/Razer); iOS `scopeBadge` + price `lineLimit` + pills `VStack`; `/resolve` → `/resolve-from-search` on Gemini UPC hallucination | +10 | +7 | #45, #46 |
-| fb-marketplace-location-resolver | Numeric FB Page ID end-to-end (slug path retired). Migration 0011 + `FbLocationResolver` (Redis→PG→Startpage/DDG/Brave, GCRA bucket, singleflight w/ subscribe-before-recheck, throttled ≠ unresolved). M2 + container: `fb_location_id` + `fb_radius_km` (miles→km at adapter). `POST /api/v1/fb-location/resolve`. iOS `Stored.fbLocationId` (bigint-safe String), storage v1→v2, picker FSM. Seed `seed_fb_marketplace_locations.py` | +28 | +9 | #49 |
-| experiment/tier2-ebay-search | Opt-in flags (defaults preserve current behavior). `SEARCH_TIER2_USE_EBAY` swaps UPCitemdb→Browse keyword search in Tier 2; `_sanitize_ebay_title` cleans seller noise so `/resolve-from-search` doesn't 404. `SEARCH_TIER2_EBAY_USE_GTIN` (no-op in practice — Browse omits `gtin`); `SEARCH_TIER2_EBAY_SKIP_UPC` shortcut. Schema unchanged — rows tagged `"upcitemdb"`. `M2_EBAY_DROP_PARTIAL_LISTINGS` drops `box only`/`for parts`/`charger only`/`as-is`/`screen replacement` on `ebay_browse_api`. Full rationale in CHANGELOG | — | — | #50 |
-| fb-resolver-followups | Bundle of low-risk follow-ups. Dedicated `fb_location_resolve` rate bucket (5/min hard cap, no pro multiplier — protects shared Decodo + search-engine token budget). API DTO renames `source` → `resolution_path` and collapses engine names `{startpage, ddg, brave, user}` → `live` so iOS sees the stable `{cache, live, seed, unresolved, throttled}` enum (DB column unchanged for analytics). `location_default_used` flag on fb_marketplace price payload when no `fb_location_id` was supplied → iOS pill "Using SF default — set your city in Profile". Picker FSM gains `retry()` + 3-attempt cap + 429-aware copy + `dismissCanonicalRedirect()`. Top-50 US-metro PG seed against local Docker (44 resolved / 6 tombstoned: Columbus, El Paso, Oakland, Raleigh, Seattle, Tampa) | +4 | +9 | #51 |
-| fb-resolver-postfix-1 | Extractor canonical-name validation. New verb-agnostic primary pattern (`\bin\s+...| Facebook`) anchored first + three-way decision (VALIDATED > FALLBACK > REJECTED) rejects sub-region IDs (West Raleigh `110279135657365` no longer accepted over Raleigh `103879976317396`) when a city-norm canonical is available, falls through to first-match-wins when none is. Resolver caller passes `city_norm` through; unmigrated callers preserve legacy behavior via the optional arg | +5 | — | #52 |
-| 3g-A | Portal Live Integration — backend slice. Migration 0012 (`portal_configs` w/ display + signup-promo + `consecutive_failures`/`last_alerted_at` alerting state). New `m13_portal` module: `PortalMonetizationService.resolve_cta_list` (5-step decision tree: feature-flag → staleness 24h → member deeplink → signup-referral → guided-only) + `POST /api/v1/portal/cta`. Resend alerting on 3 consecutive empty portal runs (24h throttle on `last_alerted_at`). Lambda infra files (`infrastructure/lambda/portal_worker/{handler.py, Dockerfile, deploy.sh, README.md}`) — Mike runs `deploy.sh`. Demo seed `seed_portal_bonuses_demo.py` retained for now (deletion deferred to 3g-B alongside iOS surface) | +16 | — | TBD |
+| 3a | M1 product text search (pg_trgm + Gemini fallback) + SearchView | +10 | +7 | #22, #23 |
+| 3b | eBay Browse API adapter + GDPR deletion webhook + FastAPI on scraper EC2 (Caddy+LE) | +13 | — | #24 |
+| demo/post-demo prep | Walmart decodo_http default; Best Buy Products API; Decodo Scraper API for Amazon; lowes/sams_club retired | +127 | — | #25–#31 |
+| 3c (+hardening) | Search v2 3-tier cascade + variant collapse + price-stream `?query=` + eBay EPN affiliate fix; retailer retries + Redis cache layering + iOS sheet-anchor | +40 | +5 | #32 |
+| 3d (+noise-filter) | Autocomplete (on-device prefix + `.searchable` + offline vocab); `_is_tier2_noise` denylist → Gemini escalation | +27 | +35 | #34, #36 |
+| ui-refresh-v1/v2/v2-fix | Warm-gold design pass + new Home tab + Kennel section + nav-hide-during-stream + searchable mid-stream dismissal guard | +4 | — | #37–#40 |
+| 3e | M6 Recommendation Engine — deterministic, no LLM (`/recommend` stacks identity+card+portal via `asyncio.gather`, p95 <150 ms, brand-direct ≥15 %) | +14 | +9 | #41 |
+| 3f (+hotfix) | Purchase Interstitial + Activation Reminder; migration 0008 `affiliate_clicks.metadata`; per-retailer estimated_savings; migration 0009 `discount_programs.scope` | +7 | +9 | #42, #44 |
+| Benefits Expansion (+follow-ups) | +10 student-tech + Prime YA (`scope='membership_fee'`); 0010 `is_young_adult`; `_dedup_best_per_retailer_scope` + `BRAND_ALIASES`; `/resolve-from-search` fallback | +10 | +7 | #45, #46 |
+| fb-marketplace-location-resolver | Numeric FB Page ID end-to-end (slug retired); 0011 `fb_marketplace_locations`; 3-tier Redis→PG→live resolver w/ singleflight + GCRA bucket | +28 | +9 | #49 |
+| experiment/tier2-ebay-search | 4 opt-in flags (default off); `SEARCH_TIER2_USE_EBAY` swaps UPCitemdb→Browse; `M2_EBAY_DROP_PARTIAL_LISTINGS` drops box-only/parts/etc. on `ebay_browse_api` | — | — | #50 |
+| fb-resolver-followups | Dedicated `fb_location_resolve` rate bucket (5/min hard cap); DTO `source`→`resolution_path` + engine collapse to `live`; `location_default_used` pill; picker `retry()` + 3-cap; top-50 US-metro local seed | +4 | +9 | #51 |
+| fb-resolver-postfix-1 | Extractor canonical-name validation: verb-agnostic primary pattern + 3-way decision (VALIDATED>FALLBACK>REJECTED) rejects sub-region IDs (West Raleigh, etc.) | +5 | — | #52 |
+| 3g-A | Portal Live Integration backend: 0012 `portal_configs` + `m13_portal` module + 5-step CTA decision tree + `/portal/cta` + Resend alerting + Lambda infra (Mike runs `deploy.sh`) | +16 | — | #53 |
 
 **Test totals:** 583 backend + 156 iOS unit + 6 iOS UI (with experiment flags off — see L-Experiment-flags-default-off). `ruff check` clean. `xcodebuild` clean.
 
@@ -297,7 +248,7 @@ Barcode scan → Gemini UPC resolution → 9-retailer price comparison (was 11; 
 ## What's Next
 
 1. **Phase 2 CLOSED** — `v0.2.0` tagged (2026-04-16). Outstanding: revoke leaked PAT `gho_UUsp9ML7…` in GitHub UI (SP-L1-b, Mike).
-2. **Phase 3:** 3a–3d + 3d-noise-filter ✅ (#32–#36), ui-refresh-v1/v2/v2-fix ✅ (#37–#40), 3e (#41), 3f (#42), Benefits Expansion (#45–#47), fb-marketplace-location ✅, fb-marketplace-location-resolver ✅ (#49), experiment/tier2-ebay-search ✅ (#50, opt-in flags), fb-resolver-followups ✅ (#51), fb-resolver-postfix-1 ✅ (#52), 3g-A backend slice ✅ (`portal_configs` + `m13_portal` + alerting + Lambda infra). Next: 3g-B (iOS interstitial portal row + recommendation cache-key bump from `:v4`→`:v5` + `portal_used` affiliate metadata + demo-seed deletion), prod seed (Mike-operated), wire pill→Profile cross-tab nav, decide if eBay-as-Tier-2 graduates from experiment, 3h Claude Vision, 3i receipts, 3k savings, 3l coupons, 3m hardening + `v0.3.0`. 3j folded into 3e. See `docs/CHANGELOG.md` + `docs/PHASES.md`.
+2. **Phase 3:** 3a–3d-noise-filter ✅ (#22–#36), ui-refresh-v1/v2/v2-fix ✅ (#37–#40), 3e (#41), 3f (+hotfix) ✅ (#42, #44), Benefits Expansion ✅ (#45–#47), FB Marketplace location + resolver ✅ (#48, #49), experiment/tier2-ebay-search ✅ (#50, opt-in), fb-resolver-followups + postfix-1 ✅ (#51, #52), 3g-A backend ✅ (#53). **Next: 3g-B** (iOS interstitial portal row, recommendation cache-key extension w/ portal-membership hash, `portal_event_type` affiliate metadata, demo-seed deletion). Then: prod FB seed (Mike), pill→Profile cross-tab nav, eBay-Tier-2 graduation call, 3h Vision, 3i receipts, 3k savings, 3l coupons, 3m hardening + `v0.3.0`. 3j folded into 3e
 3. **Phase 4 — Production Optimization:** ~~Best Buy~~ (done via demo-prep bundle, PR #30), Keepa API adapter, App Store submission, Sentry error tracking
 4. **Phase 5 — Growth:** Push notifications (APNs), web dashboard, Android (KMP)
 
@@ -340,27 +291,23 @@ ssh -i ~/.ssh/barkain-scrapers.pem ubuntu@54.197.27.219 'sudo systemctl restart 
 
 > Quick-ref index only. Full rationale + code pointers live in `docs/CHANGELOG.md` (Key Decisions Log + per-step entries).
 
-### Phase 1
-- Container auth VPC-only; `WALMART_ADAPTER={container,firecrawl,decodo_http}`; fd-3 stdout convention (`exec 3>&1; exec 1>&2` + emit JSON via `>&3`); `EXTRACT_TIMEOUT=180`
-- Relevance: model-number hard gate + variant-token + ordinal + brand match + 0.4 token overlap; UPCitemdb cross-val runs alongside Gemini, brand agreement picks winner; Gemini emits `device_name` + `model` (shortest unambiguous)
+### Phase 1 + 2 (terse — see CHANGELOG for rationale)
+- Container auth VPC-only; `WALMART_ADAPTER={container,firecrawl,decodo_http}`; fd-3 stdout (`exec 3>&1; exec 1>&2`); `EXTRACT_TIMEOUT=180`
+- Relevance: model-number hard gate + variant-token + ordinal + brand + 0.4 token overlap; UPCitemdb cross-val alongside Gemini, brand agreement picks winner
+- SSE via `asyncio.as_completed` + iOS byte splitter; batch fallback on error. Identity zero-LLM SQL join <150 ms, post-SSE, non-fatal. Card priority: rotating > user > static > base
+- Billing: iOS RC SDK for UI, backend `users.subscription_tier` for rate limit; webhook idempotency SETNX 7d; tier cache 60 s fail-open; migrations mirror constraints on `__table_args__` for test parity
+- Workers: LocalStack SQS / `moto[sqs]`; boto3 via `asyncio.to_thread`; `_UNSET` sentinel for tri-state params; `is_elevated` GENERATED STORED on portal_bonuses
+- `_classify_retailer_result` is the single classifier for batch + stream. Worker scripts MUST `from app import models` for FK flush. Drift auto-detected in `conftest._ensure_schema`; update marker each migration
+- fb_marketplace needs Decodo residential w/ scoped routing (kill-flags + `--proxy-bypass-list`); see `docs/SCRAPING_AGENT_ARCHITECTURE.md` §C.11
 
-### Phase 2 (see CHANGELOG 2a–2i-d for full rationale)
-- SSE via `asyncio.as_completed` + iOS byte splitter; batch fallback on error. Identity discounts zero-LLM SQL join <150ms, post-SSE, non-fatal. Card priority rotating > user > static > base
-- Billing: iOS RC SDK for UI, backend `users.subscription_tier` for rate limit, ≤60 s drift. Webhook idempotency SETNX 7d. Tier cache `tier:{user_id}` 60s, fail-open. Migrations mirror constraints on `__table_args__` for test `create_all` parity
-- Affiliate: backend URLs + `SFSafariViewController`, fail-open. Workers: LocalStack SQS / `moto[sqs]`; boto3 via `asyncio.to_thread`; `_UNSET` sentinel. Portal rates: `httpx`+BS4, anchor on `aria-label`; `is_elevated` GENERATED STORED
-- `_classify_retailer_result` = single classification for batch + stream. Worker scripts MUST `from app import models` for FK flush. Test DB drift auto-detected in `conftest._ensure_schema`; update each migration
-- fb_marketplace needs Decodo residential with scoped routing (kill-flags + `--proxy-bypass-list`). See `docs/SCRAPING_AGENT_ARCHITECTURE.md` §C.11
-
-### Phase 3 (see CHANGELOG 3a–3e for full rationale)
-- eBay Browse API auto-prefers on `EBAY_APP_ID`+`EBAY_CERT_ID`; 2 hr TTL; filter DSL uses `|` not `,`. GDPR deletion webhook = GET SHA-256 + POST log-and-204. Backend co-deployed on scraper EC2 via Caddy + systemd (3b)
-- Best Buy API (`BESTBUY_API_KEY`, ~150 ms); Decodo Scraper API for Amazon (`DECODO_SCRAPER_API_AUTH`, ~3 s); listings at `content.results.results.organic[]`. Decodo: `proxy_relay.py` reads HOST+PORT separately; `walmart_http` appends `:7000` when bare
-- lowes + sams_club scrapers retired 2026-04-18, rows kept `is_active=False` for FK. 9 active scraped retailers; `*_direct` stay `is_active=True` as identity-redirect targets
-- Search v2 cascade: normalize → Redis → DB pg_trgm@0.3 → Tier 2 `gather(BBY, UPCitemdb)` → Tier 3 Gemini only when Tier 2 irrelevant OR `force_gemini`. Merge DB>BBY>UPCitemdb>Gemini → `_collapse_variants` (2+ variants → synthetic generic row) (3c). `query` override on `/prices/{id}/stream` swaps both retailer query AND per-container `product_name` hint (3c). eBay affiliate = modern EPN params on item URL; `rover.ebay.com` legacy = 42-byte pixel (3c)
-- 3c-hardening: retailer-retries + Redis cache layering + iOS `browserURL @Binding` anchoring. 3d-noise-filter: `_is_tier2_noise` strict-majority + model-code verbatim gate
-- **3e M6 Recommendation — deterministic.** Zero LLM. `POST /api/v1/recommend` `gather`s Prices+Identity+Cards+Portals, pure Python (<150 ms p95). `final = base − identity`; rebates on post-identity price. Tie-break `effective_cost`, condition, well-known retailer. Brand-direct callout ≥15%. 15 min cache. iOS hero gated on `streamClosed`+`identityLoaded`+`cardsLoaded`; fail → silent nil
-- **3f Purchase Interstitial + hotfix.** `PurchaseInterstitialSheet` from hero CTA + row taps; activation ack session-scoped; `affiliate_clicks.activation_skipped` (0008). Hotfix: per-retailer `estimated_savings` w/ highest-scraped fallback; migration 0009 `discount_programs.scope` ∈ `{product, membership_fee, shipping}`. Pre-fixes: `BarePreviewAPIClient`, `_db_url.py`, `without_demo_mode`. M6 cache `:v4`
-- **Benefits Expansion (+follow-ups).** +10 student-tech + Prime YA (`scope='membership_fee'`); +4 `*_direct`; `is_young_adult` (0010); `program_type='membership'` retired. `_dedup_best_per_retailer_scope` keys (retailer_id, scope) so different scopes survive; `BRAND_ALIASES` brand-gate fails closed on competing brand (ThinkPad→lenovo, ROG→asus, Galaxy→samsung). iOS `scopeBadge`, `PriceRow` `lineLimit(1)`+`minimumScaleFactor(0.7)`, identity pills `VStack`. `/resolve`→`/resolve-from-search` fallback on Gemini UPC hallucination
-- **fb-marketplace-location-resolver.** Numeric FB Page ID end-to-end (slug retired). 3-tier Redis(24h)→PG(`fb_marketplace_locations`, 0011)→live (Startpage/DDG/Brave via Decodo). Tombstone `(NULL,'unresolved')` 1 h; all-engines-throttled writes 5-min Redis bar only. GCRA bucket GET+SET (fakeredis no EVAL). Singleflight + **subscribe-before-recheck** closes race window. Miles→km at `ContainerClient.extract`; cache key `:loc:<id>:r<miles>`. iOS `Stored.fbLocationId` (bigint-safe String), v1→v2 silent clear, picker FSM idle→geocoding→resolving→resolved. Full per-step rationale in `docs/CHANGELOG.md`
-- **experiment/tier2-ebay-search.** Four env flags, all default off → revertable by unset. `SEARCH_TIER2_USE_EBAY` swaps UPCitemdb for Browse `item_summary/search` as Tier 2's second leg; rows ride existing `"upcitemdb"` source slot to avoid widening iOS Codable enum. `_sanitize_ebay_title` strips seller-crafted emoji/markdown/smart-quote noise so `/resolve-from-search` doesn't 404. **GTIN finding:** Browse `item_summary` returns `gtin=None` even with `fieldgroups=EXTENDED` — `USE_GTIN` is wired but practically a no-op; `SKIP_UPC` is the de-facto behavior. **M2 partial-listing filter** drops `box only` / `for parts` / `charger only` / `as-is` listings on `ebay_browse_api`. Local containers reachable via SSH tunnel `ssh -L 8081…8091 ubuntu@54.197.27.219` (SG keeps scraper ports VPC-only)
-- **fb-resolver-followups.** Code-only (no migration). Dedicated `fb_location_resolve` bucket (5/min, no pro multiplier — new `_NO_PRO_MULTIPLIER_CATEGORIES` allowlist). DB column `source` retained (CHECK constraint stays); **public DTO** renames `source`→`resolution_path` and collapses engine names to `live` so iOS Codable stays stable. `location_default_used` lives on the per-row dict (not `PriceResponse` for every retailer). Picker `retry()` reuses `lastResolveTarget` (no CLGeocoder round-trip); 3-attempt cap; `.rateLimited` failure kind. Pill deep-link to Profile deferred (closure stub wired)
-- **3g-A portal-monetization backend.** Migration 0012 (`portal_configs`: display + signup-promo metadata + `consecutive_failures`/`last_alerted_at` for alerting; alerting state stays on this table — cheapest place to track per-portal worker health). New `m13_portal` module: `PortalMonetizationService.resolve_cta_list` runs a 5-step decision tree per portal (feature-flag → 24h staleness gate → MEMBER_DEEPLINK with graceful fallthrough when slug missing → SIGNUP_REFERRAL with FTC disclosure → GUIDED_ONLY). Sort by `(rate desc, portal_source asc)` for deterministic tiebreak; rejected candidates logged at DEBUG (PR #52 lesson — opaque first-match-wins is a latent bug). `POST /api/v1/portal/cta` on `general` rate bucket. Resend alerting (3 consecutive empty runs → email; 24h `last_alerted_at` throttle; empty `RESEND_API_KEY` → log+skip, mirrors AFFILIATE_WEBHOOK_SECRET). Lambda infra files only (Mike runs `deploy.sh`); EC2 has no DB so the cron CANNOT run there. Demo seed `seed_portal_bonuses_demo.py` retained until 3g-B replaces it
+### Phase 3 (terse — see CHANGELOG for the why behind each)
+- **Adapters/external APIs.** eBay Browse on `EBAY_APP_ID`+`CERT_ID` (2h TTL, filter DSL `|` not `,`); GDPR webhook = GET SHA-256 + POST 204; Best Buy API on `BESTBUY_API_KEY` (~150 ms); Decodo Scraper API for Amazon on `DECODO_SCRAPER_API_AUTH` (~3 s, listings at `content.results.results.organic[]`); Decodo: `proxy_relay.py` reads HOST+PORT separately
+- **Active scraped retailers = 9.** lowes + sams_club retired 2026-04-18 (rows `is_active=False` for FK); `*_direct` stay `is_active=True` as identity-redirect targets
+- **Search v2 cascade.** normalize → Redis → DB pg_trgm@0.3 → Tier 2 `gather(BBY, UPCitemdb)` → Tier 3 Gemini only when Tier 2 irrelevant OR `force_gemini`; merge DB>BBY>UPCitemdb>Gemini → `_collapse_variants` (2+ variants → synthetic generic). `?query=` override on `/prices/{id}/stream` swaps retailer query + per-container `product_name`. eBay affiliate = modern EPN params on item URL (legacy `rover.ebay.com` was a 42-byte pixel). `_is_tier2_noise` = strict-majority denylist + model-code verbatim gate
+- **3e M6 Recommendation — deterministic, no LLM.** `gather`s Prices+Identity+Cards+Portals, <150 ms p95. `final = base − identity`; rebates on post-identity price. Tiebreak `effective_cost` → condition → well-known retailer. Brand-direct callout ≥15 % at `*_direct`. 15-min Redis cache; iOS hero gated on `streamClosed`+`identityLoaded`+`cardsLoaded`; failures → silent nil
+- **3f Interstitial + hotfix.** `PurchaseInterstitialSheet` from hero CTA + row taps; activation ack session-scoped; `affiliate_clicks.activation_skipped` (0008); per-retailer `estimated_savings` with highest-scraped fallback; `discount_programs.scope ∈ {product, membership_fee, shipping}` (0009). M6 cache key extended `:c<sha1(card_ids)>:i<sha1(identity_flags)>:v4` so portfolio/profile changes bust stale recs. Pre-fixes: `BarePreviewAPIClient`, `_db_url.py`, `without_demo_mode`
+- **Benefits Expansion.** +10 student-tech + Prime YA (`scope='membership_fee'`); +4 `*_direct`; `is_young_adult` axis (0010); `program_type='membership'` retired. `_dedup_best_per_retailer_scope` keys (retailer_id, scope) so different scopes survive; `BRAND_ALIASES` fails closed on competing brand (ThinkPad→lenovo, etc.). iOS scopeBadge + price `lineLimit(1)+minimumScaleFactor(0.7)` + pills `VStack`. `/resolve`→`/resolve-from-search` fallback on Gemini UPC hallucination
+- **FB Marketplace location resolver (0011).** Numeric FB Page ID end-to-end; 3-tier Redis(24h)→PG→live (Startpage/DDG/Brave via Decodo). Tombstone `(NULL,'unresolved')` 1h; all-engines-throttled → 5-min Redis bar only (no PG write). GCRA bucket GET+SET (fakeredis no EVAL); singleflight + **subscribe-before-recheck** closes race window. Miles→km at `ContainerClient.extract`. iOS `Stored.fbLocationId` is bigint-safe String; v1→v2 silent clear; picker FSM idle→geocoding→resolving→resolved
+- **fb-resolver-followups (#51) + postfix-1 (#52).** Dedicated `fb_location_resolve` bucket (5/min, no pro multiplier — `_NO_PRO_MULTIPLIER_CATEGORIES` allowlist). Public DTO renames `source`→`resolution_path` + collapses engine names to `live` (DB column unchanged). `location_default_used` per-row flag drives "Using SF default" pill. Picker `retry()` (no CLGeocoder roundtrip), 3-attempt cap, `.rateLimited` kind. Postfix-1: 3-way decision (VALIDATED > FALLBACK > REJECTED) rejects sub-region IDs when a city-norm canonical is available, falls through to first-match when none is
+- **experiment/tier2-ebay-search (#50).** 4 env flags, all default off. `SEARCH_TIER2_USE_EBAY` swaps UPCitemdb for Browse `item_summary/search` (rows tagged `"upcitemdb"` to avoid widening iOS enum). `_sanitize_ebay_title` strips seller noise. **GTIN finding:** Browse omits `gtin` even w/ EXTENDED → `USE_GTIN` no-op; `SKIP_UPC` is de facto. `M2_EBAY_DROP_PARTIAL_LISTINGS` drops box-only/parts/charger-only/as-is on `ebay_browse_api`
+- **3g-A portal monetization backend (#53).** 0012 `portal_configs` (display + signup-promo + `consecutive_failures`/`last_alerted_at` — alerting on the same table is the cheapest place since the worker already touches the row each invocation). `PortalMonetizationService` 5-step decision tree per portal (feature-flag → 24h staleness → MEMBER_DEEPLINK w/ graceful fallthrough → SIGNUP_REFERRAL w/ FTC disclosure → GUIDED_ONLY); deterministic sort `(rate desc, portal asc)`; rejected candidates logged at DEBUG (PR #52 lesson — opaque first-match-wins is a latent bug). `POST /api/v1/portal/cta` on `general` bucket. Resend alerting (3 consecutive empty → email; 24h throttle; empty key → log+skip, mirrors AFFILIATE_WEBHOOK_SECRET). Lambda infra files only — EC2 has no DB so cron CANNOT run there
