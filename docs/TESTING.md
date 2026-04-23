@@ -2,7 +2,7 @@
 
 > Source: Architecture sessions, March–April 2026
 > Scope: Backend (pytest) + iOS (XCTest) test conventions, CI configuration, coverage targets
-> Last updated: 2026-04-23 (v2.14 — 3g-B iOS slice: **585 backend** / **170 iOS unit** / 6 iOS UI. Backend +2 net (+1 m6 cache-bust on membership toggle, +2 m12 portal_event_type round-trip + 422 validation, −1 demo seed test removed). iOS +14: 5 PortalCTADecodingTests (full shape / minimal deeplink / backward-compat no CTAs / winner payload with embedded CTAs / acronym-aware Codable), 5 PortalMembershipPreferencesTests (empty / set-persists / preserves-others / clear / known-portals coverage), 5 PurchaseInterstitialPortalTests (winner-init / price-row-default-empty / openPortal logs portal_event_type+portal_source / multi-portal sort preserved / disclosure per-CTA). **iOS test runner:** swift-testing parallel runner can flake on simulator-process launches (0.000s "failures"); use `-parallel-testing-enabled NO` for deterministic runs. **Pre-existing failure mode** (carries from PR #50): 12 `test_product_search.py::test_search_tier2_*` failures fire when `SEARCH_TIER2_USE_EBAY=true` is in `backend/.env`; trunk default is False — override the flag for clean runs.)
+> Last updated: 2026-04-23 (v2.15 — chore/profileview-snapshot-infra: **585 backend** / **173 iOS unit** / 6 iOS UI. iOS +3: `ProfileViewSnapshotTests` covers both `ProfileView` `ScrollView` branches (empty-profile + completed-profile) + a portal-toggle visual-delta check that confirms bound state flows into the rendered hierarchy. New SPM dep `swift-snapshot-testing` at 1.19.2 scoped to `BarkainTests` only; new `BarkainTests/Helpers/SnapshotTestHelper.swift`; new `RECORD_SNAPSHOTS=1` scheme-env convention (see §Snapshot Testing). **Dependency note:** prompt originally specified 1.17.0; bumped to 1.19.2 because 1.17.0's `Issue.record` signature predates the swift-testing version shipped with Xcode 16+. **Runner flag unchanged:** `-parallel-testing-enabled NO` still required. **Pre-existing failure mode** (carries from PR #50): 12 `test_product_search.py::test_search_tier2_*` failures fire when `SEARCH_TIER2_USE_EBAY=true` is in `backend/.env`; trunk default is False — override the flag for clean runs.)
 
 ---
 
@@ -225,17 +225,23 @@ BarkainTests/
 │   │   └── ScannerViewModelTests.swift
 │   ├── Search/
 │   │   └── SearchViewModelTests.swift
+│   ├── Profile/
+│   │   ├── CardSelectionViewModelTests.swift
+│   │   ├── IdentityOnboardingViewModelTests.swift
+│   │   ├── LocationPickerViewModelTests.swift
+│   │   ├── ProfileViewSnapshotTests.swift       # chore/profileview-snapshot-infra
+│   │   └── __Snapshots__/                       # Baseline PNGs, tracked in git
+│   │       └── ProfileViewSnapshotTests/
 │   └── Recommendation/
 │       └── RecommendationViewModelTests.swift
 ├── Services/
 │   ├── APIClientTests.swift
 │   └── AuthServiceTests.swift
-├── Helpers/
-│   ├── TestFixtures.swift         # Shared mock data
-│   ├── MockAPIClient.swift        # Protocol-based mock
-│   └── XCTestCase+Extensions.swift
-└── Snapshots/                     # Phase 3+
-    └── __Snapshots__/
+└── Helpers/
+    ├── TestFixtures.swift         # Shared mock data
+    ├── MockAPIClient.swift        # Protocol-based mock
+    ├── SnapshotTestHelper.swift   # UIHostingController host + accessibility sweep + RECORD_SNAPSHOTS gate
+    └── XCTestCase+Extensions.swift
 
 BarkainUITests/
 ├── Screens/                       # Page object pattern
@@ -323,6 +329,22 @@ final class MockAPIClient: APIClientProtocol {
 - **Accessibility identifiers:** `enum AccessibilityID { static let scanButton = "scan_button" }`
 - **No force unwraps** except in test setup
 - **Per-test UserDefaults isolation (Step 2f learning):** any test that touches a service persisting to `UserDefaults` (e.g. `FeatureGateService`'s daily scan counter) must inject a fresh `UserDefaults(suiteName:)` keyed by a UUID in `setUp`. Without isolation, tests share `UserDefaults.standard`, accumulate persisted state across the suite, and eventually trip gates that were never meant to fire in unrelated tests (the 2f tests break `test_reset_clearsPriceState` once cumulative scans hit the daily cap). The `makeDefaults()` helper in `FeatureGateServiceTests.swift` and `ScannerViewModelTests.swift` is the reference implementation.
+
+### Snapshot Testing (chore/profileview-snapshot-infra)
+
+SwiftUI views with branched render paths (the motivating example: `ProfileView`'s empty-profile vs `profileSummary` `ScrollView` branches — see CLAUDE.md KDL `3g-B-fix-1`) are protected by image-based snapshot tests. The committed baseline PNG is the regression signal: if `portalMembershipsSection` (or any other section) disappears from a branch, the branch's baseline diff surfaces the omission on the next snapshot run.
+
+- **Dependency:** `pointfreeco/swift-snapshot-testing` at 1.19.2, SPM-scoped to the `BarkainTests` target only (never the app target).
+- **Helper:** `BarkainTests/Helpers/SnapshotTestHelper.swift` owns the hosting-controller setup, pinned snapshot surface (402×2800 @3x — wider-than-device height so scrollable views don't clip), and the record-mode gate. A `UIWindow`-mount is needed in `host(_:)` so SwiftUI's `.task` modifier treats the view as "on-screen" and the view's async profile load fires.
+- **No accessibility-grep assertion.** An `accessibilityIdentifiers(in:)` sweep was tried as a secondary smoke check ("does the rendered tree contain `portalMembershipsSection`?") but the iOS 26.4 simulator wedges for 60+ seconds when walking SwiftUI-hosted accessibility trees even with cycle protection + a 40-deep recursion cap. The snapshot PNG is sufficient on its own. The helper still vends `accessibilityIdentifiers(in:)` behind the scenes in case a future, shallower view tree can use it safely.
+- **Record workflow:**
+  1. Add `RECORD_SNAPSHOTS=1` to the `Barkain` scheme's **Test** action → Environment Variables.
+  2. Run the affected snapshot test(s) once. New PNGs land under `BarkainTests/Features/<feature>/__Snapshots__/<SuiteName>/`.
+  3. Visually review the generated PNGs. Commit them alongside the test code.
+  4. Remove the env var and re-run to confirm assertions pass against the committed baselines.
+- **CI:** Do NOT set `RECORD_SNAPSHOTS` in CI — a missing baseline should fail the build. This forces developers to own baseline generation + review locally.
+- **Runner flag:** still `-parallel-testing-enabled NO` (from 3g-A) — snapshot tests share the same simulator-process fragility as other swift-testing `@Test` functions.
+- **Size note:** PNGs are ~1–1.3 MB each at 402×2800 @3x. If a new snapshot comes in noticeably larger, confirm the surface isn't being rendered at higher-than-@3x scale before committing.
 
 ---
 

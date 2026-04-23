@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		D1B0000000000000000000A1 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = D1B0000000000000000000B1 /* RevenueCat */; };
 		D1B0000000000000000000A2 /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = D1B0000000000000000000B2 /* RevenueCatUI */; };
+		D1B000000000000001000001 /* SnapshotTesting in Frameworks */ = {isa = PBXBuildFile; productRef = D1B000000000000001000002 /* SnapshotTesting */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,6 +70,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D1B000000000000001000001 /* SnapshotTesting in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -158,6 +160,7 @@
 			);
 			name = BarkainTests;
 			packageProductDependencies = (
+				D1B000000000000001000002 /* SnapshotTesting */,
 			);
 			productName = BarkainTests;
 			productReference = B1E604842F83FE9D00951147 /* BarkainTests.xctest */;
@@ -220,6 +223,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				D1B0000000000000000000C1 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
+				D1B000000000000001000003 /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B1E604782F83FE9C00951147 /* Products */;
@@ -624,6 +628,14 @@
 				minimumVersion = 5.24.0;
 			};
 		};
+		D1B000000000000001000003 /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/pointfreeco/swift-snapshot-testing.git";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 1.19.2;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -636,6 +648,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = D1B0000000000000000000C1 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
 			productName = RevenueCatUI;
+		};
+		D1B000000000000001000002 /* SnapshotTesting */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1B000000000000001000003 /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */;
+			productName = SnapshotTesting;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

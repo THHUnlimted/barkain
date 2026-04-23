@@ -510,6 +510,7 @@ struct ProfileView: View {
                 .fill(Color.barkainSurfaceContainerLowest)
         )
         .barkainShadowSoft()
+        .accessibilityIdentifier("portalMembershipsSection")
     }
 
     @ViewBuilder
