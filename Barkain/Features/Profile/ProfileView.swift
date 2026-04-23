@@ -367,6 +367,7 @@ struct ProfileView: View {
                 }
 
                 cardsSection
+                portalMembershipsSection
 
                 Button {
                     showEditSheet = true
