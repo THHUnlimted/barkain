@@ -150,6 +150,33 @@ nonisolated struct Recommendation: Codable, Equatable, Sendable, Hashable {
     let cached: Bool
 }
 
+// MARK: - RecommendationState (demo-prep-1 Item 1)
+
+/// Three-way recommendation state used by `ScannerViewModel` and
+/// `PriceComparisonView`. Replaces the old `recommendation: Recommendation?`
+/// optional which couldn't distinguish "still loading" from "server said no"
+/// — a silent-hero UX that looked indistinguishable from a broken app
+/// during F&F demos.
+///
+/// - `.pending`: settle-flag gate not yet open, or fetch in flight, or
+///   fetch threw a non-422 error (silent-fail contract preserved).
+/// - `.loaded(Recommendation)`: happy path.
+/// - `.insufficientData(reason:)`: backend returned 422
+///   `RECOMMEND_INSUFFICIENT_DATA`. Reason is the backend message for
+///   logging/debug; the view renders its own localized copy.
+enum RecommendationState: Equatable, Sendable {
+    case pending
+    case loaded(Recommendation)
+    case insufficientData(reason: String)
+}
+
+/// API-layer outcome — distinct from the VM state so the APIClient doesn't
+/// leak VM concepts (`.pending` is a VM state, not a wire state).
+enum RecommendationFetchOutcome: Equatable, Sendable {
+    case loaded(Recommendation)
+    case insufficientData(reason: String)
+}
+
 // MARK: - Request
 
 nonisolated struct RecommendationRequest: Codable, Equatable, Sendable {

@@ -154,8 +154,8 @@ class BarePreviewAPIClient: APIClientProtocol, @unchecked Sendable {
         productId: UUID,
         forceRefresh: Bool,
         userMemberships: [String: Bool]?
-    ) async throws -> Recommendation? {
-        nil
+    ) async throws -> RecommendationFetchOutcome {
+        .insufficientData(reason: "Preview default — override in preview subclass")
     }
 
     // MARK: - Helpers

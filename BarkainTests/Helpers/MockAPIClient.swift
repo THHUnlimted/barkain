@@ -98,11 +98,14 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
 
     // MARK: - Recommendation (Step 3e)
 
-    /// `.success(nil)` mirrors the 422 `RECOMMEND_INSUFFICIENT_DATA`
-    /// branch — the APIClient maps that status to a nil return so the
-    /// ViewModel leaves the hero unrendered. Real errors are surfaced
-    /// as `.failure`.
-    var fetchRecommendationResult: Result<Recommendation?, APIError> = .success(nil)
+    /// `.success(.insufficientData(...))` mirrors the 422 `RECOMMEND_INSUFFICIENT_DATA`
+    /// branch — demo-prep-1 Item 1 lifted the return type from `Recommendation?`
+    /// to an explicit `RecommendationFetchOutcome` so the VM can render an
+    /// "insufficient data" card instead of a silently-absent hero. Real
+    /// non-422 errors are surfaced as `.failure`.
+    var fetchRecommendationResult: Result<RecommendationFetchOutcome, APIError> = .success(
+        .insufficientData(reason: "Only 0 usable prices")
+    )
     var fetchRecommendationCallCount = 0
     var fetchRecommendationLastProductId: UUID?
     var fetchRecommendationLastForceRefresh: Bool?
@@ -279,7 +282,7 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
         productId: UUID,
         forceRefresh: Bool,
         userMemberships: [String: Bool]?
-    ) async throws -> Recommendation? {
+    ) async throws -> RecommendationFetchOutcome {
         fetchRecommendationCallCount += 1
         fetchRecommendationLastProductId = productId
         fetchRecommendationLastForceRefresh = forceRefresh

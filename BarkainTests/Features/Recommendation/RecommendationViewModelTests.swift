@@ -41,7 +41,7 @@ final class RecommendationViewModelTests: XCTestCase {
 
     func test_recommendationFires_afterAllThreeStreamsSettle() async {
         mockClient.streamPricesEvents = TestFixtures.successfulStreamEvents
-        mockClient.fetchRecommendationResult = .success(TestFixtures.sampleRecommendation)
+        mockClient.fetchRecommendationResult = .success(.loaded(TestFixtures.sampleRecommendation))
 
         await viewModel.handleBarcodeScan(upc: "012345678901")
         await viewModel._awaitRecommendationTaskForTesting()
@@ -66,22 +66,74 @@ final class RecommendationViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.priceError)
     }
 
-    func test_recommendationInsufficientData_leavesHeroNilSilently() async {
+    func test_recommendationInsufficientData_setsExplicitStateAndReason() async {
+        // demo-prep-1 Item 1: 422 RECOMMEND_INSUFFICIENT_DATA must produce
+        // an explicit `.insufficientData(reason:)` state so the view can
+        // render a dedicated card — NOT a silent hero-is-missing state
+        // (the L-perf-L4 F&F silent-handback failure mode).
         mockClient.streamPricesEvents = TestFixtures.successfulStreamEvents
-        // 422 maps to a .success(nil) at the client boundary.
-        mockClient.fetchRecommendationResult = .success(nil)
+        mockClient.fetchRecommendationResult = .success(
+            .insufficientData(reason: "Only 1 usable prices for product abc")
+        )
 
         await viewModel.handleBarcodeScan(upc: "012345678901")
         await viewModel._awaitRecommendationTaskForTesting()
 
         XCTAssertEqual(mockClient.fetchRecommendationCallCount, 1)
-        XCTAssertNil(viewModel.recommendation)
+        XCTAssertNil(viewModel.recommendation,
+                     ".recommendation (loaded-only view) must be nil")
+        XCTAssertEqual(viewModel.insufficientDataReason,
+                       "Only 1 usable prices for product abc",
+                       "reason surfaces for logging/debug even though the view renders canned copy")
+        XCTAssertEqual(viewModel.recommendationState,
+                       .insufficientData(reason: "Only 1 usable prices for product abc"))
+        // Retailer list must remain untouched — priceError stays nil so
+        // the view keeps rendering the per-retailer grid below the card.
         XCTAssertNil(viewModel.priceError)
+    }
+
+    func test_insufficientData_keepsRetailerGridPopulated() async {
+        // The retailer grid is driven by `priceComparison` (populated by the
+        // SSE stream), NOT by `recommendation`. Insufficient-data on the
+        // hero must NOT clear priceComparison — the user still needs to see
+        // whatever retailer prices did arrive.
+        mockClient.streamPricesEvents = TestFixtures.successfulStreamEvents
+        mockClient.fetchRecommendationResult = .success(
+            .insufficientData(reason: "Only 1 usable prices for product abc")
+        )
+
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+        await viewModel._awaitRecommendationTaskForTesting()
+
+        XCTAssertNotNil(viewModel.priceComparison,
+                        "priceComparison must stay populated so the retailer grid still renders")
+        XCTAssertFalse(viewModel.priceComparison?.prices.isEmpty ?? true,
+                       "at least one successful retailer row should remain visible")
+        XCTAssertNotNil(viewModel.insufficientDataReason,
+                        "the fallback card's state signal must be set")
+    }
+
+    func test_reset_clearsInsufficientDataState() async {
+        // When a new scan follows an insufficient-data scan, state must
+        // return to `.pending` so the next fetch re-gates cleanly.
+        mockClient.streamPricesEvents = TestFixtures.successfulStreamEvents
+        mockClient.fetchRecommendationResult = .success(
+            .insufficientData(reason: "Only 0 usable prices")
+        )
+
+        await viewModel.handleBarcodeScan(upc: "012345678901")
+        await viewModel._awaitRecommendationTaskForTesting()
+        XCTAssertNotNil(viewModel.insufficientDataReason)
+
+        viewModel.reset()
+
+        XCTAssertNil(viewModel.insufficientDataReason)
+        XCTAssertEqual(viewModel.recommendationState, .pending)
     }
 
     func test_reset_clearsRecommendationAndSettleFlags() async {
         mockClient.streamPricesEvents = TestFixtures.successfulStreamEvents
-        mockClient.fetchRecommendationResult = .success(TestFixtures.sampleRecommendation)
+        mockClient.fetchRecommendationResult = .success(.loaded(TestFixtures.sampleRecommendation))
 
         await viewModel.handleBarcodeScan(upc: "012345678901")
         await viewModel._awaitRecommendationTaskForTesting()
@@ -95,7 +147,7 @@ final class RecommendationViewModelTests: XCTestCase {
 
     func test_fetchPrices_refresh_refiresRecommendationOnce() async {
         mockClient.streamPricesEvents = TestFixtures.successfulStreamEvents
-        mockClient.fetchRecommendationResult = .success(TestFixtures.sampleRecommendation)
+        mockClient.fetchRecommendationResult = .success(.loaded(TestFixtures.sampleRecommendation))
 
         await viewModel.handleBarcodeScan(upc: "012345678901")
         await viewModel._awaitRecommendationTaskForTesting()

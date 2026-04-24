@@ -44,7 +44,26 @@ final class ScannerViewModel {
     //   • /cards/recommendations returns (success OR error)
     // Tracked via three flags that flip true on each completion branch.
     // Flags reset on every new scan so a refresh starts clean.
-    var recommendation: Recommendation?
+    //
+    // demo-prep-1 Item 1: lifted from `Recommendation?` to a three-way
+    // `RecommendationState` so the UI can explicitly render an
+    // "insufficient data" card instead of leaving the hero silently absent
+    // (which was indistinguishable from "still loading" during F&F demos).
+    var recommendationState: RecommendationState = .pending
+
+    /// Happy-path view gate — unchanged shape for existing callers. Returns
+    /// nil in both `.pending` and `.insufficientData` cases.
+    var recommendation: Recommendation? {
+        if case .loaded(let rec) = recommendationState { return rec }
+        return nil
+    }
+
+    /// Non-nil only when the backend returned 422 `RECOMMEND_INSUFFICIENT_DATA`.
+    /// Drives the fallback card in `PriceComparisonView`.
+    var insufficientDataReason: String? {
+        if case .insufficientData(let reason) = recommendationState { return reason }
+        return nil
+    }
     private var streamClosed = false
     private var identityLoaded = false
     private var cardsLoaded = false
@@ -110,7 +129,7 @@ final class ScannerViewModel {
         priceError = nil
         identityDiscounts = []
         cardRecommendations = []
-        recommendation = nil
+        recommendationState = .pending
         streamClosed = false
         identityLoaded = false
         cardsLoaded = false
@@ -148,7 +167,7 @@ final class ScannerViewModel {
         priceComparison = nil
         priceError = nil
         // Reset settle-flag state so a refresh re-gates the hero cleanly.
-        recommendation = nil
+        recommendationState = .pending
         streamClosed = false
         identityLoaded = false
         cardsLoaded = false
@@ -281,17 +300,23 @@ final class ScannerViewModel {
     /// while identity/cards are in flight.
     private func attemptFetchRecommendation() {
         guard streamClosed, identityLoaded, cardsLoaded else { return }
-        guard recommendationTask == nil, recommendation == nil else { return }
+        // Re-fetch guard: skip when a task is in flight or a terminal state
+        // has already been reached (loaded OR insufficientData — both are
+        // final for this product lifecycle).
+        guard recommendationTask == nil, case .pending = recommendationState else {
+            return
+        }
         guard let product else { return }
         recommendationTask = Task { [weak self] in
             await self?.fetchRecommendation(productId: product.id)
         }
     }
 
-    /// Non-fatal: any failure logs to `com.barkain.app`/`Recommendation`
-    /// and leaves `recommendation == nil`. Never surfaces an alert — the
-    /// retailer list is the primary UX and must not be hidden by a
-    /// secondary-feature failure. Same contract as identity discounts.
+    /// Non-fatal: non-422 failures log to `com.barkain.app`/`Recommendation`
+    /// and leave `recommendationState = .pending` (silent-fail contract
+    /// preserved — same as identity discounts). A 422 sets
+    /// `.insufficientData(reason:)` so the view can render an explicit
+    /// "couldn't recommend" card (demo-prep-1 Item 1).
     private func fetchRecommendation(productId: UUID) async {
         let log = Logger(subsystem: "com.barkain.app", category: "Recommendation")
         // Step 3g-B: snapshot membership prefs at fetch time. nil when no
@@ -301,16 +326,18 @@ final class ScannerViewModel {
         let userMemberships: [String: Bool]? = activeMemberships.isEmpty
             ? nil : activeMemberships
         do {
-            let result = try await apiClient.fetchRecommendation(
+            let outcome = try await apiClient.fetchRecommendation(
                 productId: productId,
                 forceRefresh: false,
                 userMemberships: userMemberships
             )
-            if let result {
-                recommendation = result
-                log.info("recommend: winner=\(result.winner.retailerId, privacy: .public) savings=\(result.winner.totalSavings, privacy: .public) compute_ms=\(result.computeMs, privacy: .public) cached=\(result.cached, privacy: .public)")
-            } else {
-                log.info("recommend: insufficient data — hero stays hidden")
+            switch outcome {
+            case .loaded(let rec):
+                recommendationState = .loaded(rec)
+                log.info("recommend: winner=\(rec.winner.retailerId, privacy: .public) savings=\(rec.winner.totalSavings, privacy: .public) compute_ms=\(rec.computeMs, privacy: .public) cached=\(rec.cached, privacy: .public)")
+            case .insufficientData(let reason):
+                recommendationState = .insufficientData(reason: reason)
+                log.info("recommend: insufficient data — rendering fallback card. reason=\(reason, privacy: .public)")
             }
         } catch {
             log.warning("recommend fetch failed: \(error.localizedDescription, privacy: .public)")
@@ -413,7 +440,7 @@ final class ScannerViewModel {
         identityDiscounts = []
         cardRecommendations = []
         userHasCards = false
-        recommendation = nil
+        recommendationState = .pending
         streamClosed = false
         identityLoaded = false
         cardsLoaded = false
