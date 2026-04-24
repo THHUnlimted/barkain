@@ -153,11 +153,16 @@ _EBAY_PARTIAL_RE = re.compile(
     r"for\s+parts(?:\s+(?:or|&)\s+(?:not|repair))?|"
     r"not\s+working|as[- ]is|broken|cracked\s+screen|"
     r"charger\s+only|cable\s+only|adapter\s+only|power\s+(?:cord|brick)\s+only|"
-    r"replacement\s+(?:parts|screen|battery|charger)|"
+    r"replacement\s+(?:parts|screen|battery|charger|keycap(?:s)?|lens|strap)|"
     r"manual\s+only|paperwork\s+only|stand\s+only|case\s+only|cover\s+only|"
     r"sticker(?:s)?\s+only|decal(?:s)?\s+only|"
     r"screen\s+protector(?:s)?$|"
-    r"no\s+(?:battery|charger|hdd|ssd|os|hard\s+drive)"
+    r"key\s*cap(?:s)?|keycap(?:s)?|keyset(?:s)?|"
+    r"faceplate(?:s)?|skin(?:s)?\s+only|wrap\s+only|decal\s+wrap|"
+    r"carry\s+(?:case|pouch|bag)\s+only|sleeve\s+only|"
+    r"mount\s+only|dock\s+only|grip(?:s)?\s+only|"
+    r"strap\s+only|band\s+only|"
+    r"no\s+(?:battery|charger|hdd|ssd|os|hard\s+drive|remote)"
     r")\b",
     re.IGNORECASE,
 )

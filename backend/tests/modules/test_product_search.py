@@ -1216,3 +1216,34 @@ async def test_cascade_path_populated_on_response(client, db_session, fake_redis
     # MUST be populated on every fresh response.
     assert data.get("cascade_path") is not None
     assert data["cascade_path"] in ("gemini", "tier2+gemini", "empty", "db", "db+tier2", "db+tier2+gemini")
+
+
+def test_is_tier2_noise_filters_controller_accessories():
+    """Best Buy surfaces KontrolFreek thumbsticks + Video Game Accessories as
+    the top `PS5 Controller` results. Both must be classified as noise so the
+    cascade escalates to Gemini and Sony DualSense lands first.
+    """
+    from modules.m1_product.search_service import _is_tier2_noise
+    thumbstick_row = {
+        "device_name": "KontrolFreek - Call of Duty Jugger-Nog Performance "
+                       "Thumbsticks for Gaming Controllers",
+        "brand": "KontrolFreek",
+        "category": "Gaming Controller Accessories",
+        "primary_upc": "810164143808",
+    }
+    case_row = {
+        "device_name": "SCUF - Universal Controller Protection Case for PS5",
+        "brand": "SCUF",
+        "category": "Video Game Accessories",
+        "primary_upc": "840370269009",
+    }
+    real_controller = {
+        "device_name": "Sony Interactive Entertainment - DualSense "
+                       "Wireless Controller for PS5",
+        "brand": "Sony Interactive Entertainment",
+        "category": "Gaming Controllers",
+        "primary_upc": "711719023197",
+    }
+    assert _is_tier2_noise(thumbstick_row, query="ps5 controller") is True
+    assert _is_tier2_noise(case_row, query="ps5 controller") is True
+    assert _is_tier2_noise(real_controller, query="ps5 controller") is False

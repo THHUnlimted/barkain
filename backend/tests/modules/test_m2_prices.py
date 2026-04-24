@@ -1021,3 +1021,161 @@ async def test_retailer_results_mixed_statuses_end_to_end(client, db_session):
         "walmart": "no_match",
         "target": "unavailable",
     }
+
+
+# MARK: - Marketplace relevance hardening (search-relevance-pack-1)
+
+
+def test_extract_model_identifiers_emits_family_prefix():
+    """Long hyphenated SKUs also emit a 4-digit family prefix.
+
+    Razer sellers routinely list ``RZ07-0074`` instead of the full
+    ``RZ07-00740100``; the family stem must pass the model-number gate.
+    """
+    from modules.m2_prices.service import _extract_model_identifiers
+    out = _extract_model_identifiers("RZ07-00740100")
+    assert "RZ07-00740100" in out
+    assert "RZ07-0074" in out
+
+
+def test_extract_model_identifiers_no_prefix_on_short_models():
+    """Short SKUs like 'WH-1000XM5' don't generate a prefix (nothing to strip)."""
+    from modules.m2_prices.service import _extract_model_identifiers
+    out = _extract_model_identifiers("WH-1000XM5")
+    # Single entry, no truncated variant emitted.
+    assert out == ["WH-1000XM5"]
+
+
+def test_extract_model_identifiers_catches_gaming_peripheral_sku():
+    """Logitech G-series SKUs (G613, G915, G413) extract as model identifiers.
+
+    Before the `[A-Z]{1,2}\\d{3,4}` pattern was added, the G-prefix continuous
+    SKUs weren't captured — and a `G613` product's model gate silently passed
+    a `G915` listing, letting Amazon's organic ranking swap models.
+    """
+    from modules.m2_prices.service import _extract_model_identifiers
+    assert "G613" in _extract_model_identifiers("Logitech G613 Wireless")
+    assert "G915" in _extract_model_identifiers("Logitech G915 X Lightspeed")
+    assert "G413" in _extract_model_identifiers("Logitech G413 SE")
+
+
+def test_score_rejects_g915_for_g613_product():
+    """G613 product must reject a G915 Amazon listing at the model gate."""
+    from modules.m2_prices.service import _score_listing_relevance
+    product = Product(
+        name="Logitech G613 Lightspeed Wireless Mechanical Gaming Keyboard",
+        brand="Logitech",
+        source="upcitemdb",
+        source_raw={"gemini_model": None, "upcitemdb_raw": {"model": "920-008386"}},
+    )
+    score = _score_listing_relevance(
+        "Logitech G915 X Lightspeed Low-Profile Wireless Gaming Keyboard", product
+    )
+    assert score == 0.0, "G915 must not pass as G613"
+
+
+def test_score_listing_reads_upcitemdb_model():
+    """Product resolved via UPCitemdb (gemini_model=None) still carries its
+    model identifier when ``source_raw.upcitemdb_raw.model`` is populated.
+    Razer Ornata must NOT match when the resolved product is an Orbweaver.
+    """
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Razer Orbweaver Mechanical PC Gaming Keypad",
+        brand="Razer",
+        source="upcitemdb",
+        source_raw={
+            "gemini_model": None,
+            "upcitemdb_raw": {"model": "RZ07-00740100-R3U1"},
+        },
+    )
+    # Walmart returned this for an Orbweaver query — wrong product.
+    ornata_score = _score_listing_relevance(
+        "Razer Ornata V3 X Full-Size Wired Membrane Gaming Keyboard", product
+    )
+    assert ornata_score == 0.0, "Ornata must fail the model gate"
+
+    # Legit eBay listing that uses the family-stem "RZ07-0074" must still pass.
+    stem_score = _score_listing_relevance(
+        "Razer Orbweaver RZ07-0074 Mechanical Gaming Keypad Green LEDs Open Box",
+        product,
+    )
+    assert stem_score >= 0.4, "Family-stem listing must survive"
+
+
+def test_fb_marketplace_soft_gate_allows_model_less_listings():
+    """FB sellers often omit the model code; the soft gate keeps real listings."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Razer Orbweaver Chroma Gaming Keypad",
+        brand="Razer",
+        source="upcitemdb",
+        source_raw={
+            "gemini_model": None,
+            "upcitemdb_raw": {"model": "RZ07-01440100-R3U1"},
+        },
+    )
+    # No model code, real device — FB only.
+    score_fb = _score_listing_relevance(
+        "Razer Orbweaver Chroma Adjustable Mechanical Gaming Keypad",
+        product,
+        retailer_id="fb_marketplace",
+    )
+    assert 0.4 <= score_fb <= 0.5, "FB soft gate caps at 0.5 when model is absent"
+
+    # Same listing on eBay — hard gate rejects (sellers there are expected
+    # to include the code).
+    score_ebay = _score_listing_relevance(
+        "Razer Orbweaver Chroma Adjustable Mechanical Gaming Keypad",
+        product,
+        retailer_id="ebay_new",
+    )
+    assert score_ebay == 0.0
+
+
+def test_pick_best_listing_price_outlier_filter_drops_keycaps():
+    """Marketplace price-outlier filter drops sub-40% outliers when we have
+    a usable sample (≥4 listings) — e.g. $14 keycaps vs a $50-median keypad pool.
+    """
+    from modules.m2_prices.service import PriceAggregationService
+    from modules.m2_prices.schemas import ContainerListing, ContainerResponse
+
+    product = Product(
+        name="Razer Orbweaver Chroma Gaming Keypad",
+        brand="Razer",
+        source="upcitemdb",
+        source_raw={
+            "gemini_model": None,
+            "upcitemdb_raw": {"model": "RZ07-01440100-R3U1"},
+        },
+    )
+    listings = [
+        ContainerListing(
+            title="Razer Orbweaver Chroma Keycaps Replacement Set",
+            price=14.00, currency="USD", is_new=True, is_available=True,
+        ),
+        ContainerListing(
+            title="Razer Orbweaver Chroma RZ07-0144 Keypad",
+            price=50.00, currency="USD", is_new=True, is_available=True,
+        ),
+        ContainerListing(
+            title="Razer Orbweaver Chroma RZ07-0144 Gaming Keypad",
+            price=65.00, currency="USD", is_new=True, is_available=True,
+        ),
+        ContainerListing(
+            title="Razer Orbweaver Chroma RZ07-0144 Mechanical",
+            price=70.00, currency="USD", is_new=True, is_available=True,
+        ),
+    ]
+    response = ContainerResponse(
+        retailer_id="ebay_new", query="razer orbweaver", listings=listings,
+    )
+    svc = PriceAggregationService.__new__(PriceAggregationService)
+    best, _ = svc._pick_best_listing(response, product)
+    # Median is 57.5 → floor 23. The $14 keycaps is out. Of the survivors,
+    # the cheapest relevance-passing listing wins.
+    assert best is not None
+    assert best.price >= 40.0
+    assert "keycap" not in best.title.lower()
