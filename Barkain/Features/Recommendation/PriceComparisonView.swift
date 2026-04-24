@@ -115,9 +115,15 @@ struct PriceComparisonView: View {
                 } else {
                     // Step 3e: the Best Barkain hero renders ONLY after
                     // SSE done + identity + cards have all settled (the
-                    // ViewModel only sets `recommendation` at that point).
-                    // It replaces neither the savings badge nor the
-                    // retailer list — both stay rendered beneath.
+                    // ViewModel only sets `recommendationState = .loaded(...)`
+                    // at that point). It replaces neither the savings badge
+                    // nor the retailer list — both stay rendered beneath.
+                    //
+                    // demo-prep-1 Item 1: when the backend returns 422
+                    // RECOMMEND_INSUFFICIENT_DATA, render the insufficient-data
+                    // card in the same slot so the user sees an explicit
+                    // signal instead of a silently-absent hero (retailer grid
+                    // below remains populated from SSE).
                     if let recommendation = viewModel.recommendation {
                         RecommendationHero(
                             recommendation: recommendation,
@@ -153,6 +159,9 @@ struct PriceComparisonView: View {
                                 }
                             }
                         )
+                    } else if viewModel.insufficientDataReason != nil {
+                        InsufficientRecommendationCard(productName: product.name)
+                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
                     savingsSection
                     identityDiscountsSection

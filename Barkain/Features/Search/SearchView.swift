@@ -23,6 +23,7 @@ struct SearchView: View {
     @Environment(\.autocompleteService) private var autocompleteService
     @Environment(\.recentSearches) private var recentSearches
     @Environment(\.recentlyScanned) private var recentlyScanned
+    @Environment(\.tabSelection) private var tabSelection
 
     // MARK: - State
 
@@ -142,6 +143,17 @@ struct SearchView: View {
                         .transition(.opacity)
                 } else if vm.isLoading {
                     LoadingState(message: "Searching…")
+                } else if vm.unresolvedAfterTap {
+                    // demo-prep-1 Item 2: dedicated 404-after-tap view.
+                    UnresolvedProductView(
+                        primaryActionTitle: "Try a different search",
+                        primaryAction: { vm.dismissUnresolvedAfterTap() },
+                        secondaryActionTitle: "Scan the barcode instead",
+                        secondaryAction: {
+                            vm.dismissUnresolvedAfterTap()
+                            tabSelection.onScan()
+                        }
+                    )
                 } else if let error = vm.error {
                     errorState(vm: vm, error: error)
                 } else if !vm.results.isEmpty {
@@ -179,6 +191,29 @@ struct SearchView: View {
             actions: { Button("OK", role: .cancel) { vm.resolveFailureMessage = nil } },
             message: { Text(vm.resolveFailureMessage ?? "") }
         )
+        // demo-prep-1 Item 3: low-confidence confirmation sheet. Driven by
+        // `vm.pendingConfirmation` — non-nil when backend 409'd on the last
+        // tap. Sheet dismissal routes through the VM so telemetry fires
+        // even if the user swipes down rather than tapping a CTA.
+        .sheet(isPresented: Binding(
+            get: { vm.pendingConfirmation != nil },
+            set: { if !$0 { vm.pendingConfirmation = nil } }
+        )) {
+            if let pending = vm.pendingConfirmation {
+                ConfirmationPromptView(
+                    pending: pending,
+                    onConfirm: { pick in
+                        Task { await vm.confirmResolution(for: pick) }
+                    },
+                    onReject: {
+                        Task { await vm.rejectResolution() }
+                    },
+                    onDismiss: {
+                        vm.pendingConfirmation = nil
+                    }
+                )
+            }
+        }
         .sheet(item: $browserURL) { item in
             InAppBrowserView(url: item.url)
                 .ignoresSafeArea()

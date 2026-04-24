@@ -9,6 +9,7 @@ struct ScannerView: View {
     @Environment(\.apiClient) private var apiClient
     @Environment(FeatureGateService.self) private var featureGate
     @Environment(\.recentlyScanned) private var recentlyScanned
+    @Environment(\.tabSelection) private var tabSelection
     @State private var viewModel: ScannerViewModel?
     @State private var scanner = BarcodeScanner()
     @State private var scannerError: BarcodeScannerError?
@@ -222,6 +223,8 @@ struct ScannerView: View {
                 .transition(.opacity)
         } else if viewModel.priceError != nil, let product = viewModel.product {
             priceErrorView(product: product, viewModel: viewModel)
+        } else if viewModel.error == .notFound {
+            unresolvedProductView(viewModel: viewModel)
         } else if let error = viewModel.error {
             errorView(error, viewModel: viewModel)
         } else if let scannerError {
@@ -372,6 +375,27 @@ struct ScannerView: View {
             scanner.clearLastScan()
             viewModel.reset()
         }
+    }
+
+    /// demo-prep-1 Item 2: dedicated view for the 404 "couldn't resolve
+    /// this UPC" case. Split from `errorView` so the common "product
+    /// Barkain hasn't indexed" scenario gets friendly copy and two clear
+    /// next-step CTAs instead of a generic exclamation-triangle with
+    /// "Try Again" on the same failing UPC.
+    private func unresolvedProductView(viewModel: ScannerViewModel) -> some View {
+        UnresolvedProductView(
+            primaryActionTitle: "Scan another item",
+            primaryAction: {
+                scanner.clearLastScan()
+                viewModel.reset()
+            },
+            secondaryActionTitle: "Search by name instead",
+            secondaryAction: {
+                scanner.clearLastScan()
+                viewModel.reset()
+                tabSelection.onSearch()
+            }
+        )
     }
 
     private func cameraErrorView(_ error: BarcodeScannerError) -> some View {

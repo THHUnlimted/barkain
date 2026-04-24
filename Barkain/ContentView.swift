@@ -118,6 +118,11 @@ struct ContentView: View {
             }
         }
         .tint(.barkainPrimary)
+        .environment(\.tabSelection, TabSelectionAction(
+            onScan: { selection = .scan },
+            onSearch: { selection = .search },
+            onProfile: { selection = .profile }
+        ))
         .task {
             if !hasCompletedOnboarding {
                 showOnboarding = true

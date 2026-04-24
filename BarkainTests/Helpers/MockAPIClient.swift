@@ -8,7 +8,15 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     // MARK: - Configurable Results
 
     var resolveProductResult: Result<Product, APIError> = .success(TestFixtures.sampleProduct)
-    var resolveFromSearchResult: Result<Product, APIError> = .success(TestFixtures.sampleProduct)
+    var resolveFromSearchResult: Result<ResolveFromSearchOutcome, APIError> = .success(
+        .loaded(TestFixtures.sampleProduct)
+    )
+    var resolveFromSearchConfirmResult: Result<ConfirmResolutionResponse, APIError> = .success(
+        ConfirmResolutionResponse(product: TestFixtures.sampleProduct, logged: true)
+    )
+    var resolveFromSearchConfirmCallCount = 0
+    var resolveFromSearchConfirmLastRequest: ResolveFromSearchConfirmRequest?
+    var resolveFromSearchLastConfidence: Double?
     var searchProductsResult: Result<ProductSearchResponse, APIError> = .success(
         ProductSearchResponse(query: "", results: [], totalResults: 0, cached: false)
     )
@@ -98,11 +106,14 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
 
     // MARK: - Recommendation (Step 3e)
 
-    /// `.success(nil)` mirrors the 422 `RECOMMEND_INSUFFICIENT_DATA`
-    /// branch — the APIClient maps that status to a nil return so the
-    /// ViewModel leaves the hero unrendered. Real errors are surfaced
-    /// as `.failure`.
-    var fetchRecommendationResult: Result<Recommendation?, APIError> = .success(nil)
+    /// `.success(.insufficientData(...))` mirrors the 422 `RECOMMEND_INSUFFICIENT_DATA`
+    /// branch — demo-prep-1 Item 1 lifted the return type from `Recommendation?`
+    /// to an explicit `RecommendationFetchOutcome` so the VM can render an
+    /// "insufficient data" card instead of a silently-absent hero. Real
+    /// non-422 errors are surfaced as `.failure`.
+    var fetchRecommendationResult: Result<RecommendationFetchOutcome, APIError> = .success(
+        .insufficientData(reason: "Only 0 usable prices")
+    )
     var fetchRecommendationCallCount = 0
     var fetchRecommendationLastProductId: UUID?
     var fetchRecommendationLastForceRefresh: Bool?
@@ -143,13 +154,23 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     func resolveProductFromSearch(
         deviceName: String,
         brand: String?,
-        model: String?
-    ) async throws -> Product {
+        model: String?,
+        confidence: Double?
+    ) async throws -> ResolveFromSearchOutcome {
         resolveFromSearchCallCount += 1
         resolveFromSearchLastDeviceName = deviceName
         resolveFromSearchLastBrand = brand
         resolveFromSearchLastModel = model
+        resolveFromSearchLastConfidence = confidence
         return try resolveFromSearchResult.get()
+    }
+
+    func resolveProductFromSearchConfirm(
+        _ request: ResolveFromSearchConfirmRequest
+    ) async throws -> ConfirmResolutionResponse {
+        resolveFromSearchConfirmCallCount += 1
+        resolveFromSearchConfirmLastRequest = request
+        return try resolveFromSearchConfirmResult.get()
     }
 
     func searchProducts(query: String, maxResults: Int, forceGemini: Bool) async throws -> ProductSearchResponse {
@@ -279,7 +300,7 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
         productId: UUID,
         forceRefresh: Bool,
         userMemberships: [String: Bool]?
-    ) async throws -> Recommendation? {
+    ) async throws -> RecommendationFetchOutcome {
         fetchRecommendationCallCount += 1
         fetchRecommendationLastProductId = productId
         fetchRecommendationLastForceRefresh = forceRefresh

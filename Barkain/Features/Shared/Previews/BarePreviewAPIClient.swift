@@ -25,8 +25,15 @@ class BarePreviewAPIClient: APIClientProtocol, @unchecked Sendable {
     func resolveProductFromSearch(
         deviceName: String,
         brand: String?,
-        model: String?
-    ) async throws -> Product {
+        model: String?,
+        confidence: Double?
+    ) async throws -> ResolveFromSearchOutcome {
+        previewUnimplemented()
+    }
+
+    func resolveProductFromSearchConfirm(
+        _ request: ResolveFromSearchConfirmRequest
+    ) async throws -> ConfirmResolutionResponse {
         previewUnimplemented()
     }
 
@@ -154,8 +161,8 @@ class BarePreviewAPIClient: APIClientProtocol, @unchecked Sendable {
         productId: UUID,
         forceRefresh: Bool,
         userMemberships: [String: Bool]?
-    ) async throws -> Recommendation? {
-        nil
+    ) async throws -> RecommendationFetchOutcome {
+        .insufficientData(reason: "Preview default — override in preview subclass")
     }
 
     // MARK: - Helpers

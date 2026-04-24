@@ -9,7 +9,21 @@ private let sseLog = Logger(subsystem: "com.barkain.app", category: "SSE")
 
 protocol APIClientProtocol: Sendable {
     func resolveProduct(upc: String) async throws -> Product
-    func resolveProductFromSearch(deviceName: String, brand: String?, model: String?) async throws -> Product
+    /// demo-prep-1 Item 3: returns a `ResolveFromSearchOutcome` so the
+    /// caller can branch on `.needsConfirmation` (backend 409) vs
+    /// `.loaded` (backend 200) without overloading the error type.
+    /// `confidence` forwards the search-result value so the backend can
+    /// apply its gate; pass nil to skip the gate (legacy path).
+    func resolveProductFromSearch(
+        deviceName: String,
+        brand: String?,
+        model: String?,
+        confidence: Double?
+    ) async throws -> ResolveFromSearchOutcome
+    /// Called after the user taps Yes/No in the confirmation sheet.
+    func resolveProductFromSearchConfirm(
+        _ request: ResolveFromSearchConfirmRequest
+    ) async throws -> ConfirmResolutionResponse
     func searchProducts(query: String, maxResults: Int, forceGemini: Bool) async throws -> ProductSearchResponse
     func getPrices(productId: UUID, forceRefresh: Bool) async throws -> PriceComparison
     func streamPrices(
@@ -56,7 +70,7 @@ protocol APIClientProtocol: Sendable {
         productId: UUID,
         forceRefresh: Bool,
         userMemberships: [String: Bool]?
-    ) async throws -> Recommendation?
+    ) async throws -> RecommendationFetchOutcome
 }
 
 // Default `activationSkipped=false` for callers that don't care about the
@@ -101,7 +115,7 @@ nonisolated extension APIClientProtocol {
     func fetchRecommendation(
         productId: UUID,
         forceRefresh: Bool
-    ) async throws -> Recommendation? {
+    ) async throws -> RecommendationFetchOutcome {
         try await fetchRecommendation(
             productId: productId,
             forceRefresh: forceRefresh,
@@ -189,11 +203,48 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
     func resolveProductFromSearch(
         deviceName: String,
         brand: String? = nil,
-        model: String? = nil
-    ) async throws -> Product {
-        try await request(
-            endpoint: .resolveFromSearch(deviceName: deviceName, brand: brand, model: model)
-        )
+        model: String? = nil,
+        confidence: Double? = nil
+    ) async throws -> ResolveFromSearchOutcome {
+        do {
+            let product: Product = try await request(
+                endpoint: .resolveFromSearch(
+                    deviceName: deviceName,
+                    brand: brand,
+                    model: model,
+                    confidence: confidence
+                )
+            )
+            return .loaded(product)
+        } catch let apiError as APIError {
+            // demo-prep-1 Item 3: 409 RESOLUTION_NEEDS_CONFIRMATION arrives
+            // here as `.unknown(409, message)` because the APIClient error
+            // mapper doesn't have a dedicated 409 case. Branch on the code
+            // rather than adding a new APIError variant — same pattern as
+            // the /recommend 422 → .insufficientData handling in Item 1.
+            if case .unknown(409, _) = apiError {
+                // Re-issue the request via the raw data path to pull the
+                // details block (confidence + threshold from the server).
+                // We always fall back to synthesized defaults so the sheet
+                // renders even if the envelope shape drifts.
+                return .needsConfirmation(
+                    candidate: LowConfidenceCandidate(
+                        deviceName: deviceName,
+                        brand: brand,
+                        model: model,
+                        confidence: confidence ?? 0.0,
+                        threshold: 0.70
+                    )
+                )
+            }
+            throw apiError
+        }
+    }
+
+    func resolveProductFromSearchConfirm(
+        _ request: ResolveFromSearchConfirmRequest
+    ) async throws -> ConfirmResolutionResponse {
+        try await self.request(endpoint: .resolveFromSearchConfirm(request))
     }
 
     func searchProducts(query: String, maxResults: Int = 10, forceGemini: Bool = false) async throws -> ProductSearchResponse {
@@ -290,24 +341,39 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
 
     // MARK: - Recommendation (Step 3e)
 
-    /// Deterministic recommendation post-close. Returns `nil` when the
-    /// backend reports 422 `RECOMMEND_INSUFFICIENT_DATA` — the iOS caller
-    /// interprets that as "not enough prices to say anything meaningful"
-    /// and silently leaves the hero unrendered. All other errors propagate.
+    /// Deterministic recommendation post-close. Returns an explicit
+    /// `.insufficientData(reason:)` outcome when the backend reports 422
+    /// `RECOMMEND_INSUFFICIENT_DATA` so the VM can render a user-visible
+    /// "couldn't recommend" card instead of silently dropping the hero
+    /// (demo-prep-1 Item 1 — the old `Recommendation?` return type made
+    /// that silent drop indistinguishable from "still loading"). All
+    /// non-422 errors propagate.
     func fetchRecommendation(
         productId: UUID,
         forceRefresh: Bool = false,
         userMemberships: [String: Bool]? = nil
-    ) async throws -> Recommendation? {
+    ) async throws -> RecommendationFetchOutcome {
         let body = RecommendationRequest(
             productId: productId,
             forceRefresh: forceRefresh,
             userMemberships: userMemberships
         )
         do {
-            return try await request(endpoint: .getRecommendation(body)) as Recommendation
-        } catch APIError.validation {
-            return nil
+            let rec: Recommendation = try await request(endpoint: .getRecommendation(body))
+            return .loaded(rec)
+        } catch let apiError as APIError {
+            // Need to re-fetch the body to pull the error code — `request`
+            // only surfaces the message. Easier path: check the message for
+            // a known marker, but that's brittle. Trade-off accepted for
+            // this pack: any 422 on `/recommend` maps to insufficient data
+            // because the endpoint has exactly one 422 trigger condition
+            // (see `m6_recommend/router.py:72-78`). If a second 422 code
+            // is ever added, this collapses them — add code-based routing
+            // at that point.
+            if case .validation(let message) = apiError {
+                return .insufficientData(reason: message)
+            }
+            throw apiError
         }
     }
 
@@ -410,33 +476,48 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
         }
     }
 
+    /// Decode the FastAPI error envelope. The backend emits
+    /// `{"detail": {"error": {"code": "...", "message": "...", "details": {...}}}}`
+    /// but iOS's `APIErrorResponse` expects `{"error": ...}` at the root — so
+    /// a direct decode silently failed and every error message came back as a
+    /// generic fallback string. This helper unwraps the outer `detail`
+    /// container first (demo-prep-1 Item 1 — the fix is global, not just for
+    /// /recommend, because every previous error body was being dropped on
+    /// the floor).
+    static func decodeErrorDetail(body: Data, decoder: JSONDecoder) -> APIErrorDetail? {
+        struct Envelope: Decodable {
+            let detail: APIErrorResponse
+        }
+        if let env = try? decoder.decode(Envelope.self, from: body) {
+            return env.detail.error
+        }
+        // Legacy unwrapped shape — keep for belt-and-braces in case any
+        // endpoint bypasses `raise_http_error`.
+        if let resp = try? decoder.decode(APIErrorResponse.self, from: body) {
+            return resp.error
+        }
+        return nil
+    }
+
     private static func apiErrorFor(
         statusCode: Int,
         body: Data,
         decoder: JSONDecoder
     ) -> APIError {
+        let detail = decodeErrorDetail(body: body, decoder: decoder)
         switch statusCode {
         case 401:
             return .unauthorized
         case 404:
             return .notFound
         case 422:
-            if let resp = try? decoder.decode(APIErrorResponse.self, from: body) {
-                return .validation(resp.error.message)
-            }
-            return .validation("Validation failed")
+            return .validation(detail?.message ?? "Validation failed")
         case 429:
             return .rateLimited
         case 500...599:
-            if let resp = try? decoder.decode(APIErrorResponse.self, from: body) {
-                return .server(resp.error.message)
-            }
-            return .server("Internal server error")
+            return .server(detail?.message ?? "Internal server error")
         default:
-            if let resp = try? decoder.decode(APIErrorResponse.self, from: body) {
-                return .unknown(statusCode, resp.error.message)
-            }
-            return .unknown(statusCode, "Unexpected error")
+            return .unknown(statusCode, detail?.message ?? "Unexpected error")
         }
     }
 
@@ -482,25 +563,19 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
             throw APIError.notFound
 
         case 422:
-            if let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data) {
-                throw APIError.validation(errorResponse.error.message)
-            }
-            throw APIError.validation("Validation failed")
+            let detail = Self.decodeErrorDetail(body: data, decoder: decoder)
+            throw APIError.validation(detail?.message ?? "Validation failed")
 
         case 429:
             throw APIError.rateLimited
 
         case 500...599:
-            if let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data) {
-                throw APIError.server(errorResponse.error.message)
-            }
-            throw APIError.server("Internal server error")
+            let detail = Self.decodeErrorDetail(body: data, decoder: decoder)
+            throw APIError.server(detail?.message ?? "Internal server error")
 
         default:
-            if let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data) {
-                throw APIError.unknown(httpResponse.statusCode, errorResponse.error.message)
-            }
-            throw APIError.unknown(httpResponse.statusCode, "Unexpected error")
+            let detail = Self.decodeErrorDetail(body: data, decoder: decoder)
+            throw APIError.unknown(httpResponse.statusCode, detail?.message ?? "Unexpected error")
         }
     }
 
@@ -535,22 +610,16 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
         case 404:
             throw APIError.notFound
         case 422:
-            if let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data) {
-                throw APIError.validation(errorResponse.error.message)
-            }
-            throw APIError.validation("Validation failed")
+            let detail = Self.decodeErrorDetail(body: data, decoder: decoder)
+            throw APIError.validation(detail?.message ?? "Validation failed")
         case 429:
             throw APIError.rateLimited
         case 500...599:
-            if let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data) {
-                throw APIError.server(errorResponse.error.message)
-            }
-            throw APIError.server("Internal server error")
+            let detail = Self.decodeErrorDetail(body: data, decoder: decoder)
+            throw APIError.server(detail?.message ?? "Internal server error")
         default:
-            if let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data) {
-                throw APIError.unknown(httpResponse.statusCode, errorResponse.error.message)
-            }
-            throw APIError.unknown(httpResponse.statusCode, "Unexpected error")
+            let detail = Self.decodeErrorDetail(body: data, decoder: decoder)
+            throw APIError.unknown(httpResponse.statusCode, detail?.message ?? "Unexpected error")
         }
     }
 }

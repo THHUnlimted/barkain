@@ -346,3 +346,213 @@ async def test_resolve_from_search_reuses_existing_product(
     assert data["upc"] == existing_upc
     # Only the device→UPC Gemini call fires — PG hit short-circuits the rest.
     assert mock_gemini.call_count == 1
+
+
+# MARK: - demo-prep-1 Item 3: confidence gate + /confirm endpoint
+
+
+CONFIRM_URL = "/api/v1/products/resolve-from-search/confirm"
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_409_below_confidence_threshold(
+    client, db_session, fake_redis
+):
+    """Client forwards a low-confidence value → router short-circuits with
+    409 RESOLUTION_NEEDS_CONFIRMATION before any Gemini call fires."""
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value={"upc": "190198451736"},
+        ) as mock_gemini,
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={
+                "device_name": "Mystery Gadget Pro",
+                "brand": None,
+                "model": None,
+                "confidence": 0.42,
+            },
+        )
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["detail"]["error"]["code"] == "RESOLUTION_NEEDS_CONFIRMATION"
+    details = body["detail"]["error"]["details"]
+    assert details["device_name"] == "Mystery Gadget Pro"
+    assert details["confidence"] == 0.42
+    # Threshold is exposed in the 409 body so the client can differentiate
+    # from other 409s and also surface it in debug builds.
+    assert "threshold" in details
+    # Gate fires BEFORE any service call — zero Gemini invocations on a 409.
+    assert mock_gemini.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_200_when_confidence_above_threshold(
+    client, db_session, fake_redis
+):
+    """High-confidence resolution path remains unchanged — the gate only
+    fires below the threshold (default 0.70)."""
+    derived_upc = "190198451736"
+
+    async def fake_gemini(prompt, **kwargs):
+        system = kwargs.get("system_instruction", "") or ""
+        if "device description" in system or "canonical 12-" in system or "Universal Product Code" not in system:
+            return {"upc": derived_upc, "reasoning": "high-confidence match"}
+        return {"device_name": "Apple iPhone 8 64GB", "model": "iPhone 8"}
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            side_effect=fake_gemini,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={
+                "device_name": "Apple iPhone 8 (64GB)",
+                "brand": "Apple",
+                "model": "iPhone 8",
+                "confidence": 0.91,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["upc"] == derived_upc
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_200_when_confidence_omitted(
+    client, db_session, fake_redis
+):
+    """Backwards compat: clients that predate demo-prep-1 (no confidence
+    field) continue to get the pre-gate behavior — no 409s, resolution
+    runs unconditionally."""
+    derived_upc = "190198451736"
+
+    async def fake_gemini(prompt, **kwargs):
+        system = kwargs.get("system_instruction", "") or ""
+        if "device description" in system or "canonical 12-" in system or "Universal Product Code" not in system:
+            return {"upc": derived_upc}
+        return {"device_name": "Legacy Product", "model": None}
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            side_effect=fake_gemini,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={"device_name": "Legacy Product"},  # no confidence field
+        )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_confirm_user_confirmed_true_runs_resolution_and_marks_flag(
+    client, db_session, fake_redis
+):
+    """user_confirmed=true → runs resolution, marks source_raw.user_confirmed=True."""
+    derived_upc = "190198451736"
+
+    async def fake_gemini(prompt, **kwargs):
+        system = kwargs.get("system_instruction", "") or ""
+        if "device description" in system or "canonical 12-" in system or "Universal Product Code" not in system:
+            return {"upc": derived_upc}
+        return {"device_name": "Apple iPhone 8 64GB", "model": "iPhone 8"}
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            side_effect=fake_gemini,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            CONFIRM_URL,
+            json={
+                "device_name": "Apple iPhone 8 (64GB)",
+                "brand": "Apple",
+                "model": "iPhone 8",
+                "user_confirmed": True,
+                "query": "iphone 8",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["logged"] is True
+    assert body["product"] is not None
+    assert body["product"]["upc"] == derived_upc
+
+    # Verify the persistent flag landed in source_raw — future scans of the
+    # same canonical product can skip the confirmation dialog.
+    from sqlalchemy import select
+
+    stmt = select(Product).where(Product.upc == derived_upc)
+    result = await db_session.execute(stmt)
+    product = result.scalar_one()
+    assert isinstance(product.source_raw, dict)
+    assert product.source_raw.get("user_confirmed") is True
+
+
+@pytest.mark.asyncio
+async def test_confirm_user_confirmed_false_logs_and_returns_empty(
+    client, db_session, fake_redis
+):
+    """user_confirmed=false → no resolution, no product persisted, returns
+    empty product + logged=True for telemetry."""
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+        ) as mock_gemini,
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+        ) as mock_upcitemdb,
+    ):
+        response = await client.post(
+            CONFIRM_URL,
+            json={
+                "device_name": "Mystery Gadget Pro",
+                "user_confirmed": False,
+                "query": "mystery gadget",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["product"] is None
+    assert body["logged"] is True
+    # Rejection path must NOT touch any resolution backend — neither Gemini
+    # nor UPCitemdb should be called.
+    assert mock_gemini.call_count == 0
+    assert mock_upcitemdb.call_count == 0
