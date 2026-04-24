@@ -118,6 +118,13 @@ _MODEL_PATTERNS = [
     # Fed by Gemini's new `model` field — distinguishes RTX 4090 from RTX 4080 at the
     # hard-gate layer since the ident_to_regex is word-bounded.
     re.compile(r'\b[A-Z]{2,5}\s+\d{3,5}\b'),
+    # Gaming-peripheral SKU: 1-2 uppercase letters immediately followed by 3-4
+    # digits and an optional trailing letter. Matches Logitech G613/G915/G413,
+    # Razer DeathAdder V2, Corsair K70, Razer Huntsman V3, many headset codes.
+    # Uppercase-anchored (no IGNORECASE) so "a123" in running prose doesn't
+    # inflate false-positive rate. Required to split G613 from G915 at the
+    # model-number hard gate — otherwise Amazon's organic ranking swaps them.
+    re.compile(r'\b[A-Z]{1,2}\d{3,4}[A-Z]?\b'),
 ]
 
 # Variant / sub-model discriminator words. If two titles disagree on which of
@@ -277,13 +284,52 @@ _BRAND_SUFFIXES = re.compile(r'\s*(?:Inc\.?|Corp\.?|LLC|Ltd\.?|Co\.?)$', re.IGNO
 
 RELEVANCE_THRESHOLD = 0.4
 
+# Marketplace retailers benefit from a price-outlier pass: sellers list
+# accessories, parts, and plain wrong listings at a fraction of the real
+# product's price. Drop anything <40 % of the retailer's own median when
+# we have at least 4 listings to trust the median.
+_MARKETPLACE_RETAILERS: frozenset[str] = frozenset({
+    "ebay_new", "ebay_used", "fb_marketplace",
+})
+_PRICE_OUTLIER_FLOOR = 0.40
+_PRICE_OUTLIER_MIN_SAMPLE = 4
+
+# fb_marketplace sellers routinely post genuine listings without the
+# manufacturer model code ("Razer Orbweaver Chroma" instead of
+# "RZ07-01440100-R3U1"). Applying the model-number hard gate there
+# drops real listings and leaves only misclassified ones. For FB only,
+# a listing missing the model gets a soft penalty (0.5) instead of 0.0
+# as long as brand + token overlap clear the bar.
+_MODEL_SOFT_GATE_RETAILERS: frozenset[str] = frozenset({"fb_marketplace"})
+
+
+# Captures the "family stem" of a hyphenated SKU — for a match like
+# RZ07-00740100, the stem is RZ07-0074 (letters + first digit group + first 4
+# digits of the second group) and the tail is the remaining variant digits.
+_LONG_MODEL_PREFIX_RE = re.compile(
+    r"^([A-Z]{1,3}-?\d{1,2}-?\d{4})(\d{2,})$", re.IGNORECASE
+)
+
 
 def _extract_model_identifiers(name: str) -> list[str]:
-    """Extract model numbers from a product name (spec-only patterns excluded)."""
-    identifiers = []
+    """Extract model numbers from a product name (spec-only patterns excluded).
+
+    For long variant-coded models (8+ digit block after the letter prefix), also
+    emit a 4-digit "family" prefix. Example: RZ07-00740100 → [RZ07-00740100,
+    RZ07-0074]. Sellers routinely list the family stem without the full variant
+    suffix ("Razer Orbweaver RZ07-0074"), and requiring the full code drops
+    legitimate listings. The 4-digit floor is deliberate: 3 digits would be too
+    permissive (too many unrelated products share a 3-digit prefix).
+    """
+    identifiers: list[str] = []
     for pattern in _MODEL_PATTERNS:
         identifiers.extend(pattern.findall(name))
-    return identifiers
+    extra_prefixes: list[str] = []
+    for ident in identifiers:
+        m = _LONG_MODEL_PREFIX_RE.match(ident)
+        if m:
+            extra_prefixes.append(m.group(1))
+    return identifiers + extra_prefixes
 
 
 def _tokenize(text: str) -> set[str]:
@@ -305,7 +351,11 @@ def _ident_to_regex(ident: str) -> re.Pattern:
     return re.compile(r'(?<!\w)' + body + r'(?!\w)', re.IGNORECASE)
 
 
-def _score_listing_relevance(listing_title: str, product: Product) -> float:
+def _score_listing_relevance(
+    listing_title: str,
+    product: Product,
+    retailer_id: str | None = None,
+) -> float:
     """Score how relevant a listing title is to the resolved product (0.0–1.0).
 
     Rules applied in order:
@@ -326,15 +376,29 @@ def _score_listing_relevance(listing_title: str, product: Product) -> float:
     product_identifiers = _extract_model_identifiers(clean_name)
     product_tokens_set = _tokenize(clean_name)
 
-    # Pull Gemini's richer `model` identifier from source_raw if present.
+    # Pull richer `model` identifiers from source_raw if present.
     # The model field adds generation markers ("1st Gen"), clean model numbers
     # ("RTX 4090"), and capacity ("256GB") that product.name may lack. Union
     # identifiers + tokens so downstream rules see both signals.
-    gemini_model = None
+    #
+    # Two source lanes:
+    #   - Gemini-sourced products store the richer string at source_raw.gemini_model
+    #   - UPCitemdb-sourced products store the raw API payload at
+    #     source_raw.upcitemdb_raw; the canonical model lives at its .model key.
+    # Missing either one silently falls through — the baseline product.name
+    # extraction above already ran.
+    extra_model_strings: list[str] = []
     if product.source_raw and isinstance(product.source_raw, dict):
-        gemini_model = product.source_raw.get("gemini_model")
-    if gemini_model:
-        clean_model = _clean_product_name(gemini_model)
+        gm = product.source_raw.get("gemini_model")
+        if gm:
+            extra_model_strings.append(gm)
+        upc_raw = product.source_raw.get("upcitemdb_raw")
+        if isinstance(upc_raw, dict):
+            um = upc_raw.get("model")
+            if um:
+                extra_model_strings.append(um)
+    for m in extra_model_strings:
+        clean_model = _clean_product_name(m)
         product_identifiers = product_identifiers + _extract_model_identifiers(clean_model)
         product_tokens_set = product_tokens_set | _tokenize(clean_model)
 
@@ -345,11 +409,18 @@ def _score_listing_relevance(listing_title: str, product: Product) -> float:
     if _is_accessory_listing(listing_title, product_tokens_set):
         return 0.0
 
-    # Rule 1: Model number hard gate (word-boundary regex, not substring)
+    # Rule 1: Model number hard gate (word-boundary regex, not substring).
+    # For soft-gate retailers (e.g. fb_marketplace, where sellers routinely
+    # skip the model code) we don't reject outright — instead we cap the
+    # final score at 0.5 so a listing can still pass only if brand +
+    # token overlap carry it. Tracked via ``model_missing`` below.
+    model_missing = False
     if product_identifiers:
         patterns = [_ident_to_regex(ident) for ident in product_identifiers]
         if not any(p.search(listing_title) for p in patterns):
-            return 0.0
+            if retailer_id not in _MODEL_SOFT_GATE_RETAILERS:
+                return 0.0
+            model_missing = True
 
     # Rule 2: Variant token equality — product and listing must agree on which
     # sub-variant words they contain (pro / plus / max / disc / digital / …).
@@ -381,6 +452,9 @@ def _score_listing_relevance(listing_title: str, product: Product) -> float:
 
     overlap = len(product_tokens & listing_tokens)
     score = overlap / len(product_tokens)
+
+    if model_missing:
+        score = min(score, 0.5)
 
     return score if score >= RELEVANCE_THRESHOLD else 0.0
 
@@ -924,10 +998,29 @@ class PriceAggregationService:
                 if not valid:
                     return None, 0.0
 
+        # Marketplace price-outlier filter: on eBay/FB, sellers list empty
+        # boxes, parts, and wrong products at a fraction of the real price.
+        # Use the retailer's own median (not a fixed cash floor) so every
+        # product category calibrates itself. Min-sample 4 keeps a retailer
+        # with 1–3 listings from dropping everything on a weak median.
+        if (
+            response.retailer_id in _MARKETPLACE_RETAILERS
+            and len(valid) >= _PRICE_OUTLIER_MIN_SAMPLE
+        ):
+            from statistics import median
+            med = median(item.price for item in valid)
+            if med > 0:
+                floor = med * _PRICE_OUTLIER_FLOOR
+                valid = [item for item in valid if item.price >= floor]
+                if not valid:
+                    return None, 0.0
+
         # Score and filter by relevance
         scored = []
         for item in valid:
-            score = _score_listing_relevance(item.title, product)
+            score = _score_listing_relevance(
+                item.title, product, retailer_id=response.retailer_id
+            )
             if score >= RELEVANCE_THRESHOLD:
                 scored.append((item, score))
 

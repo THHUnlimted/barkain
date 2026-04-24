@@ -61,6 +61,7 @@ async def lookup_upc(upc: str) -> dict[str, Any] | None:
             "description": item.get("description", ""),
             "asin": item.get("asin"),
             "image_url": images[0] if images else None,
+            "model": (item.get("model") or "").strip() or None,
         }
     except httpx.HTTPStatusError as e:
         # 400/404 from upstream is expected for food UPCs, malformed

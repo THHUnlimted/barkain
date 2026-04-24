@@ -4,7 +4,9 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-23 (fix/search-resolve-perf-1 — followup to a 10-item functional bug sweep. `ProductSearchService._merge` now splits rows into strong/weak tiers by confidence (`_STRONG_CONFIDENCE = 0.55`) so strong Best Buy rows outrank weak DB matches ("Nintendo Switch OLED" no longer returns "Switch 2 Console" as #1 because DB sim 0.49 sits in the weak tier below BBY 0.66). `ProductResolutionService.resolve_from_search` and `_resolve_with_cross_validation` parallelize the Gemini + UPCitemdb fan-out via `asyncio.gather`; `resolve-from-search` P50 dropped 17s → 5s (-71%), 404 path for unknown UPCs dropped 34s → 13s (-62%). `upcitemdb.py` splits `HTTPStatusError` from generic `Exception` so upstream 400/404s no longer spam the log with 10-line tracebacks. `ProductSearchResponse.cascade_path` field added + populated (`db`, `db+tier2`, `db+tier2+gemini`, `gemini_first`, `cached`, `empty`, `empty_query`) so iOS telemetry can attribute search p95 latency to the right layer. +4 tiered-merge regression tests. Backend 585 → 589. Full entry under "Fix pack — search-resolve-perf-1".)
+> Last updated: 2026-04-24 (fix/search-relevance-pack-1 — followup to a mid-session functional sweep that surfaced four "wrong product" failures on the SSE price-stream path. `_pick_best_listing` gained a **price-outlier filter** for `{ebay_new, ebay_used, fb_marketplace}` that drops listings priced below 40 % of the retailer's own median when the sample ≥4 — category-agnostic, single rule kills keycaps, parts, scams. `_score_listing_relevance` gained a **retailer-aware soft model gate**: FB listings missing the product's model code cap at 0.5 instead of being rejected (FB sellers routinely omit SKUs on genuine listings); eBay keeps the hard gate. `_extract_model_identifiers` now emits a **family-stem prefix** for long hyphenated SKUs (`RZ07-00740100` → `RZ07-0074`) so sellers listing partial codes survive the gate. New `[A-Z]{1,2}\d{3,4}[A-Z]?` `_MODEL_PATTERNS` entry catches continuous-alphanumeric SKUs like `G613`/`G915`/`K780` — previously the pattern only matched split digit groups, so Logitech G-series queries fell through to brand+token overlap and Amazon's G915 approved for a G613 query. `upcitemdb.lookup_upc` now returns `model`; the scorer reads both `source_raw.gemini_model` and `source_raw.upcitemdb_raw.model`. eBay `_EBAY_PARTIAL_RE` widened with keycap/keyset/faceplate/skin-wrap-decal/sleeve/mount-dock-grip/strap-band. `_TIER2_NOISE_CATEGORY_TOKENS` +accessor, `_TIER2_NOISE_TITLE_TOKENS` +thumbstick — PS5 Controller search now puts the Sony DualSense first instead of KontrolFreek thumbsticks / SCUF cases. +8 regression tests. Backend 589 → 597. Full entry under "Fix pack — search-relevance-1".)
+
+Previous: 2026-04-23 (fix/search-resolve-perf-1 [PR #61] — tiered `_merge()` (`_STRONG_CONFIDENCE=0.55`) fixes Switch OLED→Switch 2; parallel Gemini+UPCitemdb resolve (P50 17→5s, 404 34→13s); `upcitemdb.py` HTTPStatusError split; `ProductSearchResponse.cascade_path` populated. +4 tests. Backend 585→589.)
 
 ---
 
@@ -3438,9 +3440,238 @@ both deserve focused unit tests before merging behind a default-on flag.
 
 ---
 
+### Fix pack — search-relevance-1 (2026-04-24)
+
+**Branch:** `fix/search-relevance-pack-1` → `main` (PR #62)
+
+**Why.** A follow-up dev-loop session after PR #61 merged surfaced four
+"wrong product" failures on the SSE price-stream + search-surface paths,
+all driven by the same category of issue (the relevance filter letting
+the wrong thing win when the hard gate couldn't fire):
+
+1. **eBay New → keycap listings for Razer Orbweaver.** The `_is_partial_listing`
+   regex didn't cover "keycap(s)" as a bare noun (only `replacement keycap`
+   etc.), and `M2_EBAY_DROP_PARTIAL_LISTINGS` was `false` post-experiment, so
+   a `$14 Wear-Resistant Blackout Razer Orbweaver Chroma Keycaps` listing sat
+   in the candidate pool alongside real keypads. The winner happened to be
+   the real device, but the pool pollution shows up anywhere the client lists
+   multiple eBay hits.
+2. **FB Marketplace → "completely different product" on Orbweaver.** Reported
+   by the user. Turned out to be a cache/resolve-order artifact (the eventual
+   stream did return the right `$42 Razer Orbweaver Chroma`), but the dig
+   surfaced that the model-number hard gate was actively rejecting legit FB
+   listings because FB sellers routinely omit manufacturer SKUs.
+3. **Walmart → Ornata V3 X for Razer Orbweaver.** Decodo HTTP adapter
+   returned a completely different Razer keyboard. Model-number hard gate
+   should have caught this (product model `RZ07-00740100-R3U1` ≠ Ornata's
+   SKU), but the UPCitemdb-sourced product's `source_raw` didn't carry its
+   model into the relevance scorer — `_score_listing_relevance` only read
+   `source_raw.gemini_model`, and Gemini's cross-val left `gemini_model=null`
+   for this product. With no identifier to gate on, token overlap (`Razer`
+   + `Keyboard`) passed.
+4. **Amazon → Logitech G915 X for Logitech G613 query.** User report. The
+   `_MODEL_PATTERNS` regex family required split digit groups (`WH-1000XM5`)
+   or a word+digit form (`iPhone 16`) — `G613` (one letter + three digits,
+   continuous) matched neither. Product identifiers came out empty, the
+   gate never fired, and Amazon's organic ranking swapped G613 → G915.
+5. **PS5 Controller → KontrolFreek thumbsticks / SCUF case.** Search-tier
+   bug (not stream). Best Buy Products API ranks accessories above the
+   actual DualSense for "PS5 Controller"; `_TIER2_NOISE_CATEGORY_TOKENS`
+   had `case`/`charger`/`protection` but not `accessor`, so rows categorized
+   as "Gaming Controller Accessories" / "Video Game Accessories" passed the
+   noise filter and dominated the top of the search cascade.
+
+**What shipped.**
+
+- **Price-outlier filter** in `modules/m2_prices/service.py::_pick_best_listing`:
+  - New module-level constants: `_MARKETPLACE_RETAILERS = {"ebay_new",
+    "ebay_used", "fb_marketplace"}`, `_PRICE_OUTLIER_FLOOR = 0.40`,
+    `_PRICE_OUTLIER_MIN_SAMPLE = 4`.
+  - When retailer is marketplace AND `len(valid) >= 4`, compute `statistics.median()`
+    over the surviving price list and drop anything below `median * 0.40`.
+    Catches keycaps ($14 vs $57.5 median → out), parts, bundle-only listings,
+    and too-good-to-be-true scams. Category-agnostic: works for every product
+    we'll ever see without keyword maintenance.
+  - Skip when sample < 4 because a weak median can't be trusted
+    (a retailer returning 1–3 listings where 1 is the wrong product would
+    otherwise lose its entire response).
+  - Runs BEFORE relevance scoring, so the scorer sees a cleaner pool.
+
+- **Retailer-aware soft model gate** in `_score_listing_relevance`:
+  - Function signature grew an optional `retailer_id: str | None = None`
+    kwarg; existing test callsites that pass positional args keep working
+    (Python stays happy on unset defaults).
+  - New constant `_MODEL_SOFT_GATE_RETAILERS = {"fb_marketplace"}`.
+  - Rule 1 (model-number hard gate) now tracks `model_missing` instead of
+    early-returning 0.0 when the product has identifiers and the listing
+    doesn't contain them. For soft-gate retailers, `model_missing=True`
+    lets the listing continue to Rules 2/2b/3 (variant/ordinal/brand); at
+    the end, if it would have scored above 0.5, the score caps at 0.5.
+    For non-soft-gate retailers the behavior is unchanged (hard reject).
+  - `_pick_best_listing` passes `retailer_id=response.retailer_id` on every
+    call, so the per-retailer routing is automatic.
+
+- **Model-family prefix generation** in `_extract_model_identifiers`:
+  - New regex `_LONG_MODEL_PREFIX_RE = r"^([A-Z]{1,3}-?\d{1,2}-?\d{4})(\d{2,})$"`
+    splits a long hyphenated SKU into `(family_stem, variant_tail)`.
+  - When the stem exists, the function returns `identifiers + [stem]`, so
+    the relevance scorer tries BOTH. `RZ07-00740100` → `["RZ07-00740100",
+    "RZ07-0074"]`. A seller listing `Razer Orbweaver RZ07-0074 Open Box`
+    matches the stem and passes the hard gate.
+  - Rationale for the 4-digit floor on the stem: 3 digits would be too
+    permissive (too many unrelated products share a 3-digit prefix).
+  - Shorter identifiers (`WH-1000XM5`, `iPhone 16`, `RTX 4090`) don't
+    generate a prefix — `_LONG_MODEL_PREFIX_RE` requires ≥8 digits after
+    the alpha prefix, so nothing to strip.
+
+- **Gaming-peripheral SKU `_MODEL_PATTERNS` entry**:
+  - Added `re.compile(r'\b[A-Z]{1,2}\d{3,4}[A-Z]?\b')` (case-sensitive).
+  - Catches Logitech G613/G915/G413/G213/K780/K580, Razer mice/headsets
+    with short codes, Corsair K70, and many headset model codes.
+  - Uppercase-anchored (no `IGNORECASE`) so lowercase "a123" in running
+    prose doesn't inflate false-positive rate. Gaming-peripheral SKUs are
+    always uppercase in product listings.
+
+- **UPCitemdb `model` plumbed**:
+  - `modules/m1_product/upcitemdb.py::lookup_upc` now includes
+    `"model": (item.get("model") or "").strip() or None` in its normalized
+    output. Previously only the `search_keyword` endpoint (keyword tier-2)
+    returned `model`; the UPC-lookup endpoint (resolve path) silently
+    dropped it.
+  - `_score_listing_relevance` reads both lanes:
+    - `source_raw.gemini_model` (string, legacy path)
+    - `source_raw.upcitemdb_raw.model` (string, new)
+  - Both strings get cleaned via `_clean_product_name` then run through
+    `_extract_model_identifiers` and unioned into `product_identifiers`.
+  - Backfill note: for products that were resolved BEFORE this change, the
+    stored `source_raw.upcitemdb_raw.model` will be `None`. New resolves
+    populate it correctly; stale rows can be patched in-place via an
+    `UPDATE products SET source_raw = jsonb_set(...)` or simply left to
+    expire (no correctness issue — the gate falls back to the pre-pack
+    behavior for those rows).
+
+- **eBay `_EBAY_PARTIAL_RE` widened** in
+  `modules/m2_prices/adapters/ebay_browse_api.py`. New phrases:
+  `keycap(s)`, `keyset(s)`, `key cap(s)`, `faceplate(s)`, `skin(s) only`,
+  `wrap only`, `decal wrap`, `carry case/pouch/bag only`, `sleeve only`,
+  `mount only`, `dock only`, `grip(s) only`, `strap only`, `band only`,
+  `replacement lens/strap`, `no remote`. Filter remains gated by
+  `M2_EBAY_DROP_PARTIAL_LISTINGS` (kept on in dev `.env`).
+
+- **Tier-2 noise denylist** in `modules/m1_product/search_service.py`:
+  - `_TIER2_NOISE_CATEGORY_TOKENS` += `"accessor"` (catches "Video Game
+    Accessories", "Gaming Controller Accessories", "Controller
+    Accessories").
+  - `_TIER2_NOISE_TITLE_TOKENS` += `"thumbstick"` (catches "Performance
+    Thumbsticks for Gaming Controllers").
+  - Verified end-to-end: `POST /api/v1/products/search {"query": "PS5
+    Controller"}` now returns Sony DualSense at #1 (conf 0.62), accessory
+    rows classified as noise and escalated around.
+
+- **`Config/Debug.xcconfig`** `API_BASE_URL` → `http://127.0.0.1:8000`
+  (was stuck on a stale LAN IP `192.168.1.194` from prior device-testing
+  session). Simulator dev-loop now connects without rebuild gymnastics.
+
+**Tests.** +8 regression tests across two files:
+
+- `tests/modules/test_m2_prices.py` (+5):
+  - `test_extract_model_identifiers_emits_family_prefix` — `RZ07-00740100`
+    generates both full + stem.
+  - `test_extract_model_identifiers_no_prefix_on_short_models` —
+    `WH-1000XM5` has no prefix to emit.
+  - `test_extract_model_identifiers_catches_gaming_peripheral_sku` —
+    G613/G915/G413 extract.
+  - `test_score_rejects_g915_for_g613_product` — a G915 listing fails the
+    model gate when product is G613.
+  - `test_score_listing_reads_upcitemdb_model` — Ornata rejected for an
+    Orbweaver product whose model lives only in `upcitemdb_raw.model`;
+    family-stem listing passes.
+  - `test_fb_marketplace_soft_gate_allows_model_less_listings` — FB
+    soft gate caps at 0.5; eBay rejects same listing at 0.0.
+  - `test_pick_best_listing_price_outlier_filter_drops_keycaps` —
+    4-listing pool with a $14 outlier leaves a $40+ survivor.
+
+- `tests/modules/test_product_search.py` (+1):
+  - `test_is_tier2_noise_filters_controller_accessories` —
+    KontrolFreek thumbsticks + SCUF case classified as noise, real
+    DualSense passes.
+
+**Backend totals:** 589 → 597 passing, 7 skipped, 0 failing.
+
+**End-to-end verification.** Re-ran the three reported queries with
+`DEMO_MODE=1` against local uvicorn:
+- `Razer Orbweaver` → eBay $203.99 Open Box / eBay Used $69.99 / FB $42.00 /
+  Walmart `no_match` (Ornata correctly rejected).
+- `Logitech G613` → eBay Used $29.69 / FB $20.00 / Amazon `no_match`
+  (G915/G213/G413 all correctly rejected).
+- `PS5 Controller` search → Sony DualSense at #1 / Amazon stream $61
+  (white DualSense, ASIN B092LJJYDQ — correct for default query intent).
+
+**Learnings.**
+
+- **L-relevance-1** — The model-number hard gate is load-bearing; whenever
+  it can't fire (product has no extractable identifier), brand+token
+  overlap lets too many wrong products through. Fixing it requires BOTH
+  widening what counts as a model identifier (the `[A-Z]\d{3,4}` pattern
+  for continuous SKUs) AND plumbing all model sources into `source_raw`
+  (the `upcitemdb_raw.model` addition). A regex change without the
+  plumbing would only help Gemini-sourced products.
+
+- **L-relevance-2** — Marketplaces need different filters than official
+  retailers. Price-outlier works cross-retailer (median is category-free)
+  but model-gate strictness has to vary: eBay sellers list model codes,
+  FB sellers don't. Solving this with one global knob drops real FB
+  listings; a retailer-aware parameter is the right shape. Architectural
+  takeaway for future retailer additions: pass `retailer_id` into the
+  scorer by default so per-retailer policy has a seam.
+
+- **L-relevance-3** — The partial-listing regex treadmill is bounded if
+  you do a one-time sweep of accessory categories: skins/wraps/decals,
+  cables/cords, stands/mounts/docks, cases/sleeves/pouches, straps/bands,
+  keycaps/keysets/faceplates, stickers/decals, parts/replacements. Adding
+  one or two per incident becomes whack-a-mole; adding the whole taxonomy
+  in a single pass puts it behind you.
+
+- **L-relevance-4** — SKU family prefixes matter. Many sellers on both
+  eBay and FB list `RZ07-0074` (family) instead of `RZ07-00740100-R3U1`
+  (full variant code). A strict gate that requires the full variant code
+  drops real listings and creates `no_match` where there's legitimate
+  supply. The family-stem emission closes this gap with a tiny regex
+  extension — worth the 5-line addition on every product class that has
+  multi-segment SKUs.
+
+- **L-relevance-5** — Best Buy's organic ranking for accessory-eligible
+  queries ("PS5 Controller", "Switch 2", etc.) puts accessories above the
+  hero product. `_is_tier2_noise` has the right shape — category denylist
+  + title denylist + strict-majority query-token check — but the token
+  list needs to be kept in sync with what BBY actually categorizes. Lesson:
+  when adding a new search-surface retailer, sample ~10 representative
+  queries and run the noise filter against the top-5 rows from each; the
+  gaps will be obvious.
+
+- **L-relevance-6** — For "wrong model" debugging, always check:
+  1. What does `_extract_model_identifiers(product.name)` return?
+  2. What does `_extract_model_identifiers(source_raw.gemini_model)` return?
+  3. What does `_extract_model_identifiers(source_raw.upcitemdb_raw.model)`
+     return?
+  Three empty lists = gate disabled = brand+token lottery wins. Two of
+  the three bugs in this pack had this exact shape.
+
+**Files modified.**
+
+- `backend/modules/m1_product/search_service.py` (+2 tokens in Tier-2 denylists)
+- `backend/modules/m1_product/upcitemdb.py` (+1 field in `lookup_upc`)
+- `backend/modules/m2_prices/adapters/ebay_browse_api.py` (+9 phrases in `_EBAY_PARTIAL_RE`)
+- `backend/modules/m2_prices/service.py` (+81 lines — outlier filter, soft gate, family prefix, gaming-SKU pattern, upcitemdb model reader)
+- `backend/tests/modules/test_m2_prices.py` (+7 tests)
+- `backend/tests/modules/test_product_search.py` (+1 test)
+- `Config/Debug.xcconfig` (LAN IP → 127.0.0.1)
+
+---
+
 ### Fix pack — search-resolve-perf-1 (2026-04-23)
 
-**Branch:** `fix/search-resolve-perf-1` → `main` (PR TBD)
+**Branch:** `fix/search-resolve-perf-1` → `main` (PR #61, merged 2026-04-24)
 
 **Why.** A 10-item functional bug sweep ("run through the app's function and try to find as many bugs as possible … try ten never-before-tried items, time how long things load for") surfaced three real performance/quality issues on the M1 search + resolve paths:
 

@@ -133,6 +133,9 @@ _TIER2_NOISE_CATEGORY_TOKENS: tuple[str, ...] = (
     "digital signage",  # "samsung flip 7" → "Samsung 75in FLIP PRO Interactive"
     "charger",  # "Portable Chargers" — samsung z flip 7 → SaharaCase chargers
     "screen protector",
+    "accessor",  # "Gaming Controller Accessories", "Video Game Accessories" —
+                 # Best Buy surfaces thumbsticks/grips above the actual
+                 # DualSense for "PS5 Controller" queries.
 )
 _TIER2_NOISE_TITLE_TOKENS: tuple[str, ...] = (
     "applecare",
@@ -144,6 +147,7 @@ _TIER2_NOISE_TITLE_TOKENS: tuple[str, ...] = (
     "membership card",
     "belt clip",  # SaharaCase accessory pattern
     "skin case",
+    "thumbstick",  # "Performance Thumbsticks for Gaming Controllers"
 )
 
 # Short, generic query tokens that carry no brand/model signal — excluding
