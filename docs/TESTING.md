@@ -2,7 +2,9 @@
 
 > Source: Architecture sessions, March–April 2026
 > Scope: Backend (pytest) + iOS (XCTest) test conventions, CI configuration, coverage targets
-> Last updated: 2026-04-23 (v2.18 — fix/search-resolve-perf-1: **589 backend** / **179 iOS unit** / 6 iOS UI. Backend +4 in `test_product_search.py` covering the tiered `_merge()` rank key (`test_rank_key_strong_bby_beats_weak_db` / `test_rank_key_strong_db_still_beats_strong_bby` / `test_rank_key_weak_sources_keep_tier_order`) + the new response field (`test_cascade_path_populated_on_response`). Confirmed the 12 `test_product_search.py::test_search_tier2_*` failures noted in v2.17 are entirely driven by `SEARCH_TIER2_USE_EBAY=true`: trunk-default `false` → **589 passing / 0 failing / 7 skipped**. Override the flag for clean local runs or keep it off in `backend/.env` unless debugging the experiment. **Runner flag unchanged:** `-parallel-testing-enabled NO` still required on iOS.)
+> Last updated: 2026-04-24 (v2.19 — fix/search-relevance-pack-1: **597 backend** / **179 iOS unit** / 6 iOS UI. Backend +8 across two files. `test_m2_prices.py` gains `test_extract_model_identifiers_emits_family_prefix`, `test_extract_model_identifiers_no_prefix_on_short_models`, `test_extract_model_identifiers_catches_gaming_peripheral_sku`, `test_score_rejects_g915_for_g613_product`, `test_score_listing_reads_upcitemdb_model`, `test_fb_marketplace_soft_gate_allows_model_less_listings`, and `test_pick_best_listing_price_outlier_filter_drops_keycaps`; `test_product_search.py` gains `test_is_tier2_noise_filters_controller_accessories`. Trunk-default `SEARCH_TIER2_USE_EBAY=false` → **597 passing / 0 failing / 7 skipped**. **Runner flag unchanged:** `-parallel-testing-enabled NO` still required on iOS.)
+
+> Previous: 2026-04-23 (v2.18 — fix/search-resolve-perf-1 [PR #61]: 585→589. +4 tests covering tiered `_merge()` rank key + `cascade_path` response field.)
 
 ---
 
