@@ -101,12 +101,21 @@ class ProductSearchResult(BaseModel):
 
 
 class ProductSearchResponse(BaseModel):
-    """Response for a text product search query."""
+    """Response for a text product search query.
+
+    ``total_results`` is the count of rows in ``results`` after dedup +
+    variant collapse + max_results cap — not the full underlying match
+    count across sources. ``cascade_path`` names which tiers fired (e.g.
+    ``"db"``, ``"db+tier2"``, ``"db+tier2+gemini"``, ``"gemini_first"``,
+    ``"cached"``) so we can attribute slow queries to the right layer
+    from iOS telemetry.
+    """
 
     query: str
     results: list[ProductSearchResult]
     total_results: int
     cached: bool = False
+    cascade_path: str | None = None
 
 
 # MARK: - Error
