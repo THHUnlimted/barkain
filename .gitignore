@@ -47,6 +47,9 @@ TestResults.xcresult
 # ── Autocomplete vocab build cache (Step 3d) ─────
 scripts/.autocomplete_cache/
 
+# ── demo-prep-1 warm-up UPC list — operational, tune in place ─
+scripts/demo_warm_upcs.txt
+
 # ── Misc ─────────────────────────────────────────
 *.log
 tmp/
