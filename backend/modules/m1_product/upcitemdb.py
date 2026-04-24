@@ -62,6 +62,17 @@ async def lookup_upc(upc: str) -> dict[str, Any] | None:
             "asin": item.get("asin"),
             "image_url": images[0] if images else None,
         }
+    except httpx.HTTPStatusError as e:
+        # 400/404 from upstream is expected for food UPCs, malformed
+        # 13-digit EANs, etc. Log status + body snippet without the full
+        # traceback — otherwise every unknown UPC spams the log with a
+        # 10-line stack.
+        body = (e.response.text or "")[:120]
+        logger.warning(
+            "UPCitemdb HTTP %d for UPC %s (body=%r)",
+            e.response.status_code, upc, body,
+        )
+        return None
     except Exception:
         logger.warning("UPCitemdb lookup failed for UPC %s", upc, exc_info=True)
         return None
@@ -99,6 +110,13 @@ async def search_keyword(query: str, max_results: int = 10) -> list[dict[str, An
             return []
         resp.raise_for_status()
         data = resp.json()
+    except httpx.HTTPStatusError as e:
+        body = (e.response.text or "")[:120]
+        logger.warning(
+            "UPCitemdb search HTTP %d for %r (body=%r)",
+            e.response.status_code, query, body,
+        )
+        return []
     except Exception:
         logger.warning("UPCitemdb search failed for %r", query, exc_info=True)
         return []

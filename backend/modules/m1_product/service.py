@@ -13,6 +13,7 @@ Cross-validation (Step 2b):
 - Confidence: 1.0 (agree), 0.7 (Gemini only), 0.5 (override), 0.3 (UPCitemdb only).
 """
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -114,9 +115,31 @@ class ProductResolutionService:
             )
             return await self.resolve(cached_upc)
 
-        upc = await self._lookup_upc_from_description(device_name, brand, model)
-        if not upc:
-            upc = await self._lookup_upc_from_upcitemdb(device_name, brand)
+        # Fire Gemini + UPCitemdb in parallel. Previously sequential, which
+        # added UPCitemdb's 10s cap on top of Gemini's ~10-15s for every
+        # resolve-from-search tap — ~20s median wall time. With gather, the
+        # total is max(T_gemini, T_upcitemdb) ≈ Gemini's budget. Gemini is
+        # still preferred when both return a UPC (opinionated single-SKU
+        # pick beats UPCitemdb's keyword-search top hit).
+        gemini_result, upcitemdb_result = await asyncio.gather(
+            self._lookup_upc_from_description(device_name, brand, model),
+            self._lookup_upc_from_upcitemdb(device_name, brand),
+            return_exceptions=True,
+        )
+        gemini_upc = gemini_result if isinstance(gemini_result, str) else None
+        upcitemdb_upc = upcitemdb_result if isinstance(upcitemdb_result, str) else None
+        if isinstance(gemini_result, BaseException):
+            logger.warning(
+                "Gemini device→UPC raised for %r: %s",
+                device_name, gemini_result,
+            )
+        if isinstance(upcitemdb_result, BaseException):
+            logger.warning(
+                "UPCitemdb fallback raised for %r: %s",
+                device_name, upcitemdb_result,
+            )
+
+        upc = gemini_upc or upcitemdb_upc
         if not upc:
             raise UPCNotFoundForDescriptionError(device_name)
 
@@ -309,9 +332,32 @@ class ProductResolutionService:
 
         Always attempts both sources for maximum accuracy. Falls back gracefully
         when one or both fail.
+
+        Fires both upstreams in parallel (was sequential before
+        fix/resolve-cross-val-parallel). Gemini's retry-on-null prompt
+        still runs when the first pass returns null — it catches real
+        products where Gemini's default prompt is too narrow
+        (``test_gemini_null_retry_then_success`` covers the niche
+        electronics case). The savings from parallelizing the initial
+        calls cut the 404 path from ~30s to ~20s on its own.
         """
-        gemini_data = await self._get_gemini_data(upc)
-        upcitemdb_data = await self._get_upcitemdb_data(upc)
+        gemini_result, upcitemdb_result = await asyncio.gather(
+            self._get_gemini_data(upc, allow_retry=False),
+            self._get_upcitemdb_data(upc),
+            return_exceptions=True,
+        )
+        gemini_data = gemini_result if isinstance(gemini_result, dict) else None
+        upcitemdb_data = upcitemdb_result if isinstance(upcitemdb_result, dict) else None
+        if isinstance(gemini_result, BaseException):
+            logger.warning("Gemini resolution raised for UPC %s: %s", upc, gemini_result)
+        if isinstance(upcitemdb_result, BaseException):
+            logger.warning("UPCitemdb resolution raised for UPC %s: %s", upc, upcitemdb_result)
+
+        # Retry Gemini with the broader prompt on first-pass null. This
+        # preserves the legacy behavior where the second prompt rescues
+        # products that the opinionated first prompt refused to commit to.
+        if gemini_data is None:
+            gemini_data = await self._get_gemini_data_retry(upc)
 
         result = self._cross_validate(gemini_data, upcitemdb_data)
         if result is None:
@@ -339,10 +385,14 @@ class ProductResolutionService:
         )
         return await self._persist_product(upc, product_data, source_label)
 
-    async def _get_gemini_data(self, upc: str) -> dict | None:
+    async def _get_gemini_data(self, upc: str, *, allow_retry: bool = True) -> dict | None:
         """Call Gemini API to resolve UPC. Returns raw dict or None.
 
-        Retries once with a broader prompt if the first attempt returns null.
+        ``allow_retry=True`` (the legacy behavior) retries once with a
+        broader prompt if the first attempt returns null. In the
+        parallel cross-validation path the retry is driven externally
+        via ``_get_gemini_data_retry`` so we can gate it on UPCitemdb's
+        outcome; callers from that path pass ``allow_retry=False``.
         """
         try:
             prompt = build_upc_lookup_prompt(upc)
@@ -354,8 +404,8 @@ class ProductResolutionService:
             device_name = raw.get("device_name")
             model = raw.get("model")
 
-            # Retry once with broader prompt if null
-            if not device_name:
+            # Retry once with broader prompt if null — legacy sequential path.
+            if not device_name and allow_retry:
                 logger.info("Gemini returned null for UPC %s, retrying with broader prompt", upc)
                 retry_prompt = build_upc_retry_prompt(upc)
                 raw = await gemini_generate_json(
@@ -366,7 +416,10 @@ class ProductResolutionService:
                 model = raw.get("model")
 
             if not device_name:
-                logger.info("Gemini could not identify UPC %s after retry", upc)
+                if allow_retry:
+                    logger.info("Gemini could not identify UPC %s after retry", upc)
+                else:
+                    logger.info("Gemini first pass returned null for UPC %s", upc)
                 return None
 
             return {"name": device_name, "gemini_model": model}
@@ -374,6 +427,30 @@ class ProductResolutionService:
             logger.warning(
                 "Gemini resolution failed for UPC %s", upc, exc_info=True
             )
+            return None
+
+    async def _get_gemini_data_retry(self, upc: str) -> dict | None:
+        """Second Gemini call with the broader retry prompt.
+
+        Separated from ``_get_gemini_data`` so the parallel cross-val
+        path can run the first Gemini call concurrently with UPCitemdb,
+        then decide whether the retry is worth paying for based on
+        UPCitemdb's outcome.
+        """
+        try:
+            retry_prompt = build_upc_retry_prompt(upc)
+            raw = await gemini_generate_json(
+                retry_prompt,
+                system_instruction=UPC_LOOKUP_SYSTEM_INSTRUCTION,
+            )
+            device_name = raw.get("device_name")
+            model = raw.get("model")
+            if not device_name:
+                logger.info("Gemini retry still null for UPC %s", upc)
+                return None
+            return {"name": device_name, "gemini_model": model}
+        except Exception:
+            logger.warning("Gemini retry failed for UPC %s", upc, exc_info=True)
             return None
 
     async def _get_upcitemdb_data(self, upc: str) -> dict | None:

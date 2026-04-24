@@ -1145,3 +1145,74 @@ async def test_search_pg_trgm_index_exists(db_session):
     )
     row = result.scalar_one_or_none()
     assert row == "idx_products_name_trgm"
+
+
+# MARK: - Tiered confidence merge (fix/search-merge-confidence)
+
+
+def test_rank_key_strong_bby_beats_weak_db():
+    """A strong-confidence non-DB row outranks a weak DB row.
+
+    Regression: "Nintendo Switch OLED" returned DB "Switch 2" (pg_trgm
+    sim 0.49) as #1 ahead of a Best Buy OLED-category row at confidence
+    0.66 because the old `_merge()` unconditionally prepended DB rows.
+    """
+    from modules.m1_product.schemas import ProductSearchResult
+    from modules.m1_product.search_service import _rank_key
+
+    weak_db = ProductSearchResult(
+        device_name="Nintendo Switch 2 Console 256GB", source="db",
+        confidence=0.49, primary_upc="045496885816",
+    )
+    strong_bby = ProductSearchResult(
+        device_name="Nintendo Switch OLED Model", source="best_buy",
+        confidence=0.66, primary_upc="045496453435",
+    )
+    # Sort ascending on the key — lower key = higher rank.
+    assert _rank_key(strong_bby) < _rank_key(weak_db)
+
+
+def test_rank_key_strong_db_still_beats_strong_bby():
+    """Within the strong tier, source priority (DB > BBY) is the tiebreaker."""
+    from modules.m1_product.schemas import ProductSearchResult
+    from modules.m1_product.search_service import _rank_key
+
+    strong_db = ProductSearchResult(
+        device_name="Apple iPhone 16 Pro 256GB", source="db", confidence=0.80,
+    )
+    strong_bby = ProductSearchResult(
+        device_name="Apple iPhone 16 Pro 256GB (BBY)", source="best_buy", confidence=0.90,
+    )
+    assert _rank_key(strong_db) < _rank_key(strong_bby)
+
+
+def test_rank_key_weak_sources_keep_tier_order():
+    """Weak-tier rows preserve DB > BBY > UPCitemdb > Gemini ordering."""
+    from modules.m1_product.schemas import ProductSearchResult
+    from modules.m1_product.search_service import _rank_key
+
+    weak_db = ProductSearchResult(device_name="a", source="db", confidence=0.30)
+    weak_bby = ProductSearchResult(device_name="b", source="best_buy", confidence=0.30)
+    weak_upc = ProductSearchResult(device_name="c", source="upcitemdb", confidence=0.30)
+    weak_gem = ProductSearchResult(device_name="d", source="gemini", confidence=0.30)
+    assert _rank_key(weak_db) < _rank_key(weak_bby) < _rank_key(weak_upc) < _rank_key(weak_gem)
+
+
+@pytest.mark.asyncio
+async def test_cascade_path_populated_on_response(client, db_session, fake_redis):
+    """cascade_path surfaces which tiers fired so iOS telemetry can attribute p95."""
+    with patch(
+        "modules.m1_product.search_service.gemini_generate_json",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        response = await client.post(
+            SEARCH_URL, json={"query": "no-matches-expected-zzzxxx", "max_results": 5}
+        )
+    assert response.status_code == 200
+    data = response.json()
+    # With no DB/Tier2/Gemini hits the cascade either fires gemini (empty
+    # result) or reports "empty" — both are valid paths, but the field
+    # MUST be populated on every fresh response.
+    assert data.get("cascade_path") is not None
+    assert data["cascade_path"] in ("gemini", "tier2+gemini", "empty", "db", "db+tier2", "db+tier2+gemini")

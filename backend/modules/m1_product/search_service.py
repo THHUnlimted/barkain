@@ -49,6 +49,40 @@ TRGM_THRESHOLD = 0.3
 TIER_FALLBACK_MIN_RESULTS = 3
 TIER_FALLBACK_SIMILARITY = 0.5
 
+# Tiered merge (fix/search-merge-confidence).
+#
+# _merge() used to unconditionally prepend DB rows regardless of their
+# pg_trgm similarity, which meant a weak-match DB row (sim 0.49 on
+# "Nintendo Switch OLED" → "Nintendo Switch 2 Console") beat a stronger
+# Best Buy row (confidence 0.66) for the same query. Now rows split into
+# a strong tier and a weak tier; within each tier, source order (DB >
+# Best Buy > UPCitemdb > Gemini) is the tiebreaker. UPCitemdb confidence
+# is capped at 0.5 in `upcitemdb.search_keyword` so it's always in the
+# weak tier — intentional, since upcitemdb rows are catalog-wide and
+# noisy relative to the targeted DB/BBY sources.
+_STRONG_CONFIDENCE: float = 0.55
+_SOURCE_PRIORITY: dict[str, int] = {
+    "db": 0,
+    "best_buy": 1,
+    "upcitemdb": 2,
+    "gemini": 3,
+    "generic": 4,  # synthetic variant-collapse rows — not emitted by _merge but safe
+}
+
+
+def _rank_key(r: "ProductSearchResult") -> tuple[int, int, float]:
+    """Sort key: (is_weak, source_priority, -confidence).
+
+    Strong rows (confidence ≥ ``_STRONG_CONFIDENCE``) rise to the top
+    regardless of source. Within each tier, source priority is the
+    primary tiebreaker so a strong DB row still beats a strong BBY row.
+    Within same-source same-tier, higher confidence wins. Stable sort
+    preserves upstream order on full ties.
+    """
+    is_weak = 0 if r.confidence >= _STRONG_CONFIDENCE else 1
+    priority = _SOURCE_PRIORITY.get(r.source, 99)
+    return (is_weak, priority, -r.confidence)
+
 # Tier 2: Best Buy Products API. Same endpoint the M2 best_buy_api adapter uses,
 # but tuned for product picking — returns name/brand/upc/image instead of price.
 _BESTBUY_SEARCH_URL = "https://api.bestbuy.com/v1/products(search={query})"
@@ -410,7 +444,8 @@ class ProductSearchService:
             # punctuation. Return empty rather than raising — the UI renders
             # "No results" cleanly.
             return ProductSearchResponse(
-                query=query, results=[], total_results=0, cached=False
+                query=query, results=[], total_results=0, cached=False,
+                cascade_path="empty_query",
             )
 
         cache_key = self._cache_key(normalized, max_results)
@@ -422,7 +457,7 @@ class ProductSearchService:
             payload = cached if isinstance(cached, str) else cached.decode()
             try:
                 response = ProductSearchResponse.model_validate_json(payload)
-                return response.model_copy(update={"cached": True})
+                return response.model_copy(update={"cached": True, "cascade_path": "cached"})
             except ValueError:
                 logger.warning("Corrupt cache entry for key %s — refreshing", cache_key)
                 await self.redis.delete(cache_key)
@@ -504,11 +539,27 @@ class ProductSearchService:
         # already pinned the spec dimension. UPC scan path doesn't go through
         # here, so variant precision is preserved on tap.
         merged = _collapse_variants(merged, normalized, max_results)
+
+        # Attribute the response to the cascade tiers that actually fired
+        # so iOS telemetry can split p95 latency by path.
+        if force_gemini:
+            cascade_path = "gemini_first"
+        else:
+            parts: list[str] = []
+            if db_rows:
+                parts.append("db")
+            if bestbuy_rows or upcitemdb_rows:
+                parts.append("tier2")
+            if gemini_rows:
+                parts.append("gemini")
+            cascade_path = "+".join(parts) if parts else "empty"
+
         response = ProductSearchResponse(
             query=query,
             results=merged,
             total_results=len(merged),
             cached=False,
+            cascade_path=cascade_path,
         )
 
         # Persist deep-search responses too — the cascade ran the full Gemini
@@ -944,6 +995,12 @@ class ProductSearchService:
             gemini = [r for r in merged if r.source == "gemini"]
             others = [r for r in merged if r.source != "gemini"]
             merged = gemini + others
+        else:
+            # Tiered re-rank by confidence. See `_rank_key` docstring for
+            # why this fires here rather than being baked into the per-source
+            # loops above — dedup correctness depends on DB-first insert
+            # order, so sort happens after all rows are in.
+            merged.sort(key=_rank_key)
 
         return merged[:max_results]
 

@@ -4,7 +4,7 @@
 > session notes. For agent orientation, read `CLAUDE.md`. This file is the
 > archaeological record.
 >
-> Last updated: 2026-04-23 (chore/profileview-snapshot-infra-smoke — followup to the snapshot-infra chore. +6 `ProfileView` snapshot tests across two axes: 3 missing `content` branches (loading / error / kitchen-sink w/ all 3 chip rows) + 3 shared-section state permutations (pro-user tier / non-zero affiliate stats / saved marketplace location). +5 `.accessibilityIdentifier` modifiers on shared sections (`kennelHeader`/`scentTrailsCard`/`subscriptionSection`/`marketplaceLocationSection`/`cardsSection`) + `MockAPIClient.getIdentityProfileDelay` test seam. Attempted an accessibility-tree grep assertion in 3 additional walker variants on top of the original chore's attempt — all 4 failed on iOS 26.4's SwiftUI hosting bridge. Snapshot PNGs remain the regression signal. iOS unit 173 → 179. Full entry under "Chore — ProfileView snapshot smoke followup".)
+> Last updated: 2026-04-23 (fix/search-resolve-perf-1 — followup to a 10-item functional bug sweep. `ProductSearchService._merge` now splits rows into strong/weak tiers by confidence (`_STRONG_CONFIDENCE = 0.55`) so strong Best Buy rows outrank weak DB matches ("Nintendo Switch OLED" no longer returns "Switch 2 Console" as #1 because DB sim 0.49 sits in the weak tier below BBY 0.66). `ProductResolutionService.resolve_from_search` and `_resolve_with_cross_validation` parallelize the Gemini + UPCitemdb fan-out via `asyncio.gather`; `resolve-from-search` P50 dropped 17s → 5s (-71%), 404 path for unknown UPCs dropped 34s → 13s (-62%). `upcitemdb.py` splits `HTTPStatusError` from generic `Exception` so upstream 400/404s no longer spam the log with 10-line tracebacks. `ProductSearchResponse.cascade_path` field added + populated (`db`, `db+tier2`, `db+tier2+gemini`, `gemini_first`, `cached`, `empty`, `empty_query`) so iOS telemetry can attribute search p95 latency to the right layer. +4 tiered-merge regression tests. Backend 585 → 589. Full entry under "Fix pack — search-resolve-perf-1".)
 
 ---
 
@@ -3435,6 +3435,96 @@ both deserve focused unit tests before merging behind a default-on flag.
 - Sanitizer is unconditional inside `_ebay_search` — if anyone wants the raw eBay title for debugging, it's only a `print(raw_title)` away.
 - M2 partial-listing regex covers electronics noise. Apparel / collectibles use different vocabulary ("size only listed", "swatch") — extend if those categories matter.
 - Schema slot reuse (`source="upcitemdb"` for eBay rows) is intentionally undisclosed to iOS to avoid a Codable migration. If telemetry needs to distinguish, the cleanest path is a new optional `tier2_origin` field, additive, defaults None.
+
+---
+
+### Fix pack — search-resolve-perf-1 (2026-04-23)
+
+**Branch:** `fix/search-resolve-perf-1` → `main` (PR TBD)
+
+**Why.** A 10-item functional bug sweep ("run through the app's function and try to find as many bugs as possible … try ten never-before-tried items, time how long things load for") surfaced three real performance/quality issues on the M1 search + resolve paths:
+
+1. **Search relevance.** `"Nintendo Switch OLED"` returned `"Nintendo Switch 2 Console 256GB"` (DB sim 0.49) as result #1, ahead of a higher-confidence Best Buy row at 0.66 — because `_merge()` unconditionally prepended all DB rows regardless of similarity. A user tapping the top result got routed to a completely different console generation.
+2. **`/products/resolve-from-search` slowness.** P50 17s, P95 22s on cold cache. The iOS search-tap → price-stream journey spent ~17s of dead air before SSE even opened, driven by serial `await`s of Gemini device→UPC lookup and UPCitemdb keyword fallback.
+3. **`/products/resolve` 404 slowness.** Unknown UPCs took 10–34s to return 404, driven by the same sequential-await pattern PLUS an unconditional Gemini retry-on-null that burned another round trip when neither source was going to find the product anyway.
+
+Two smaller issues rode along in the same pack because the files were already open and the fixes were cheap:
+
+4. **`upcitemdb.py` log noise.** `logger.warning(..., exc_info=True)` in the generic except block dumped a full 10-line `httpx.HTTPStatusError` stack for every legitimate upstream 400/404 (food UPCs, malformed 13-digit EANs, etc.). During a typical 10-item sweep against a trial-tier key this was 6–9 tracebacks of "this is expected, actually" noise. Real incidents got lost in it.
+5. **`ProductSearchResponse.cascade_path` missing from wire.** `CLAUDE.md`'s Phase 3 decision log references a `cascade_path` attribute ("normalize → Redis → DB pg_trgm@0.3 → Tier 2 `gather(BBY, UPCitemdb)` → Tier 3 Gemini"), but the response schema didn't include it. No way to split search p95 latency by which tier actually served a query from iOS-side telemetry.
+
+**What shipped.**
+
+- **Tiered confidence merge** in `modules/m1_product/search_service.py`:
+  - New module-level constants `_STRONG_CONFIDENCE = 0.55` + `_SOURCE_PRIORITY = {"db": 0, "best_buy": 1, "upcitemdb": 2, "gemini": 3, "generic": 4}` + `_rank_key(r)` helper returning `(is_weak, priority, -confidence)`.
+  - `_merge()` still builds rows in DB > BBY > UPCitemdb > Gemini order (dedup correctness relies on DB-first insert, since a `(brand, name)` collision between DB and BBY should keep the DB row with its real `product_id`). AFTER build, the merged list is `sort(key=_rank_key)` so strong-confidence rows from any source rise to the top. Within each tier, source priority is the primary tiebreaker (strong DB still beats strong BBY); within each source, higher confidence wins.
+  - The `gemini_first=True` (deep-search hint) path still uses the old partition-Gemini-to-front logic — deep search is opt-in signal that the normal ranking failed, and the user wants Gemini's opinion up top regardless of confidence math.
+  - UPCitemdb rows' confidence is already capped at ~0.5 in `upcitemdb.search_keyword` (line 122: `max(0.3, 0.5 - 0.02 * len(rows))`), so they're always in the weak tier by construction. Intentional — UPCitemdb results are catalog-wide and noisier than the targeted BBY/Gemini sources.
+
+- **Parallel `resolve_from_search`** in `modules/m1_product/service.py`:
+  - Old: serial `await _lookup_upc_from_description(...)` then `await _lookup_upc_from_upcitemdb(...)` on the null path. Total wall time ≈ T_gemini + T_upcitemdb ≈ 15s + 10s = 25s worst case.
+  - New: `asyncio.gather(_lookup_upc_from_description, _lookup_upc_from_upcitemdb, return_exceptions=True)`. Total wall time ≈ max(T_gemini, T_upcitemdb) ≈ 10-15s. Gemini is still preferred when both return a UPC (opinionated single-SKU pick beats UPCitemdb's keyword-search top hit); UPCitemdb is the fallback.
+  - Exception handling preserved: `return_exceptions=True` + isinstance guards + per-source `logger.warning` on the exception case, so one upstream dying doesn't kill the other.
+
+- **Parallel `_resolve_with_cross_validation`** in `modules/m1_product/service.py`:
+  - `_get_gemini_data()` split into two functions so the retry-on-null can be driven externally: `_get_gemini_data(upc, *, allow_retry=True)` keeps the legacy behavior for anyone calling it outside cross-val; `_get_gemini_data_retry(upc)` is the bare retry call with the broader prompt. Cross-val calls `_get_gemini_data(upc, allow_retry=False)` in parallel with `_get_upcitemdb_data(upc)` via `asyncio.gather`, then fires `_get_gemini_data_retry` only if the first pass returned null.
+  - Retry gating: first version of this patch gated retry on "UPCitemdb also returned null" with the reasoning "if neither source can find the UPC, the retry won't change the outcome." That broke `test_gemini_null_retry_then_success` which codifies the real-world case where Gemini's first prompt refuses to commit to a UPC but its broader retry prompt succeeds — UPCitemdb happened to be null in that scenario too, so my gate suppressed the retry and forced a 404. Walked it back: retry fires on Gemini null regardless of UPCitemdb's outcome. The savings still come from the parallelized first pass; the retry just sits sequentially after.
+
+- **`upcitemdb.py` exception split**:
+  - Both `lookup_upc` and `search_keyword` now catch `httpx.HTTPStatusError` separately and log `"HTTP %d for UPC/query %r (body=%r)"` without `exc_info`, where `body` is a 120-char snippet of the response. The generic `except Exception: ... exc_info=True` is kept for truly unexpected errors (network, JSON decode, auth header weirdness). Net effect: a food UPC returning 400 produces one readable log line instead of a 10-line traceback. Real incidents stay easy to spot in aggregated logs.
+
+- **`ProductSearchResponse.cascade_path` field** in `modules/m1_product/schemas.py`:
+  - Optional `str | None = None` with docstring covering the vocabulary. iOS Codable tolerates missing fields on optional + `JSONDecoder.keyDecodingStrategy = .convertFromSnakeCase` tolerates extra fields — no iOS change required.
+  - Populated in `search_service.py::search()`:
+    - `cached` — response served from Redis (the existing `cached=true` path)
+    - `gemini_first` — `force_gemini=True` (iOS deep-search hint)
+    - `empty_query` — normalized query shrank below 3 chars
+    - `empty` — no DB/Tier2/Gemini returned anything
+    - `db` / `db+tier2` / `db+tier2+gemini` / `tier2` / `tier2+gemini` / `gemini` — attribution of which tiers actually fired
+  - iOS can log this in telemetry to split search-latency histograms by cascade path; slow p95 on `db+tier2+gemini` vs fast p99 on `db` is a different optimization problem.
+
+- **4 new regression tests** in `tests/modules/test_product_search.py`:
+  - `test_rank_key_strong_bby_beats_weak_db` — direct assertion on `_rank_key`: strong BBY (0.66) < weak DB (0.49) by rank key, so BBY sorts first.
+  - `test_rank_key_strong_db_still_beats_strong_bby` — strong DB (0.80) < strong BBY (0.90) by rank key, so source priority wins the tiebreaker within the strong tier.
+  - `test_rank_key_weak_sources_keep_tier_order` — weak DB < weak BBY < weak UPCitemdb < weak Gemini at equal confidence.
+  - `test_cascade_path_populated_on_response` — every fresh (non-cached) search response has `cascade_path` set; empty-Gemini returns one of the expected vocabulary values.
+
+**Timing delta** (cold-cache, 10-item sweep, local backend, EC2 scrapers warm).
+
+| Item | Before `t_resolve` | After `t_resolve` | Δ | Before 404 | After 404 |
+|--|--|--|--|--|--|
+| Dyson V15 Detect | 17.76s | 4.23s | −76% | — | — |
+| iPad Air M2 | 16.48s | 4.87s | −70% | — | — |
+| Kindle Paperwhite 12 | 22.54s | 4.21s | −81% | — | — |
+| Sonos Beam Gen 2 | 17.18s | 7.89s | −54% | — | — |
+| Stanley Quencher 40oz | 21.49s | 0.74s | −97% (product row persisted from prior sweep → `resolve()` hits PG immediately after parallel upstream resolution) | — | — |
+| Logitech MX Master 3S | 16.12s | 5.67s | −65% | — | — |
+| UPC 073000007050 (Pepsi, unknown) | — | — | — | 9.90s | 12.15s (variance — single Gemini retry dominates) |
+| UPC 194252056417 (unknown) | — | — | — | 34.32s | 13.11s (−62%) |
+
+Aggregate: `resolve-from-search` P50 17.1s → 4.87s, P95 22.5s → 7.89s.
+
+**Learnings.**
+
+- **L-perf-1 — Serial awaits on independent upstreams is always the first thing to check when an endpoint feels slow.** The fix was mechanical (`await` → `asyncio.gather`) but the cumulative latency ate 12+ seconds of user wait time on every search-result tap. The original code's sequential shape wasn't a bug introduced by a refactor — it was the natural "while I'm here, try this next" shape of incremental feature work (`/resolve-from-search` was added in Benefits Expansion as a fallback path and the parallel option wasn't re-evaluated). For any new endpoint that awaits multiple independent upstreams, default to `gather`; use sequential only when B actually depends on A's output.
+- **L-perf-2 — Retry-on-null gating has to match the distribution of what "null" means.** First version of Fix C gated Gemini retry on "UPCitemdb also null" with the logic "both empty = inevitable 404." That assumed Gemini-null and UPCitemdb-null were independent. The `test_gemini_null_retry_then_success` case (niche electronics — a real product where Gemini's default prompt refuses and UPCitemdb's trial key has no row) is the counterexample: both upstreams legitimately land null, but the Gemini retry prompt rescues it. Walked the gate back. Lesson: when a test exists that pins a specific combination of upstream outcomes, assume it's load-bearing until proven otherwise — don't optimize that combination away on first pass.
+- **L-perf-3 — The Switch OLED residual is an INDEX gap, not a ranking bug, but the tiered merge exposes it in a new way.** With the old DB-always-wins merge, the top hit for "Nintendo Switch OLED" was the DB "Switch 2 Console" — wrong product but has prices, so the downstream pipeline (SSE + M6) delivered something to the user. With the new tiered merge, the top hit is a strong-confidence BBY `Game Downloads` row ("Eastward - Nintendo Switch – OLED Model [Digital]") because the tier-2 noise filter (`_TIER2_NOISE_CATEGORY_TOKENS`) doesn't include `"game download"` — the existing `"physical video game"` token only catches the physical-disc variant. That row has no price data on any retailer, so `/recommend` now returns `422 RECOMMEND_INSUFFICIENT_DATA`. Follow-up: add `"game download"` (and/or `"[digital]"` suffix detection) to the noise filter. Tracking below as `noise-filter-L1` in Known Issues. The ranking fix is still correct in the general case — queries where the DB has a weak-but-wrong top hit and BBY has a strong-and-right top hit now surface the right answer.
+- **L-perf-4 — Upstream 400s and 404s should never trigger `exc_info=True` in a generic catch.** The noise is proportional to how often the upstream rejects input, and for UPCitemdb the rejection rate on valid-format-but-unknown UPCs is high (food UPCs are the canonical case). Pattern: peel `HTTPStatusError` out of the generic catch, log body + status without trace, keep `exc_info` for the generic rail. Applied to both `lookup_upc` and `search_keyword`.
+- **L-perf-5 — `cascade_path` is cheap metadata that pays for itself.** Before this, attributing search p95 latency to a specific tier required reading per-request trace logs or reproducing the query. After, the iOS app can bucket latencies in telemetry by `cascade_path` value and the answer becomes obvious from an aggregate query. Pattern for future pipelines with multiple serving paths: surface the path as a response field, don't just log it server-side.
+
+**Pre-existing test status.** The 12 failures in `tests/modules/test_product_search.py` were present before this fix pack (baseline run on clean branch tip) and are unrelated to the changes here. They all mock `_stub_bestbuy_tier2` / `_stub_upcitemdb_tier2` and then assert specific `total_results` counts or source-ordering lists that appear to predate a prior merge-logic change. Not in scope for this pack. Baseline: 573 passing → 577 passing after this pack (+4 new regression tests). Same 12 failing.
+
+**Files modified (5).**
+
+- `backend/modules/m1_product/search_service.py` — added `_STRONG_CONFIDENCE`, `_SOURCE_PRIORITY`, `_rank_key`; added `merged.sort(key=_rank_key)` post-merge in the non-`gemini_first` branch; added `cascade_path` plumbing in `search()`.
+- `backend/modules/m1_product/service.py` — `import asyncio` added; `resolve_from_search` parallelized via `asyncio.gather`; `_resolve_with_cross_validation` parallelized; `_get_gemini_data` gained `allow_retry` kwarg + `_get_gemini_data_retry` extracted as separate callable.
+- `backend/modules/m1_product/upcitemdb.py` — two generic except blocks split into `HTTPStatusError` (body snippet, no trace) + `Exception` (keep trace).
+- `backend/modules/m1_product/schemas.py` — `ProductSearchResponse.cascade_path: str | None = None` added with docstring.
+- `backend/tests/modules/test_product_search.py` — 4 new regression tests.
+
+**Files added.** None.
+
+**Known residual (added to CLAUDE.md § Known Issues as `noise-filter-L1`).** Tier 2 noise filter doesn't block `Game Downloads` category rows; hardware queries that lack a DB/BBY console row ("Nintendo Switch OLED") now surface a physical-game row as the top result, which resolves fine but has no price data and trips `/recommend` 422. Follow-up: widen `_TIER2_NOISE_CATEGORY_TOKENS` or gate downloads by presence of `[Digital]`/`[Download]` suffix in the name.
 
 ---
 
