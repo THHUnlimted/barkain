@@ -814,3 +814,40 @@ Response:
 - **Marketing version:** `MAJOR.MINOR.PATCH` (MAJOR = redesign, MINOR = feature, PATCH = fix)
 - **Build number:** Auto-increment in CI, unique per App Store upload
 - **Git tags:** `v0.N.0` at phase boundaries
+
+---
+
+## Demo Operations (demo-prep-1)
+
+Two operator CLIs land at the repo root via `Makefile` for pre-demo reliability. Both run locally against the dev backend; neither touches production. Tune the evergreen UPC in `scripts/demo_check.py` and the warmup list in `scripts/demo_warm_upcs.txt` (gitignored — edit in place) if a specific SKU stops being useful during demo week.
+
+### `make demo-check`
+
+One-minute sanity sweep Mike runs immediately before each F&F session:
+
+```bash
+make demo-check
+```
+
+1. Hits `/api/v1/health` — exits 1 if the backend is down or DB/Redis are degraded (saves the time of trying the stream when the base isn't up).
+2. Resolves an evergreen UPC (`190198451736` — AirPods) to a `product_id`.
+3. Opens the SSE price stream with a 15-second per-retailer budget, collects `retailer_result` events, tallies which succeeded.
+4. Renders a `retailer | status | time | note` table.
+5. Exits 0 when ≥7 of 9 active retailers respond with `success`; exits 1 otherwise so CI or watchdog scripts can gate on it.
+
+Backend not running? The health hit fails fast and you see `connection failed: ...` — start `uvicorn app.main:app --reload --port 8000` and retry.
+
+### `make demo-warm`
+
+Run ~30 minutes before F&F arrives to eliminate cold-start tail latency on the first scan:
+
+```bash
+make demo-warm
+```
+
+1. Reads UPCs from `scripts/demo_warm_upcs.txt` (operational; gitignored so Mike can tune without a PR). Missing file → falls back to the same evergreen UPC as demo-check, so a fresh checkout never hard-fails.
+2. For each UPC: `POST /resolve` → drain `/prices/{id}/stream` → parallel `GET /identity/discounts`, `GET /cards/recommendations`, `POST /recommend`. Every cache layer (Redis products, Redis prices, Gemini prompt cache, PG connection pool) is touched.
+3. Prints per-UPC timing + final averaged summary.
+4. Exits 0 on clean warmup, 1 if any UPC hard-fails at resolve (signal that a retailer or Gemini is down — fix BEFORE F&F notice).
+
+Recommended pre-demo cadence: `make demo-warm` 30 min out, `make demo-check` 2 min out. Both exits are scriptable for cron / watchdog hookup later if needed.

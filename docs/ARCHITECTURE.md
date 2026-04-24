@@ -248,15 +248,28 @@ are ack+skipped (no retry spiral on permanently bad data).
 
 ### Error Handling Format
 
+All error responses are wrapped in FastAPI's standard `{"detail": ...}` envelope. The payload under `detail` follows the structure below. iOS `APIClient.decodeErrorDetail(body:decoder:)` unwraps the `detail` layer first (demo-prep-1 fix — pre-pack decoders tried `APIErrorResponse { error: ... }` at root and silently swallowed every real message).
+
 ```json
 {
-  "error": {
-    "code": "PRODUCT_NOT_FOUND",
-    "message": "No product found for UPC 012345678901",
-    "details": {}
+  "detail": {
+    "error": {
+      "code": "PRODUCT_NOT_FOUND",
+      "message": "No product found for UPC 012345678901",
+      "details": {}
+    }
   }
 }
 ```
+
+**Selected error codes (not exhaustive):**
+
+| HTTP | Code | Emitted by | Notes |
+|---|---|---|---|
+| 404 | `PRODUCT_NOT_FOUND` | `/resolve`, `/prices/*`, `/recommend` | UPC or product_id not resolvable. iOS Scanner branches on `error == .notFound` to render `UnresolvedProductView` (demo-prep-1 Item 2). |
+| 404 | `UPC_NOT_FOUND_FOR_PRODUCT` | `/resolve-from-search` | Neither Gemini nor UPCitemdb produced a UPC from the description. Same Scanner branch catches this via the `.notFound` mapping. |
+| 409 | `RESOLUTION_NEEDS_CONFIRMATION` | `/resolve-from-search` | demo-prep-1 Item 3 — client-supplied `confidence < LOW_CONFIDENCE_THRESHOLD`. `details` carries `{device_name, brand, model, confidence, threshold}`. iOS maps to `ResolveFromSearchOutcome.needsConfirmation` and presents the `ConfirmationPromptView` sheet. |
+| 422 | `RECOMMEND_INSUFFICIENT_DATA` | `/recommend` | Fewer than 2 eligible retailer prices. iOS maps to `RecommendationState.insufficientData(reason:)` and renders `InsufficientRecommendationCard` at the hero slot (retailer grid below stays populated from SSE) — demo-prep-1 Item 1. |
 
 ---
 
@@ -300,7 +313,8 @@ All AI calls request JSON output. Use Instructor library for Pydantic model vali
 | GET | /api/v1/health | core | Health check (DB + Redis connectivity) | Exempt |
 | POST | /api/v1/products/resolve | M1 | UPC/barcode → product (Gemini API, UPCitemdb backup) | 60/min |
 | POST | /api/v1/products/search | M1 | **Step 3a + 3c** — Text query → ranked product list via 3-tier cascade. Normalize → 24h Redis cache (`search:query:{sha256[:16]}:{n}`) → Tier 1 `pg_trgm` fuzzy match (`idx_products_name_trgm`, similarity ≥ 0.3). When DB sparse: Tier 2 fires Best Buy Products API + UPCitemdb keyword search in parallel via `asyncio.gather` (~150-300 ms total wall time, both ephemeral, neither persists). Tier 3 (Gemini grounded) only when both Tier 2 sources returned 0 OR when the request includes `force_gemini=true` (deep search). Brand-only queries ("apple", "sony") skip Tier 2 entirely and route straight to Gemini — Tier 2 floods with accessories/warranties on bare brand names. Variant collapse strips spec tokens (color/storage/carrier) the user didn't type, groups SKU rows by stripped name, and prepends a synthetic `source="generic"` row at the top of each multi-variant bucket. `force_gemini=true` also bypasses the cache and partitions Gemini rows to the front. Returns `ProductSearchResponse { query, results[], total_results, cached }` with `result.source ∈ {db, best_buy, upcitemdb, gemini, generic}`. | 60/min |
-| POST | /api/v1/products/resolve-from-search | M1 | **Step 3a + 3c + 3c-hardening** — Tap-time UPC resolution for ephemeral search rows (BBY/UPCitemdb/Gemini/generic, no `product_id`). **Resolution order (3c-hardening):** (0) Redis device→UPC cache check (`product:devupc:<sha1(normalized name + brand)>`, 24h TTL — short-circuits both network calls on retries when UPCitemdb's shared-IP trial endpoint is rate-limited), (1) targeted Gemini device→UPC, (2) on null, UPCitemdb keyword search filtered by brand match + ≥4-char title token overlap. On any successful resolve, the `(name, brand) → UPC` mapping is cached. Then delegates to `/resolve` for standard cross-validation + persistence. Eliminates the "Couldn't find a barcode" failure mode for products where Gemini refuses to commit (e.g. iPhone 16 — multi-variant Apple SKUs). | 60/min |
+| POST | /api/v1/products/resolve-from-search | M1 | **Step 3a + 3c + 3c-hardening + demo-prep-1** — Tap-time UPC resolution for ephemeral search rows (BBY/UPCitemdb/Gemini/generic, no `product_id`). **Resolution order (3c-hardening):** (0) Redis device→UPC cache check (`product:devupc:<sha1(normalized name + brand)>`, 24h TTL — short-circuits both network calls on retries when UPCitemdb's shared-IP trial endpoint is rate-limited), (1) targeted Gemini device→UPC, (2) on null, UPCitemdb keyword search filtered by brand match + ≥4-char title token overlap. On any successful resolve, the `(name, brand) → UPC` mapping is cached. Then delegates to `/resolve` for standard cross-validation + persistence. **demo-prep-1 Item 3:** request body accepts optional `confidence: float`. When `confidence < settings.LOW_CONFIDENCE_THRESHOLD` (default 0.70, env-tunable) the endpoint returns 409 `RESOLUTION_NEEDS_CONFIRMATION` BEFORE any Gemini/UPCitemdb call (zero AI-credit cost on rejection). Client forwards the search-row confidence unchanged; omitting the field preserves pre-pack behavior. | 60/min |
+| POST | /api/v1/products/resolve-from-search/confirm | M1 | **demo-prep-1 Item 3** — Companion to the 409 gate on `/resolve-from-search`. Called by the iOS `ConfirmationPromptView` sheet with `{device_name, brand, model, user_confirmed: bool, query: str}`. On `user_confirmed=true`: runs the standard resolution path (bypassing the gate by construction — this endpoint has no gate) + marks `Product.source_raw.user_confirmed=True` so repeat scans skip the dialog; returns `{product, logged: true}`. On `user_confirmed=false`: logs rejection telemetry (threshold-tuning signal) and returns `{product: null, logged: true}`. `query` is optional and surfaces in server logs only. | 60/min |
 | GET | /api/v1/prices/{product_id} | M2 | Batch price comparison across all 9 active retailers (blocks until every retailer completes; retired lowes + sams_club no longer dispatched) | 60/min |
 | GET | /api/v1/prices/{product_id}/stream | M2 | **Step 2c + 3c + 3c-hardening** — SSE stream of per-retailer results using `asyncio.as_completed`. Each retailer yields a `retailer_result` event the moment it finishes, terminated by a `done` event. Cache hit replays all events instantly. `?force_refresh=true` bypasses cache. **`?query=<override>`** replaces both the search query and the per-container product_name hint with the override string — sent by iOS when the user taps a generic search row so retailers search the bare generic name (e.g. "PlayStation 5") instead of the resolved variant's SKU title. **3c-hardening:** override runs now write to a SCOPED Redis key `prices:product:{id}:q:<sha1(query)>` (30 min TTL, namespace-disjoint from the bare product key) so consecutive taps of the same "Any variant" row replay the same response instead of re-rolling Decodo IP rotation + retailer ranking variance. SKU-resolved runs and override runs cannot pollute each other's caches. | 60/min |
 
