@@ -28,9 +28,18 @@ final class SearchViewModel {
     /// otherwise.
     var suggestions: [String] = []
 
-    /// Set by `handleResultTap` when a Gemini result lacks a primary UPC —
-    /// the view surfaces this as a toast so the user knows to scan instead.
+    /// Set by `handleResultTap` when a Gemini result lacks a primary UPC
+    /// or when the fallback yields a structural error (not a backend 404).
+    /// The view surfaces this as a toast. Clean 404s route to
+    /// `unresolvedAfterTap` instead (demo-prep-1 Item 2).
     var resolveFailureMessage: String?
+
+    /// demo-prep-1 Item 2: set when BOTH the UPC path and the
+    /// description-based fallback return 404 — "Barkain hasn't indexed
+    /// this product yet." Surfaced INLINE via `UnresolvedProductView`
+    /// rather than a toast-then-forget alert, so the user gets a clear
+    /// next-step (scan, or try a different search).
+    var unresolvedAfterTap: Bool = false
 
     /// Present after a successful tap — the `PriceComparisonView` is driven
     /// by this ScannerViewModel (same destination as the Scanner tab uses).
@@ -211,6 +220,7 @@ final class SearchViewModel {
         recordRecent(query)
         error = nil
         resolveFailureMessage = nil
+        unresolvedAfterTap = false
 
         switch result.source {
         case .db:
@@ -238,15 +248,24 @@ final class SearchViewModel {
                 let override: String? = result.source == .generic ? result.deviceName : nil
                 await presentProduct(product, queryOverride: override)
             } catch APIError.notFound {
-                // Even the description-based fallback failed. Usually means
-                // Gemini invented the product entirely; suggest a retry.
-                resolveFailureMessage = "We couldn't pull details for this result. Try a different search term, or scan the barcode directly."
+                // demo-prep-1 Item 2: both UPC path and the description
+                // fallback 404'd. Route to the inline unresolved-product
+                // view (dedicated copy + CTAs) instead of the legacy
+                // toast which dismissed back to the same search state.
+                searchLog.info("handleResultTap: unresolved after tap — surfacing inline view. query=\(self.query, privacy: .public) deviceName=\(result.deviceName, privacy: .public)")
+                unresolvedAfterTap = true
             } catch let apiError as APIError {
                 error = apiError
             } catch {
                 self.error = .unknown(0, error.localizedDescription)
             }
         }
+    }
+
+    /// Called by the inline `UnresolvedProductView`'s "Try a different search"
+    /// CTA. Clears the unresolved state so the search results re-render.
+    func dismissUnresolvedAfterTap() {
+        unresolvedAfterTap = false
     }
 
     /// Resolve a tapped search result to a `Product`. Prefers UPC lookup when

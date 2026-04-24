@@ -43,3 +43,31 @@ extension EnvironmentValues {
         set { self[RecentlyScannedKey.self] = newValue }
     }
 }
+
+// MARK: - Tab Selection (demo-prep-1 Item 2)
+//
+// Lightweight cross-tab navigation. Child views that need to jump the user
+// to Scan or Search tap these closures; the root `ContentView` binds them
+// to its `selection` state. Unbound closures are no-ops — direct
+// NavigationStack instantiations (previews, standalone NavigationStack
+// hosts) just ignore the tab-switch request. Also unblocks the
+// "pill → Profile cross-tab nav" TODO noted in What's Next.
+
+struct TabSelectionAction: Sendable {
+    var onScan: @MainActor () -> Void
+    var onSearch: @MainActor () -> Void
+    var onProfile: @MainActor () -> Void
+
+    static let noop = TabSelectionAction(onScan: {}, onSearch: {}, onProfile: {})
+}
+
+private struct TabSelectionActionKey: EnvironmentKey {
+    static let defaultValue: TabSelectionAction = .noop
+}
+
+extension EnvironmentValues {
+    var tabSelection: TabSelectionAction {
+        get { self[TabSelectionActionKey.self] }
+        set { self[TabSelectionActionKey.self] = newValue }
+    }
+}

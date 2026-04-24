@@ -228,6 +228,25 @@ final class ScannerViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.priceComparison)
     }
 
+    func test_handleBarcodeScan_notFound_setsNotFoundErrorForUnresolvedView() async {
+        // demo-prep-1 Item 2: ScannerView branches on `error == .notFound`
+        // to render `UnresolvedProductView` instead of the generic error
+        // card. Verify the VM actually preserves the `.notFound` variant
+        // (previous silent-handback bug was generic .validation("...")
+        // wrapping lossy envelope decoding, so this is the load-bearing
+        // precondition for the graceful 404 UX).
+        mockClient.resolveProductResult = .failure(.notFound)
+
+        await viewModel.handleBarcodeScan(upc: "000000000000")
+
+        XCTAssertEqual(viewModel.error, .notFound,
+                       "error must be exactly .notFound so ScannerView renders UnresolvedProductView")
+        XCTAssertNil(viewModel.product,
+                     "no product should be set when resolve fails")
+        XCTAssertFalse(viewModel.isLoading,
+                       "loading must settle so the VM transitions into the error branch")
+    }
+
     // MARK: - Streaming Tests (Step 2c)
 
     private func makePriceUpdate(

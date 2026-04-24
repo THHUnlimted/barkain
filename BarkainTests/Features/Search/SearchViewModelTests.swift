@@ -263,7 +263,13 @@ final class SearchViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.resolveFailureMessage)
     }
 
-    func test_handleResultTap_geminiSource_noUPC_backend404_showsToast() async {
+    func test_handleResultTap_geminiSource_noUPC_backend404_setsUnresolvedInline() async {
+        // demo-prep-1 Item 2: 404 on resolve-from-search now routes to the
+        // dedicated inline `UnresolvedProductView` via `unresolvedAfterTap`,
+        // replacing the former alert-toast path (which dismissed back to
+        // the same search-results state with no next step). The alert
+        // branch remains for structural failures (e.g. DB row missing
+        // productId) — only clean backend 404s land here.
         mockClient.resolveFromSearchResult = .failure(.notFound)
         let result = ProductSearchResult(
             deviceName: "Unknown Mystery Gadget", model: nil, brand: nil,
@@ -274,8 +280,29 @@ final class SearchViewModelTests: XCTestCase {
         await viewModel.handleResultTap(result)
 
         XCTAssertEqual(mockClient.resolveFromSearchCallCount, 1)
-        XCTAssertNotNil(viewModel.resolveFailureMessage)
+        XCTAssertTrue(viewModel.unresolvedAfterTap,
+                      "404 on resolve-from-search must set unresolvedAfterTap so SearchView renders the inline UnresolvedProductView")
+        XCTAssertNil(viewModel.resolveFailureMessage,
+                     "legacy toast message must stay nil — that path is reserved for structural failures only")
         XCTAssertNil(viewModel.presentedProductViewModel)
+    }
+
+    func test_dismissUnresolvedAfterTap_clearsStateForRetry() async {
+        // demo-prep-1 Item 2: the "Try a different search" CTA must clear
+        // the unresolved state so the user can refine their query and
+        // see search results again.
+        mockClient.resolveFromSearchResult = .failure(.notFound)
+        let result = ProductSearchResult(
+            deviceName: "Unknown Mystery Gadget", model: nil, brand: nil,
+            category: nil, confidence: 0.3, primaryUpc: nil,
+            source: .gemini, productId: nil, imageUrl: nil
+        )
+        await viewModel.handleResultTap(result)
+        XCTAssertTrue(viewModel.unresolvedAfterTap)
+
+        viewModel.dismissUnresolvedAfterTap()
+
+        XCTAssertFalse(viewModel.unresolvedAfterTap)
     }
 
     // MARK: - Clear
