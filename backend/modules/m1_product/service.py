@@ -146,6 +146,29 @@ class ProductResolutionService:
         await self._cache_devupc(cache_key, upc)
         return await self.resolve(upc)
 
+    async def resolve_from_search_confirmed(
+        self,
+        device_name: str,
+        brand: str | None = None,
+        model: str | None = None,
+    ) -> Product:
+        """demo-prep-1 Item 3: resolve a low-confidence tap that the user
+        confirmed in the ``ConfirmationPromptView`` sheet. Runs the same
+        resolution path as :meth:`resolve_from_search`, then tags the
+        persisted ``Product.source_raw.user_confirmed = True`` so repeat
+        scans of the same canonical product skip the dialog in the
+        future (the confidence check lives in the router layer, which
+        only fires when the client supplies ``confidence`` — future
+        scans won't need a gate because we trust the confirmed row).
+        """
+        product = await self.resolve_from_search(device_name, brand=brand, model=model)
+        raw = dict(product.source_raw) if isinstance(product.source_raw, dict) else {}
+        if not raw.get("user_confirmed"):
+            raw["user_confirmed"] = True
+            product.source_raw = raw
+            await self.db.flush()
+        return product
+
     @staticmethod
     def _devupc_cache_key(device_name: str, brand: str | None) -> str:
         """Build a stable Redis key from a (device_name, brand) pair.

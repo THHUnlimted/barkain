@@ -13,7 +13,8 @@ nonisolated enum HTTPMethod: String {
 
 nonisolated enum Endpoint {
     case resolveProduct(upc: String)
-    case resolveFromSearch(deviceName: String, brand: String?, model: String?)
+    case resolveFromSearch(deviceName: String, brand: String?, model: String?, confidence: Double?)
+    case resolveFromSearchConfirm(ResolveFromSearchConfirmRequest)
     case searchProducts(query: String, maxResults: Int, forceGemini: Bool)
     case getPrices(productId: UUID, forceRefresh: Bool = false)
     case streamPrices(
@@ -52,6 +53,8 @@ nonisolated enum Endpoint {
             return "/api/v1/products/resolve"
         case .resolveFromSearch:
             return "/api/v1/products/resolve-from-search"
+        case .resolveFromSearchConfirm:
+            return "/api/v1/products/resolve-from-search/confirm"
         case .searchProducts:
             return "/api/v1/products/search"
         case .getPrices(let productId, _):
@@ -91,7 +94,8 @@ nonisolated enum Endpoint {
 
     var method: HTTPMethod {
         switch self {
-        case .resolveProduct, .resolveFromSearch, .searchProducts, .updateIdentityProfile,
+        case .resolveProduct, .resolveFromSearch, .resolveFromSearchConfirm,
+             .searchProducts, .updateIdentityProfile,
              .addCard, .setCardCategories, .getAffiliateURL, .getRecommendation,
              .resolveFbLocation:
             return .post
@@ -139,15 +143,25 @@ nonisolated enum Endpoint {
         switch self {
         case .resolveProduct(let upc):
             return try? JSONEncoder().encode(["upc": upc])
-        case .resolveFromSearch(let deviceName, let brand, let model):
+        case .resolveFromSearch(let deviceName, let brand, let model, let confidence):
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase
             struct Body: Encodable {
                 let deviceName: String
                 let brand: String?
                 let model: String?
+                let confidence: Double?
             }
-            return try? encoder.encode(Body(deviceName: deviceName, brand: brand, model: model))
+            return try? encoder.encode(Body(
+                deviceName: deviceName,
+                brand: brand,
+                model: model,
+                confidence: confidence
+            ))
+        case .resolveFromSearchConfirm(let request):
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            return try? encoder.encode(request)
         case .searchProducts(let query, let maxResults, let forceGemini):
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase

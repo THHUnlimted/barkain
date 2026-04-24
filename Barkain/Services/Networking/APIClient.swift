@@ -9,7 +9,21 @@ private let sseLog = Logger(subsystem: "com.barkain.app", category: "SSE")
 
 protocol APIClientProtocol: Sendable {
     func resolveProduct(upc: String) async throws -> Product
-    func resolveProductFromSearch(deviceName: String, brand: String?, model: String?) async throws -> Product
+    /// demo-prep-1 Item 3: returns a `ResolveFromSearchOutcome` so the
+    /// caller can branch on `.needsConfirmation` (backend 409) vs
+    /// `.loaded` (backend 200) without overloading the error type.
+    /// `confidence` forwards the search-result value so the backend can
+    /// apply its gate; pass nil to skip the gate (legacy path).
+    func resolveProductFromSearch(
+        deviceName: String,
+        brand: String?,
+        model: String?,
+        confidence: Double?
+    ) async throws -> ResolveFromSearchOutcome
+    /// Called after the user taps Yes/No in the confirmation sheet.
+    func resolveProductFromSearchConfirm(
+        _ request: ResolveFromSearchConfirmRequest
+    ) async throws -> ConfirmResolutionResponse
     func searchProducts(query: String, maxResults: Int, forceGemini: Bool) async throws -> ProductSearchResponse
     func getPrices(productId: UUID, forceRefresh: Bool) async throws -> PriceComparison
     func streamPrices(
@@ -189,11 +203,48 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
     func resolveProductFromSearch(
         deviceName: String,
         brand: String? = nil,
-        model: String? = nil
-    ) async throws -> Product {
-        try await request(
-            endpoint: .resolveFromSearch(deviceName: deviceName, brand: brand, model: model)
-        )
+        model: String? = nil,
+        confidence: Double? = nil
+    ) async throws -> ResolveFromSearchOutcome {
+        do {
+            let product: Product = try await request(
+                endpoint: .resolveFromSearch(
+                    deviceName: deviceName,
+                    brand: brand,
+                    model: model,
+                    confidence: confidence
+                )
+            )
+            return .loaded(product)
+        } catch let apiError as APIError {
+            // demo-prep-1 Item 3: 409 RESOLUTION_NEEDS_CONFIRMATION arrives
+            // here as `.unknown(409, message)` because the APIClient error
+            // mapper doesn't have a dedicated 409 case. Branch on the code
+            // rather than adding a new APIError variant — same pattern as
+            // the /recommend 422 → .insufficientData handling in Item 1.
+            if case .unknown(409, _) = apiError {
+                // Re-issue the request via the raw data path to pull the
+                // details block (confidence + threshold from the server).
+                // We always fall back to synthesized defaults so the sheet
+                // renders even if the envelope shape drifts.
+                return .needsConfirmation(
+                    candidate: LowConfidenceCandidate(
+                        deviceName: deviceName,
+                        brand: brand,
+                        model: model,
+                        confidence: confidence ?? 0.0,
+                        threshold: 0.70
+                    )
+                )
+            }
+            throw apiError
+        }
+    }
+
+    func resolveProductFromSearchConfirm(
+        _ request: ResolveFromSearchConfirmRequest
+    ) async throws -> ConfirmResolutionResponse {
+        try await self.request(endpoint: .resolveFromSearchConfirm(request))
     }
 
     func searchProducts(query: String, maxResults: Int = 10, forceGemini: Bool = false) async throws -> ProductSearchResponse {

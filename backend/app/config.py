@@ -142,6 +142,15 @@ class Settings(BaseSettings):
     # noisy on used categories (laptops, phones).
     M2_EBAY_DROP_PARTIAL_LISTINGS: bool = False
 
+    # demo-prep-1 Item 3: confidence gate on /resolve-from-search. When the
+    # client-supplied search-result confidence falls below this threshold,
+    # the endpoint returns 409 RESOLUTION_NEEDS_CONFIRMATION instead of
+    # silently resolving the best-guess. The iOS client then renders a
+    # confirmation sheet and re-calls the `/resolve-from-search/confirm`
+    # endpoint on user affirmation. Env-tunable so demo-week can dial it
+    # down to 0.50 if F&F are hitting the dialog too often.
+    LOW_CONFIDENCE_THRESHOLD: float = 0.70
+
     # Best Buy Products API key. When set, the best_buy retailer leg is served
     # from the Products API (~150 ms per call) instead of the browser-container
     # scraper (~80–90 s). Same fallback pattern as EBAY_APP_ID — missing key

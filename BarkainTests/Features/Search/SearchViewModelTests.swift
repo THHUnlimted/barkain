@@ -305,6 +305,105 @@ final class SearchViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.unresolvedAfterTap)
     }
 
+    // MARK: - demo-prep-1 Item 3: Low-confidence confirmation
+
+    func test_handleResultTap_low_confidence_setsPendingConfirmation() async {
+        // Backend returns 409 RESOLUTION_NEEDS_CONFIRMATION → VM sets
+        // pendingConfirmation with primary + up to 2 alternatives from the
+        // in-memory results list, and does NOT present a product.
+        let primary = ProductSearchResult(
+            deviceName: "Mystery Gadget Pro", model: nil, brand: "Mystery",
+            category: nil, confidence: 0.42, primaryUpc: nil,
+            source: .gemini, productId: nil, imageUrl: nil
+        )
+        let alt1 = ProductSearchResult(
+            deviceName: "Mystery Gadget Plus", model: nil, brand: "Mystery",
+            category: nil, confidence: 0.35, primaryUpc: nil,
+            source: .gemini, productId: nil, imageUrl: nil
+        )
+        let alt2 = ProductSearchResult(
+            deviceName: "Mystery Gadget", model: nil, brand: "Mystery",
+            category: nil, confidence: 0.30, primaryUpc: nil,
+            source: .gemini, productId: nil, imageUrl: nil
+        )
+        viewModel.results = [primary, alt1, alt2]
+        mockClient.resolveFromSearchResult = .success(
+            .needsConfirmation(
+                candidate: LowConfidenceCandidate(
+                    deviceName: primary.deviceName,
+                    brand: primary.brand,
+                    model: primary.model,
+                    confidence: 0.42,
+                    threshold: 0.70
+                )
+            )
+        )
+
+        await viewModel.handleResultTap(primary)
+
+        XCTAssertNotNil(viewModel.pendingConfirmation,
+                        "low-confidence tap must set pendingConfirmation so SearchView presents the sheet")
+        XCTAssertEqual(viewModel.pendingConfirmation?.primary.deviceName, "Mystery Gadget Pro")
+        XCTAssertEqual(viewModel.pendingConfirmation?.alternatives.count, 2,
+                       "alternatives are pulled from the VM's current results list")
+        XCTAssertEqual(viewModel.pendingConfirmation?.threshold, 0.70)
+        XCTAssertNil(viewModel.presentedProductViewModel,
+                     "no product should be presented before the user confirms")
+        // Confidence must be forwarded to the backend so the gate can fire.
+        XCTAssertEqual(mockClient.resolveFromSearchLastConfidence, 0.42)
+    }
+
+    func test_confirmResolution_callsConfirmEndpoint_andPresentsProduct() async {
+        // After the user taps "Yes, that's it" the VM must call the /confirm
+        // endpoint with user_confirmed=true and present the returned product.
+        let pick = ProductSearchResult(
+            deviceName: "Mystery Gadget Pro", model: nil, brand: "Mystery",
+            category: nil, confidence: 0.42, primaryUpc: nil,
+            source: .gemini, productId: nil, imageUrl: nil
+        )
+        viewModel.query = "mystery"
+        viewModel.pendingConfirmation = SearchViewModel.PendingConfirmation(
+            primary: pick, alternatives: [], threshold: 0.70
+        )
+        mockClient.resolveFromSearchConfirmResult = .success(
+            ConfirmResolutionResponse(product: TestFixtures.sampleProduct, logged: true)
+        )
+
+        await viewModel.confirmResolution(for: pick)
+
+        XCTAssertEqual(mockClient.resolveFromSearchConfirmCallCount, 1)
+        XCTAssertEqual(mockClient.resolveFromSearchConfirmLastRequest?.userConfirmed, true)
+        XCTAssertEqual(mockClient.resolveFromSearchConfirmLastRequest?.deviceName, "Mystery Gadget Pro")
+        XCTAssertEqual(mockClient.resolveFromSearchConfirmLastRequest?.query, "mystery",
+                       "query passes through for server-side telemetry")
+        XCTAssertNil(viewModel.pendingConfirmation,
+                     "sheet must be dismissed after commit")
+        XCTAssertNotNil(viewModel.presentedProductViewModel,
+                        "confirmed product flows into the ScannerViewModel presentation")
+    }
+
+    func test_rejectResolution_logsRejection_andClearsState() async {
+        // "Not quite — let me search again" → call /confirm with
+        // user_confirmed=false for telemetry, clear pendingConfirmation.
+        let primary = ProductSearchResult(
+            deviceName: "Mystery Gadget Pro", model: nil, brand: "Mystery",
+            category: nil, confidence: 0.42, primaryUpc: nil,
+            source: .gemini, productId: nil, imageUrl: nil
+        )
+        viewModel.query = "mystery"
+        viewModel.pendingConfirmation = SearchViewModel.PendingConfirmation(
+            primary: primary, alternatives: [], threshold: 0.70
+        )
+
+        await viewModel.rejectResolution()
+
+        XCTAssertEqual(mockClient.resolveFromSearchConfirmCallCount, 1)
+        XCTAssertEqual(mockClient.resolveFromSearchConfirmLastRequest?.userConfirmed, false,
+                       "rejection must still fire the endpoint so threshold-tuning telemetry lands")
+        XCTAssertNil(viewModel.pendingConfirmation)
+        XCTAssertNil(viewModel.presentedProductViewModel)
+    }
+
     // MARK: - Clear
 
     func test_clearRecentSearches_emptiesMirrorAndStorage() async {

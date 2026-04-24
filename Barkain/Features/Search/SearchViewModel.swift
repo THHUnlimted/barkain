@@ -41,6 +41,31 @@ final class SearchViewModel {
     /// next-step (scan, or try a different search).
     var unresolvedAfterTap: Bool = false
 
+    /// demo-prep-1 Item 3: set when the backend returns 409
+    /// RESOLUTION_NEEDS_CONFIRMATION on `/resolve-from-search`. Carries
+    /// the in-memory candidate bundle the confirmation sheet renders
+    /// (the tapped row as the primary pick plus up to two alternative
+    /// rows the user can switch to). Nil when no dialog is open.
+    var pendingConfirmation: PendingConfirmation?
+
+    /// The tapped row that a currently-open confirmation sheet will
+    /// commit via `/resolve-from-search/confirm` if the user taps "Yes".
+    /// Owned separately from `pendingConfirmation.primary` so the sheet's
+    /// state can change without losing the user's original pick (the
+    /// sheet lets users switch between alternatives before confirming).
+    struct PendingConfirmation: Sendable, Equatable {
+        /// The row the user originally tapped.
+        let primary: ProductSearchResult
+        /// Up to 2 alternative rows pulled from the current search
+        /// results. May be empty when the results list only contains the
+        /// primary pick.
+        let alternatives: [ProductSearchResult]
+        /// Backend's confidence threshold at the time of the 409 — passed
+        /// through so the sheet can show "we're only 55% sure" copy
+        /// against the 70% bar.
+        let threshold: Double
+    }
+
     /// Present after a successful tap — the `PriceComparisonView` is driven
     /// by this ScannerViewModel (same destination as the Scanner tab uses).
     var presentedProductViewModel: ScannerViewModel?
@@ -221,6 +246,7 @@ final class SearchViewModel {
         error = nil
         resolveFailureMessage = nil
         unresolvedAfterTap = false
+        pendingConfirmation = nil
 
         switch result.source {
         case .db:
@@ -244,9 +270,27 @@ final class SearchViewModel {
             isLoading = true
             defer { isLoading = false }
             do {
-                let product = try await resolveTappedResult(result)
-                let override: String? = result.source == .generic ? result.deviceName : nil
-                await presentProduct(product, queryOverride: override)
+                let outcome = try await resolveTappedResult(result)
+                switch outcome {
+                case .loaded(let product):
+                    let override: String? = result.source == .generic ? result.deviceName : nil
+                    await presentProduct(product, queryOverride: override)
+                case .needsConfirmation(let candidate):
+                    // demo-prep-1 Item 3: backend gated on low confidence.
+                    // Build the sheet payload from the current results —
+                    // the primary is the tapped row; alternatives are the
+                    // next two non-DB rows (DB rows don't need confirmation
+                    // since they route through the direct path above).
+                    searchLog.info("handleResultTap: needs confirmation — confidence=\(candidate.confidence, privacy: .public) threshold=\(candidate.threshold, privacy: .public)")
+                    let alternatives = results
+                        .filter { $0.deviceName != result.deviceName && $0.source != .db }
+                        .prefix(2)
+                    pendingConfirmation = PendingConfirmation(
+                        primary: result,
+                        alternatives: Array(alternatives),
+                        threshold: candidate.threshold
+                    )
+                }
             } catch APIError.notFound {
                 // demo-prep-1 Item 2: both UPC path and the description
                 // fallback 404'd. Route to the inline unresolved-product
@@ -262,21 +306,85 @@ final class SearchViewModel {
         }
     }
 
+    /// demo-prep-1 Item 3: called by the confirmation sheet's "Yes" CTA.
+    /// Commits the user's pick via `/resolve-from-search/confirm` and
+    /// presents the resolved product, or surfaces a structural failure
+    /// through `resolveFailureMessage`. The sheet is dismissed before
+    /// this runs so the user sees the LoadingState briefly.
+    func confirmResolution(for pick: ProductSearchResult) async {
+        let queryForTelemetry = query
+        pendingConfirmation = nil
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let response = try await apiClient.resolveProductFromSearchConfirm(
+                ResolveFromSearchConfirmRequest(
+                    deviceName: pick.deviceName,
+                    brand: pick.brand,
+                    model: pick.model,
+                    userConfirmed: true,
+                    query: queryForTelemetry
+                )
+            )
+            if let product = response.product {
+                let override: String? = pick.source == .generic ? pick.deviceName : nil
+                await presentProduct(product, queryOverride: override)
+            } else {
+                // Defensive — backend is contractually required to return
+                // a product on user_confirmed=true unless resolution fails
+                // outright. Treat an empty product as an unresolved-after-tap.
+                unresolvedAfterTap = true
+            }
+        } catch APIError.notFound {
+            unresolvedAfterTap = true
+        } catch let apiError as APIError {
+            error = apiError
+        } catch {
+            self.error = .unknown(0, error.localizedDescription)
+        }
+    }
+
+    /// demo-prep-1 Item 3: called by the sheet's "No" CTA. Logs the
+    /// rejection via `/confirm` (with user_confirmed=false) for server-
+    /// side threshold-tuning telemetry, then clears the sheet state so
+    /// the user returns to the search results with a fresh slate.
+    func rejectResolution() async {
+        guard let pending = pendingConfirmation else { return }
+        let rejectedQuery = query
+        pendingConfirmation = nil
+        // Fire-and-forget telemetry — failures here are non-fatal.
+        do {
+            _ = try await apiClient.resolveProductFromSearchConfirm(
+                ResolveFromSearchConfirmRequest(
+                    deviceName: pending.primary.deviceName,
+                    brand: pending.primary.brand,
+                    model: pending.primary.model,
+                    userConfirmed: false,
+                    query: rejectedQuery
+                )
+            )
+        } catch {
+            searchLog.warning("confirm-reject telemetry failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     /// Called by the inline `UnresolvedProductView`'s "Try a different search"
     /// CTA. Clears the unresolved state so the search results re-render.
     func dismissUnresolvedAfterTap() {
         unresolvedAfterTap = false
     }
 
-    /// Resolve a tapped search result to a `Product`. Prefers UPC lookup when
-    /// available; falls back to the description-based endpoint on 404, which
-    /// re-runs a targeted device→UPC derivation on the backend. Gemini often
-    /// returns hallucinated UPCs that fail the UPC path — this fallback lets
-    /// those results still resolve via the device_name/brand/model signal.
-    private func resolveTappedResult(_ result: ProductSearchResult) async throws -> Product {
+    /// Resolve a tapped search result to either a loaded Product or a
+    /// `.needsConfirmation` outcome. Prefers UPC lookup when available;
+    /// falls back to the description-based endpoint on 404. Forwards the
+    /// row's `confidence` so the backend can apply the demo-prep-1 Item 3
+    /// gate. UPC path hits never trigger the confidence gate — they
+    /// return loaded or 404.
+    private func resolveTappedResult(_ result: ProductSearchResult) async throws -> ResolveFromSearchOutcome {
         if let upc = result.primaryUpc, !upc.isEmpty {
             do {
-                return try await apiClient.resolveProduct(upc: upc)
+                let product = try await apiClient.resolveProduct(upc: upc)
+                return .loaded(product)
             } catch APIError.notFound {
                 // UPC path failed — fall through to description-based resolve.
             }
@@ -284,7 +392,8 @@ final class SearchViewModel {
         return try await apiClient.resolveProductFromSearch(
             deviceName: result.deviceName,
             brand: result.brand,
-            model: result.model
+            model: result.model,
+            confidence: result.confidence
         )
     }
 

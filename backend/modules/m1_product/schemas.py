@@ -70,13 +70,61 @@ class ResolveFromSearchRequest(BaseModel):
     ``primary_upc=null``. The backend runs a targeted Gemini device→UPC
     lookup and then delegates to the normal ``/resolve`` path so the product
     is persisted and returned in the same shape as ``/resolve``.
+
+    demo-prep-1 Item 3 adds a confidence gate: the client forwards the
+    search-result's ``confidence`` so the server can short-circuit with
+    409 RESOLUTION_NEEDS_CONFIRMATION when the value falls below
+    ``settings.LOW_CONFIDENCE_THRESHOLD``. Omit or set to None to skip
+    the gate (preserves pre-demo-prep-1 behavior for any client that
+    hasn't adopted the confidence field yet).
     """
 
     device_name: str = Field(..., min_length=3, max_length=300)
     brand: str | None = Field(default=None, max_length=120)
     model: str | None = Field(default=None, max_length=120)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
     model_config = {"protected_namespaces": ()}
+
+
+class ResolveFromSearchConfirmRequest(BaseModel):
+    """Request body for POST /api/v1/products/resolve-from-search/confirm.
+
+    Called by the iOS client after the user has either confirmed or
+    rejected a low-confidence resolution in the ``ConfirmationPromptView``
+    sheet. On ``user_confirmed=true`` the backend runs the normal
+    resolution path AND marks ``Product.source_raw.user_confirmed=True``
+    so future scans of the same canonical product skip the dialog. On
+    ``user_confirmed=false`` the backend just logs telemetry and returns
+    an empty 200 (the client surface has already closed the sheet).
+
+    ``query`` carries the original search string so telemetry can
+    attribute confirmations / rejections back to a specific search —
+    valuable signal for tuning ``LOW_CONFIDENCE_THRESHOLD``.
+    """
+
+    device_name: str = Field(..., min_length=3, max_length=300)
+    brand: str | None = Field(default=None, max_length=120)
+    model: str | None = Field(default=None, max_length=120)
+    user_confirmed: bool
+    query: str | None = Field(default=None, max_length=300)
+
+    model_config = {"protected_namespaces": ()}
+
+
+class ConfirmResolutionResponse(BaseModel):
+    """Response body for POST /api/v1/products/resolve-from-search/confirm.
+
+    When ``user_confirmed=true`` at the request layer, ``product`` carries
+    the resolved canonical product (same shape as ``ProductResponse``).
+    When ``user_confirmed=false``, ``product`` is None and the client
+    re-opens search. Collapsing the two response shapes into one optional
+    field keeps the client-side decoder simple at the cost of a nullable
+    field — worth it for fewer branches on both sides.
+    """
+
+    product: ProductResponse | None = None
+    logged: bool = True
 
 
 class ProductSearchResult(BaseModel):

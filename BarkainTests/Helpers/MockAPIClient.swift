@@ -8,7 +8,15 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     // MARK: - Configurable Results
 
     var resolveProductResult: Result<Product, APIError> = .success(TestFixtures.sampleProduct)
-    var resolveFromSearchResult: Result<Product, APIError> = .success(TestFixtures.sampleProduct)
+    var resolveFromSearchResult: Result<ResolveFromSearchOutcome, APIError> = .success(
+        .loaded(TestFixtures.sampleProduct)
+    )
+    var resolveFromSearchConfirmResult: Result<ConfirmResolutionResponse, APIError> = .success(
+        ConfirmResolutionResponse(product: TestFixtures.sampleProduct, logged: true)
+    )
+    var resolveFromSearchConfirmCallCount = 0
+    var resolveFromSearchConfirmLastRequest: ResolveFromSearchConfirmRequest?
+    var resolveFromSearchLastConfidence: Double?
     var searchProductsResult: Result<ProductSearchResponse, APIError> = .success(
         ProductSearchResponse(query: "", results: [], totalResults: 0, cached: false)
     )
@@ -146,13 +154,23 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     func resolveProductFromSearch(
         deviceName: String,
         brand: String?,
-        model: String?
-    ) async throws -> Product {
+        model: String?,
+        confidence: Double?
+    ) async throws -> ResolveFromSearchOutcome {
         resolveFromSearchCallCount += 1
         resolveFromSearchLastDeviceName = deviceName
         resolveFromSearchLastBrand = brand
         resolveFromSearchLastModel = model
+        resolveFromSearchLastConfidence = confidence
         return try resolveFromSearchResult.get()
+    }
+
+    func resolveProductFromSearchConfirm(
+        _ request: ResolveFromSearchConfirmRequest
+    ) async throws -> ConfirmResolutionResponse {
+        resolveFromSearchConfirmCallCount += 1
+        resolveFromSearchConfirmLastRequest = request
+        return try resolveFromSearchConfirmResult.get()
     }
 
     func searchProducts(query: String, maxResults: Int, forceGemini: Bool) async throws -> ProductSearchResponse {
