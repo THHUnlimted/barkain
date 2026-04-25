@@ -1179,3 +1179,219 @@ def test_pick_best_listing_price_outlier_filter_drops_keycaps():
     assert best is not None
     assert best.price >= 40.0
     assert "keycap" not in best.title.lower()
+
+
+# --- interstitial-parity-1 follow-up: FB Marketplace listing-level model
+# strictness. Pre-fix the soft gate capped score at 0.5 but the underlying
+# 0.4 RELEVANCE_THRESHOLD let drip-tray / accessory listings (overlap ≈ 0.5
+# with brand + 2-3 generic tokens) survive — Breville BES870XL espresso
+# machine ($499 retail) showed $18.95 hero on FB drip-tray; Weber Q1200
+# ($199) showed $15.99 on grill-cover. Fix: when soft gate is active,
+# require raw token overlap >= 0.6 before the cap.
+
+
+def test_fb_soft_gate_rejects_drip_tray_when_model_missing():
+    """Breville drip-tray listing — shares brand + generic tokens but lacks
+    the distinguishing 'Barista'/'Express' tokens. Pre-fix this returned 0.5
+    (passes 0.4 threshold, becomes BEST BARKAIN at $18.95). Post-fix
+    overlap = 3/6 = 0.5 < 0.6 floor → 0.0 (rejected).
+    """
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Breville The Barista Express Espresso Machine BES870XL",
+        brand="Breville",
+        source="upcitemdb",
+        source_raw=None,
+    )
+    score = _score_listing_relevance(
+        "Breville drip tray for espresso machine",
+        product,
+        retailer_id="fb_marketplace",
+    )
+    assert score == 0.0, (
+        f"FB drip-tray listing must be rejected when model code missing, "
+        f"got score={score}"
+    )
+
+
+def test_fb_soft_gate_keeps_legit_listing_when_model_missing():
+    """A genuine seller listing without the SKU should still pass — overlap
+    is high (5/6) so 0.6 floor is cleared; capped at 0.5 to reflect the
+    missing-model penalty.
+    """
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Breville The Barista Express Espresso Machine BES870XL",
+        brand="Breville",
+        source="upcitemdb",
+        source_raw=None,
+    )
+    score = _score_listing_relevance(
+        "Breville Barista Express espresso machine 15 bar stainless",
+        product,
+        retailer_id="fb_marketplace",
+    )
+    assert 0.4 <= score <= 0.5, (
+        f"Legit FB listing must still pass at the soft-gate cap, got {score}"
+    )
+
+
+def test_fb_soft_gate_rejects_grill_cover():
+    """Weber Q1200 grill cover — shares {weber, grill} but lacks Q1200 model
+    + 'portable propane' descriptors. Overlap drops below 0.6 floor.
+    """
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Weber Q1200 Portable Liquid Propane Gas Grill Black",
+        brand="Weber",
+        source="upcitemdb",
+        source_raw=None,
+    )
+    score = _score_listing_relevance(
+        "Weber portable grill cover",
+        product,
+        retailer_id="fb_marketplace",
+    )
+    assert score == 0.0
+
+
+def test_fb_soft_gate_unchanged_for_non_fb_retailer():
+    """eBay path is hard-gate: model required, no soft fallback. The 0.6
+    overlap floor only applies when soft gate is active.
+    """
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Breville The Barista Express Espresso Machine BES870XL",
+        brand="Breville",
+        source="upcitemdb",
+        source_raw=None,
+    )
+    # Same drip-tray listing on eBay — model missing → hard-gate reject (0.0).
+    score = _score_listing_relevance(
+        "Breville drip tray for espresso machine",
+        product,
+        retailer_id="ebay_new",
+    )
+    assert score == 0.0
+
+
+def test_extract_model_normalizes_single_letter_space_digits():
+    """Weber Q1200 stored as 'Weber Q 1200' (Gemini space-separated form)
+    must yield Q1200 as a model identifier. Pre-fix the FB soft gate
+    didn't fire because no identifiers were extracted, leaving $15.99
+    grill-cover listings to win the hero. Post-fix Q1200 IS extracted
+    so the soft gate trips on listings missing the model code.
+    """
+    from modules.m2_prices.service import _extract_model_identifiers
+
+    idents = _extract_model_identifiers("Weber Q 1200 1-Burner Propane Gas Grill")
+    assert any("Q1200" in i.upper() for i in idents), (
+        f"Q 1200 should normalize to Q1200, got {idents}"
+    )
+
+    # Negative control: single-letter + 2-digit form ("Q 12") shouldn't
+    # collapse — too generic, would match prose fragments. Pattern requires
+    # 3-4 digits.
+    idents = _extract_model_identifiers("Use Q 12 of these in the recipe")
+    assert not any("Q12" in i.upper() for i in idents)
+
+
+def test_brand_match_falls_back_to_product_name_first_word():
+    """Cuisinart UPCs come back from UPCitemdb with brand='Conair Corporation'
+    (parent company). Real Cuisinart listings never say Conair. Pre-fix
+    Rule 3 rejected every Cuisinart listing on its own → 0/9 success on
+    every Cuisinart probe. Post-fix the leading word of product.name
+    ('Cuisinart') is accepted as a sub-brand fallback.
+
+    Uses a single-token product name to keep the test focused on Rule 3.
+    Multi-word names trigger the model-pattern hard gate at Rule 1, which
+    is a separate concern.
+    """
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Cuisinart Food Processor",
+        brand="Conair Corporation",
+        source="upcitemdb",
+        source_raw=None,
+    )
+    score = _score_listing_relevance(
+        "Cuisinart Premium 7-Cup Food Processor White",
+        product,
+        retailer_id="amazon",
+    )
+    assert score > 0.0, (
+        f"Cuisinart listing must pass via product.name fallback, got {score}"
+    )
+
+
+def test_third_party_for_brand_template_rejected():
+    """Uniflasy / OEM / generic third-party replacement parts use the
+    template "{their brand} … for {real brand} {model}" and pass the
+    basic brand-presence check (Weber appears in title). Rule 3b rejects
+    them by detecting the third-party leading word + "for {brand}"
+    preposition.
+    """
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Weber Q 1200 1-Burner Propane Gas Grill Black",
+        brand="Weber",
+        source="upcitemdb",
+        source_raw=None,
+    )
+    # Real Amazon listings (multiple ASINs share the pattern) — both
+    # third-party-brand-led and digit-led titles, all carrying "for Weber"
+    # in the title body.
+    for title in (
+        "Uniflasy 60040 17 Inch Grill Burner Tube for Weber Q1200 Q1000 Q100",
+        "304 Stainless Steel 60040 Grill Burner Tube for Weber Q1000, Q1200",
+        "6FT for Weber Adapter Hose for Weber Q Series, for Weber Traveler",
+        "Burner for Weber Q100, Q120, Q1000, Q1200, Baby Q Gas Grill 17inch",
+    ):
+        score = _score_listing_relevance(title, product, retailer_id="amazon")
+        assert score == 0.0, (
+            f"Third-party 'for Weber' replacement listing must be rejected, "
+            f"title={title!r} got {score}"
+        )
+
+    # Negative control: actual Weber-branded grill listing must still pass.
+    score_real = _score_listing_relevance(
+        "Weber Q1200 Liquid Propane Portable Gas Grill, Black",
+        product,
+        retailer_id="amazon",
+    )
+    assert score_real > 0.0
+
+    # NOTE: Decodo-stripped Amazon titles (e.g., "Q1200 Liquid Propane …
+    # Titanium" without the "Weber" prefix) currently fail Rule 3 outright
+    # because no brand candidate appears in the title. That's a separate
+    # pre-existing adapter issue — accepting it as the price of demo
+    # safety: Amazon shows "not found" rather than a $15.99 burner tube.
+
+
+def test_brand_match_fallback_does_not_open_unrelated_brands():
+    """The fallback only fires when the product.name leading word is
+    actually in the listing — so a Whirlpool listing for a 'Cuisinart 7 Cup'
+    product still gets rejected (no 'cuisinart' anywhere on a Whirlpool
+    blender title).
+    """
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Cuisinart 7 Cup Food Processor",
+        brand="Conair Corporation",
+        source="upcitemdb",
+        source_raw=None,
+    )
+    # Whirlpool listing — neither "Conair" nor "Cuisinart" present → reject.
+    score = _score_listing_relevance(
+        "Whirlpool 7-Cup Food Processor Stainless",
+        product,
+        retailer_id="amazon",
+    )
+    assert score == 0.0

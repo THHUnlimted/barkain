@@ -125,6 +125,15 @@ _MODEL_PATTERNS = [
     # inflate false-positive rate. Required to split G613 from G915 at the
     # model-number hard gate — otherwise Amazon's organic ranking swaps them.
     re.compile(r'\b[A-Z]{1,2}\d{3,4}[A-Z]?\b'),
+    # Appliance/tool SKU: 2-4 uppercase letters + 3-5 digits + 1-4 trailing
+    # alphanumerics. Matches Breville BES870XL, DeWalt DCD777C2, GE JES1072SHSS,
+    # Hamilton Beach 49981A-style (when leading-letter present), most
+    # kitchen-appliance + cordless-tool codes that pattern 1 misses (no
+    # internal hyphen + >2 leading letters). Uppercase-anchored. Added
+    # 2026-04-25 (interstitial-parity-1 demo audit) — without this, FB
+    # Marketplace soft-gate never tripped on Breville/DeWalt queries because
+    # no identifiers were extracted.
+    re.compile(r'\b[A-Z]{2,4}\d{3,5}[A-Z]{1,4}\d{0,2}\b'),
 ]
 
 # Variant / sub-model discriminator words. If two titles disagree on which of
@@ -302,6 +311,15 @@ _PRICE_OUTLIER_MIN_SAMPLE = 4
 # as long as brand + token overlap clear the bar.
 _MODEL_SOFT_GATE_RETAILERS: frozenset[str] = frozenset({"fb_marketplace"})
 
+# When the soft gate is in effect (FB + model code missing), require a
+# higher token-overlap floor than the baseline 0.4. Tightened from the
+# implicit 0.4 in 2026-04-25 (interstitial-parity-1 demo audit) after
+# Breville BES870XL ($499 retail) showed $18.95 hero on FB drip-tray
+# listings and Weber Q1200 ($199 retail) showed $15.99 hero on grill-
+# cover listings. 0.6 is the empirically-derived knee — below 0.6,
+# overlap is dominated by brand + 1–2 generic words.
+_FB_SOFT_GATE_MIN_OVERLAP = 0.6
+
 
 # Captures the "family stem" of a hyphenated SKU — for a match like
 # RZ07-00740100, the stem is RZ07-0074 (letters + first digit group + first 4
@@ -309,6 +327,9 @@ _MODEL_SOFT_GATE_RETAILERS: frozenset[str] = frozenset({"fb_marketplace"})
 _LONG_MODEL_PREFIX_RE = re.compile(
     r"^([A-Z]{1,3}-?\d{1,2}-?\d{4})(\d{2,})$", re.IGNORECASE
 )
+
+
+_SINGLE_LETTER_MODEL_RE = re.compile(r'\b([A-Z])\s+(\d{3,4})\b')
 
 
 def _extract_model_identifiers(name: str) -> list[str]:
@@ -320,10 +341,20 @@ def _extract_model_identifiers(name: str) -> list[str]:
     suffix ("Razer Orbweaver RZ07-0074"), and requiring the full code drops
     legitimate listings. The 4-digit floor is deliberate: 3 digits would be too
     permissive (too many unrelated products share a 3-digit prefix).
+
+    Pre-pass collapses single-letter + space + digit-block forms ("Q 1200" →
+    "Q1200") so models stored space-separated by Gemini (Weber Q 1200, Q 2200,
+    Q 1000) reach the gaming-peripheral SKU pattern. Localized to this
+    function so prose collisions ("I 1234 …" type fragments in listing
+    titles) don't get tokenized as a model. Added 2026-04-25
+    (interstitial-parity-1 demo audit — pre-fix Weber Q1200 search hero
+    was $15.99 because Q1200 wasn't extracted from "Weber Q 1200 1-Burner
+    Propane Gas Grill" so the FB soft gate never tripped).
     """
+    normalized = _SINGLE_LETTER_MODEL_RE.sub(r'\1\2', name)
     identifiers: list[str] = []
     for pattern in _MODEL_PATTERNS:
-        identifiers.extend(pattern.findall(name))
+        identifiers.extend(pattern.findall(normalized))
     extra_prefixes: list[str] = []
     for ident in identifiers:
         m = _LONG_MODEL_PREFIX_RE.match(ident)
@@ -438,11 +469,53 @@ def _score_listing_relevance(
     if product_ordinals != listing_ordinals:
         return 0.0
 
-    # Rule 3: Brand match (skip if brand is unknown)
+    # Rule 3: Brand match (skip if brand is unknown). Falls back to the
+    # leading token of `product.name` when the recorded brand is a parent
+    # company that doesn't appear on retailer listings — UPCitemdb stores
+    # "Conair Corporation" for Cuisinart UPCs, Whirlpool for KitchenAid,
+    # etc. Without the fallback, every legitimate Cuisinart listing on
+    # Amazon/Walmart/Target gets rejected at this gate (Appliance 0/9
+    # symptom from interstitial-parity-1 demo audit). The fallback only
+    # fires when the recorded brand fails — existing one-brand cases keep
+    # the same gate. Sub-brand candidate is also `_BRAND_SUFFIXES`-cleaned
+    # and skipped if it equals the recorded brand or is a stopword.
+    matched_brand = ""  # tracks which brand candidate the listing actually mentions
     if product.brand:
         clean_brand = _BRAND_SUFFIXES.sub("", product.brand).strip()
-        if clean_brand and clean_brand.lower() not in title_lower:
-            return 0.0
+        if clean_brand and clean_brand.lower() in title_lower:
+            matched_brand = clean_brand.lower()
+        else:
+            sub_brand = ""
+            if product.name:
+                first = product.name.split(maxsplit=1)
+                if first:
+                    sub_brand = _BRAND_SUFFIXES.sub("", first[0]).strip().lower()
+            if (
+                not sub_brand
+                or sub_brand == (clean_brand or "").lower()
+                or sub_brand in _STOPWORDS
+                or sub_brand not in title_lower
+            ):
+                return 0.0
+            matched_brand = sub_brand
+
+    # Rule 3b: Accessory-by-template gate. "X for {brand} {model}" / "X
+    # fits {brand}" / "X compatible with {brand}" patterns mark third-
+    # party replacements / parts / accessories regardless of whether the
+    # leading word is a brand or a spec ("304 Stainless Steel 60040
+    # Grill Burner Tube for Weber Q1200..."). Pre-fix the demo hero for
+    # Weber Q1200 stayed at $15.99 because the listing passed Rule 3
+    # (Weber appears in title) and the title doesn't start with a known
+    # third-party brand — a leading-token check would miss it. Genuine
+    # Weber listings never say "for Weber" (sellers don't write the
+    # brand twice for the same product); third-party replacements do.
+    # Same logic for Cuisinart, KitchenAid, etc. Added 2026-04-25
+    # (interstitial-parity-1 demo audit, follow-up to Rule 3 fallback).
+    if matched_brand and re.search(
+        rf"\b(?:for|fits|compatible\s+with)\s+{re.escape(matched_brand)}\b",
+        title_lower,
+    ):
+        return 0.0
 
     # Rule 4: Token overlap (use cleaned name so supplier codes don't pollute tokens)
     product_tokens = product_tokens_set
@@ -454,7 +527,18 @@ def _score_listing_relevance(
     score = overlap / len(product_tokens)
 
     if model_missing:
-        score = min(score, 0.5)
+        # FB Marketplace soft-gate: when the model code is absent, the 0.4
+        # baseline threshold lets drip-tray / accessory / parts listings
+        # through — they share brand + a few generic tokens (e.g. "Breville
+        # drip tray for espresso machine" overlaps {breville, espresso,
+        # machine} with the Barista Express but lacks the distinguishing
+        # "barista"/"express" tokens). Require >=0.6 raw overlap before the
+        # cap, which rejects those false-positives while preserving genuine
+        # listings that just omit the SKU number. The visible cap (0.5) is
+        # kept so the missing-model penalty still reflects in tiebreaks.
+        if score < _FB_SOFT_GATE_MIN_OVERLAP:
+            return 0.0
+        return min(score, 0.5)
 
     return score if score >= RELEVANCE_THRESHOLD else 0.0
 

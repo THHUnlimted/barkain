@@ -1247,3 +1247,113 @@ def test_is_tier2_noise_filters_controller_accessories():
     assert _is_tier2_noise(thumbstick_row, query="ps5 controller") is True
     assert _is_tier2_noise(case_row, query="ps5 controller") is True
     assert _is_tier2_noise(real_controller, query="ps5 controller") is False
+
+
+# --- interstitial-parity-1 follow-up: brand-gate + strict-spec rejection
+# Pre-Fix the noise filter let cross-brand and sub-SKU drift through:
+# Toro Recycler returned Greenworks mowers, Vitamix 5200 returned Explorian
+# E310, Greenworks 40V returned 80V backpack. Three layered rules now:
+#  - leading meaningful query token (brand) must appear in row haystack
+#  - voltage tokens (40v / 80v) must match verbatim
+#  - 4+ digit pure-numeric model tokens (5200 / 6400) must match verbatim
+
+
+def test_is_tier2_noise_rejects_cross_brand_drift():
+    """Toro Recycler search must NOT surface Greenworks/WORX mowers."""
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    greenworks_row = {
+        "device_name": "Greenworks 24V (2x24V) 21-Inch Self-Propelled Lawn Mower",
+        "brand": "Greenworks",
+        "model": "2532502",
+        "category": "Lawn Mowers",
+    }
+    worx_row = {
+        "device_name": "WORX - Nitro WG760 40V 21-Inch Self-Propelled Lawn Mower",
+        "brand": "WORX",
+        "model": "WG760",
+        "category": "Lawn Mowers",
+    }
+    real_toro = {
+        "device_name": "Toro Recycler 22 in. SmartStow Self-Propelled Mower",
+        "brand": "Toro",
+        "model": "21466",
+        "category": "Lawn Mowers",
+    }
+    q = "Toro Recycler 22 inch self propelled mower"
+    assert _is_tier2_noise(greenworks_row, query=q) is True
+    assert _is_tier2_noise(worx_row, query=q) is True
+    assert _is_tier2_noise(real_toro, query=q) is False
+
+
+def test_is_tier2_noise_rejects_voltage_drift():
+    """Greenworks 40V cordless must NOT surface 80V variants of the same brand."""
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    g80_row = {
+        "device_name": "Greenworks - 80V 690 CFM 165 MPH Cordless Backpack Leaf Blower",
+        "brand": "Greenworks",
+        "model": "2421402COVT",
+        "category": "Leaf Blowers",
+    }
+    g40_row = {
+        "device_name": "Greenworks 40V Cordless Leaf Blower with Battery",
+        "brand": "Greenworks",
+        "model": "GBL40320",
+        "category": "Leaf Blowers",
+    }
+    q = "Greenworks 40V cordless leaf blower"
+    assert _is_tier2_noise(g80_row, query=q) is True
+    assert _is_tier2_noise(g40_row, query=q) is False
+
+
+def test_is_tier2_noise_rejects_pure_digit_sub_sku_drift():
+    """Vitamix 5200 search must NOT surface a different Vitamix model
+    (E310 / 64068) — pure-digit model token requires verbatim match.
+    """
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    e310_row = {
+        "device_name": "Vitamix - Explorian E310 Blender - Black",
+        "brand": "Vitamix",
+        "model": "64068",
+        "category": "Full-Size Blenders",
+    }
+    real_5200 = {
+        "device_name": "Vitamix 5200 Series 64-oz Blender Black",
+        "brand": "Vitamix",
+        "model": "5200",
+        "category": "Full-Size Blenders",
+    }
+    q = "Vitamix 5200 blender"
+    assert _is_tier2_noise(e310_row, query=q) is True
+    assert _is_tier2_noise(real_5200, query=q) is False
+
+
+def test_is_tier2_noise_preserves_brand_subsidiary_match():
+    """Anker → Soundcore subsidiary (brand mismatch but query token in title)
+    must still pass — the brand-gate is a haystack substring check, not a
+    brand-field equality.
+    """
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    soundcore_row = {
+        "device_name": "Soundcore - by Anker Liberty 4 NC Noise Canceling Earbuds",
+        "brand": "Soundcore",
+        "model": "A3947Z11",
+        "category": "All Headphones",
+    }
+    q = "Anker Liberty 4 NC earbuds"
+    assert _is_tier2_noise(soundcore_row, query=q) is False
+
+
+def test_query_strict_specs_extracts_voltage_and_pure_digits():
+    from modules.m1_product.search_service import _query_strict_specs
+
+    assert _query_strict_specs("Greenworks 40V leaf blower") == ["40v"]
+    assert _query_strict_specs("Vitamix 5200 blender") == ["5200"]
+    assert _query_strict_specs("DeWalt 20V Max drill") == ["20v"]
+    # 3-digit pure-numeric is NOT treated as a strict spec — too generic.
+    assert _query_strict_specs("iPhone 16 Pro 256GB") == []
+    # Mixed digit+letter (handled by _query_model_codes) is excluded here.
+    assert _query_strict_specs("WH-1000XM5 Sony") == []
