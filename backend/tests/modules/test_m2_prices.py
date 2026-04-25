@@ -677,6 +677,256 @@ def test_relevance_no_gemini_model_backward_compat():
     assert score >= 0.4
 
 
+# MARK: - Apple variant disambiguation (chip + display size — disagreement-only)
+
+
+def test_extract_apple_chip_tokens_finds_bare_chip():
+    """M1/M2/M3/M4 with no suffix normalize to 'm1'/'m2'/'m3'/'m4'."""
+    from modules.m2_prices.service import _extract_apple_chip_tokens
+
+    assert _extract_apple_chip_tokens("Apple MacBook Air M1 13-inch") == {"m1"}
+    assert _extract_apple_chip_tokens("Apple iPad Pro M4 11-inch") == {"m4"}
+    assert _extract_apple_chip_tokens("MacBook Air with Apple M2 chip") == {"m2"}
+
+
+def test_extract_apple_chip_tokens_finds_pro_max_ultra_suffix():
+    """Pro/Max/Ultra suffix is captured and lowercased."""
+    from modules.m2_prices.service import _extract_apple_chip_tokens
+
+    assert _extract_apple_chip_tokens("MacBook Pro 14 M3 Pro 18GB") == {"m3 pro"}
+    assert _extract_apple_chip_tokens("MacBook Pro 16 M3 Max 36GB") == {"m3 max"}
+    assert _extract_apple_chip_tokens("Mac Studio M2 Ultra 192GB") == {"m2 ultra"}
+
+
+def test_extract_apple_chip_tokens_skips_non_apple_collisions():
+    """Logitech M310, M16 carbines, MS220 etc. must not false-match."""
+    from modules.m2_prices.service import _extract_apple_chip_tokens
+
+    # 1-digit anchor: \b...M[1-4]\b — M310 is digit-then-digit, no boundary
+    assert _extract_apple_chip_tokens("Logitech M310 Wireless Mouse") == set()
+    # M16 has \b after 'M1' between '1' and '6' — both digits, not a boundary
+    assert _extract_apple_chip_tokens("M16 carbine accessory") == set()
+    # MS220 — leading char is 'S' not a digit, fails [1-4] class
+    assert _extract_apple_chip_tokens("Belkin MS220 Cable") == set()
+    # M1234 SKU — digit-digit run after M1, no boundary
+    assert _extract_apple_chip_tokens("Yamaha M1234 Receiver") == set()
+    # Nothing apple-shaped
+    assert _extract_apple_chip_tokens("Sony WH-1000XM5 Wireless Headphones") == set()
+
+
+def test_extract_apple_display_size_tokens_finds_inch_variants():
+    """11/13/14/15/16 with -inch / inch / inches / inch all normalize to digit string."""
+    from modules.m2_prices.service import _extract_apple_display_size_tokens
+
+    assert _extract_apple_display_size_tokens("MacBook Pro 14-inch M3") == {"14"}
+    assert _extract_apple_display_size_tokens("MacBook Air 13 inch") == {"13"}
+    assert _extract_apple_display_size_tokens("iPad Pro 11inch 2024") == {"11"}
+    assert _extract_apple_display_size_tokens("16 inches MacBook Pro") == {"16"}
+
+
+def test_extract_apple_display_size_tokens_skips_out_of_range():
+    """Sizes outside 11–16 (knives, monitors, TVs) don't match."""
+    from modules.m2_prices.service import _extract_apple_display_size_tokens
+
+    assert _extract_apple_display_size_tokens("Wusthof 8-inch chef knife") == set()
+    assert _extract_apple_display_size_tokens("Dell UltraSharp 27-inch Monitor") == set()
+    assert _extract_apple_display_size_tokens("Samsung 55-inch QLED TV") == set()
+
+
+def test_relevance_chip_disagreement_rejects_m3_listing_for_m4_product():
+    """The user's reported bug: M4 iPad Pro query → eBay surfaces M3 listing → reject."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    # Even when product.name lacks "M4" itself, gemini_model carries the chip
+    # token forward into Rule 2c.
+    product = Product(
+        name="Apple iPad Pro 11-inch (2024)",
+        brand="Apple",
+        source="gemini_validated",
+        source_raw={"gemini_model": "iPad Pro 11-inch M4"},
+    )
+    score = _score_listing_relevance(
+        "Apple iPad Pro M3 11-inch 256GB Space Gray Wi-Fi", product
+    )
+    assert score == 0.0
+
+
+def test_relevance_chip_match_passes_when_both_sides_emit_same_chip():
+    """M4 product + M4 listing: rule 2c is satisfied, downstream rules apply normally."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Apple iPad Pro 11-inch (2024)",
+        brand="Apple",
+        source="gemini_validated",
+        source_raw={"gemini_model": "iPad Pro 11-inch M4"},
+    )
+    score = _score_listing_relevance(
+        "Apple iPad Pro 11-inch M4 256GB Wi-Fi Space Black", product
+    )
+    assert score >= 0.4
+
+
+def test_relevance_chip_omitted_in_listing_still_passes():
+    """Used eBay/FB sellers often omit chip — must not over-reject genuine matches.
+
+    This is the load-bearing safeguard for keeping coverage on second-hand listings
+    where sellers describe size/storage/year but skip the chip name. Disagreement-
+    only semantic: only reject when both sides emit a chip and they differ.
+    """
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Apple MacBook Air 13-inch",
+        brand="Apple",
+        source="gemini_validated",
+        source_raw={"gemini_model": "MacBook Air M2 13-inch"},
+    )
+    # Listing mentions year + size + storage but no chip — common eBay shape.
+    score = _score_listing_relevance(
+        "Apple MacBook Air 13-inch 2022 8GB 256GB Midnight Excellent Condition",
+        product,
+    )
+    assert score >= 0.4
+
+
+def test_relevance_chip_pro_max_distinguished_from_base():
+    """M3 Pro listing must not match M3 base product — multi-token chip equality.
+
+    Documented limitation: this test verifies the normalize step works when both
+    sides emit explicit suffixes. It does NOT enforce the "M3 base must reject
+    M3 Pro" case because user-query intent is ambiguous (is "macbook pro m3"
+    asking for base or any-M3-tier?). That negative-match feature was deliberately
+    cut from this PR.
+    """
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Apple MacBook Pro 14-inch",
+        brand="Apple",
+        source="gemini_validated",
+        source_raw={"gemini_model": "MacBook Pro 14-inch M3 Max 36GB"},
+    )
+    score = _score_listing_relevance(
+        "Apple MacBook Pro 14-inch M3 Pro 18GB 512GB Space Black", product
+    )
+    assert score == 0.0  # {m3 max} != {m3 pro}
+
+
+def test_relevance_size_disagreement_rejects_15_listing_for_13_product():
+    """MacBook Air M2 13" query → 15" listing → reject (different SKU, different price)."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Apple MacBook Air M2",
+        brand="Apple",
+        source="gemini_validated",
+        source_raw={"gemini_model": "MacBook Air M2 13-inch"},
+    )
+    score = _score_listing_relevance(
+        "Apple MacBook Air M2 15-inch 8GB 256GB Midnight", product
+    )
+    assert score == 0.0
+
+
+def test_relevance_size_omitted_in_listing_still_passes():
+    """Listing without inch token is allowed even when product specifies size."""
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Apple MacBook Air M2",
+        brand="Apple",
+        source="gemini_validated",
+        source_raw={"gemini_model": "MacBook Air M2 13-inch"},
+    )
+    score = _score_listing_relevance(
+        "Apple MacBook Air M2 256GB Midnight 8GB RAM", product
+    )
+    assert score >= 0.4
+
+
+def test_relevance_chip_rejection_emits_telemetry_log(caplog):
+    """Rule 2c emits a structured log line on rejection so silent zero-results are observable.
+
+    The disagreement-only gate can reject ALL listings for a product if Gemini
+    stored the wrong chip on the canonical — and the failure mode looks identical
+    to "no retailers had this product" from the user side. Log every rejection so
+    we can detect the pattern in production telemetry.
+
+    Listing is shaped so Rule 1 (existing identifier hard gate) passes via the
+    "Pro 11" identifier — chip mismatch is then the load-bearing rejection at
+    Rule 2c. This mirrors the realistic eBay used-iPad listing shape.
+    """
+    import logging
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Apple iPad Pro 11",
+        brand="Apple",
+        source="gemini_validated",
+        source_raw={"gemini_model": "iPad Pro 11 M4"},
+    )
+    with caplog.at_level(logging.INFO, logger="barkain.m2"):
+        score = _score_listing_relevance(
+            "Apple iPad Pro 11 M3 256GB Space Gray Wi-Fi", product,
+            retailer_id="ebay_browse_api",
+        )
+    assert score == 0.0
+    assert any(
+        "apple_variant_gate_rejected" in r.getMessage() and "rule=2c" in r.getMessage()
+        for r in caplog.records
+    ), "expected a Rule 2c rejection log line"
+
+
+def test_relevance_size_rejection_emits_telemetry_log(caplog):
+    """Rule 2d emits the same structured log line on size disagreement.
+
+    Both sides share the same chip ("M2") but different display sizes, so Rule
+    2c passes and Rule 2d is the rejecting rule.
+    """
+    import logging
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Apple MacBook Air M2 13",
+        brand="Apple",
+        source="gemini_validated",
+        source_raw={"gemini_model": "MacBook Air M2 13-inch"},
+    )
+    with caplog.at_level(logging.INFO, logger="barkain.m2"):
+        score = _score_listing_relevance(
+            "Apple MacBook Air M2 15-inch 8GB 256GB Midnight", product,
+            retailer_id="amazon_scraper_api",
+        )
+    assert score == 0.0
+    assert any(
+        "apple_variant_gate_rejected" in r.getMessage() and "rule=2d" in r.getMessage()
+        for r in caplog.records
+    ), "expected a Rule 2d rejection log line"
+
+
+def test_relevance_demo_check_evergreen_macbook_air_m1_still_passes():
+    """Critical regression guard: demo-check uses MBA M1 UPC 194252056639 as evergreen.
+
+    Per CLAUDE.md the demo-check threshold is 5/9 retailers. If this PR
+    accidentally tightens chip/size enforcement so that real M1 listings
+    fail, the F&F demo breaks. Listing here is the typical eBay used-MBA
+    shape (chip + size present, both sides agree).
+    """
+    from modules.m2_prices.service import _score_listing_relevance
+
+    product = Product(
+        name="Apple MacBook Air M1 13-inch (2020)",
+        brand="Apple",
+        source="gemini_validated",
+        source_raw={"gemini_model": "MacBook Air M1 13-inch"},
+    )
+    score = _score_listing_relevance(
+        "Apple MacBook Air 13.3-inch M1 8GB 256GB Space Gray (2020)", product
+    )
+    assert score >= 0.4
+
+
 # MARK: - Platform-suffix accessory filter (Amazon-only)
 
 

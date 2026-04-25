@@ -173,6 +173,63 @@ _ORDINAL_TOKENS = frozenset({
     "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th",
 })
 
+# Apple silicon chip tokens (M1/M2/M3/M4 with optional Pro/Max/Ultra). Apple's
+# product line collapses many distinct SKUs onto the same name+size — "MacBook
+# Air 13-inch" today resolves to M1 (2020), M2 (2022), M3 (2024), and M4 (2025)
+# all sold concurrently; "iPad Pro 11-inch" spans M2 and M4 the same way. When
+# Gemini resolves a query to an Apple SKU, the canonical product.name often
+# omits the chip generation ("Apple iPad Pro 11-inch (2024)") and the existing
+# identifier gate then matches every chip generation's listing equally. Rule 2c
+# (below) closes this by comparing chip tokens between product and listing —
+# same disagreement-only semantic as voltage tokens in cat-rel-1: if both sides
+# emit a chip token and they differ, reject; if either omits, allow (used eBay/
+# FB sellers routinely list "MacBook Air 2022 8GB/256GB" with no chip name).
+# Anchored to require exactly 1 digit so M310 mice / M16 rifles / M1234 SKUs
+# don't false-collide. Added 2026-04-25 (apple-variant-disambiguation) after
+# user reported an M3 iPad surfacing on an M4 iPad query via eBay listing path.
+_APPLE_CHIP_RE = re.compile(
+    r"\bM([1-4])(?:\s+(Pro|Max|Ultra))?\b",
+    re.IGNORECASE,
+)
+
+# Apple display-size tokens (11/13/14/15/16 inch). MacBook Air 13" vs 15" and
+# MacBook Pro 14" vs 16" are distinct SKUs at different price points, often with
+# the same chip ("M2 13-inch" vs "M2 15-inch"). Same disagreement-only semantic
+# as the chip rule. Matches "13 inch", "13-inch", "13inch", "13 inches". Skips
+# the inch-quote shorthand (`13"`) for now — most listings spell it out and the
+# regex stays simpler. Range floored at 11 to skip 4"/5"/etc. blade and food-
+# scale listings; capped at 16 to skip TVs (40"+) and monitors (24-32") that
+# don't share product UPCs with Apple laptops anyway.
+_APPLE_DISPLAY_SIZE_RE = re.compile(
+    r"\b(11|13|14|15|16)\s*-?\s*inch(?:es)?\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_apple_chip_tokens(text: str) -> set[str]:
+    """Normalize Apple silicon mentions to a comparable token set.
+
+    Returns lowercase strings: "m1", "m2", "m3 pro", "m4 max", etc. Empty set
+    when no chip tokens present. Used by Rule 2c (chip-equality gate) below.
+    """
+    out: set[str] = set()
+    for match in _APPLE_CHIP_RE.finditer(text or ""):
+        chip = f"m{match.group(1)}"
+        suffix = match.group(2)
+        if suffix:
+            chip = f"{chip} {suffix.lower()}"
+        out.add(chip)
+    return out
+
+
+def _extract_apple_display_size_tokens(text: str) -> set[str]:
+    """Extract Apple-laptop / iPad display sizes as normalized digit strings.
+
+    Returns set of {"11","13","14","15","16"} that appeared as "<n>-inch" /
+    "<n> inch" / "<n>inch" / "<n> inches" in the text. Used by Rule 2d.
+    """
+    return {m.group(1) for m in _APPLE_DISPLAY_SIZE_RE.finditer(text or "")}
+
 # NOTE: Size/spec patterns (256GB, 27", 11-inch) used to be in _MODEL_PATTERNS,
 # but they were letting iPhone SE slip through for an iPhone 16 query — both titles
 # contain "256GB", so any() matched on the spec alone. Specs are still captured
@@ -414,6 +471,11 @@ def _score_listing_relevance(
        different SKUs — reject.
     2b. Ordinal equality: same check over generation markers (1st / 2nd / 3rd …)
         fed by Gemini's `model` field.
+    2c. Apple chip equality (disagreement-only): when both product and listing
+        emit an M1/M2/M3/M4 chip token, they must agree. Either-omits is
+        allowed since used-market listings routinely skip the chip name.
+    2d. Apple display-size equality (disagreement-only): symmetric to 2c for
+        11/13/14/15/16-inch. Either-omits is allowed.
     3. Brand match: product.brand must appear in listing title.
     4. Token overlap tiebreaker: |intersection| / |product_tokens|.
     """
@@ -481,6 +543,51 @@ def _score_listing_relevance(
     product_ordinals = product_tokens_set & _ORDINAL_TOKENS
     listing_ordinals = listing_tokens & _ORDINAL_TOKENS
     if product_ordinals != listing_ordinals:
+        return 0.0
+
+    # Rule 2c: Apple silicon chip equality (disagreement-only). Apple sells
+    # multiple chip generations of the same product simultaneously (MacBook
+    # Air M1/M2/M3/M4, iPad Pro M2/M4, etc.). When BOTH product and listing
+    # carry a chip token AND they disagree, reject — an "iPad Pro M4" query
+    # must not surface an "iPad Pro M3" listing on eBay. When EITHER side
+    # omits the chip, allow it through: used eBay/FB sellers routinely write
+    # "MacBook Air 2022 8GB/256GB" without naming the chip. Aggregates
+    # across product.name + Gemini's model + UPCitemdb's model to maximize
+    # the chance of catching the chip on the product side. Added 2026-04-25
+    # (apple-variant-disambiguation) after a user reported an M3 iPad
+    # surfacing on an M4 iPad query — the existing Rule 1 identifier gate
+    # passed both because product.name was "Apple iPad Pro 11-inch (2024)"
+    # with no chip, so "Pro 11" matched M3 and M4 listings equally.
+    product_chip_text = " ".join([clean_name, *(extra_model_strings or [])])
+    product_chips = _extract_apple_chip_tokens(product_chip_text)
+    listing_chips = _extract_apple_chip_tokens(listing_title)
+    if product_chips and listing_chips and product_chips != listing_chips:
+        # Telemetry: silent zero-results from this rule are invisible to users,
+        # so log every rejection. Look for clusters where ALL listings for a
+        # product are rejected — that's the signal that Gemini stored the wrong
+        # chip on the canonical (the inverse of the bug this rule fixes).
+        logger.info(
+            "apple_variant_gate_rejected rule=2c product_chips=%s listing_chips=%s "
+            "retailer_id=%s product_brand=%s listing_title=%r",
+            sorted(product_chips), sorted(listing_chips), retailer_id,
+            product.brand, listing_title[:120],
+        )
+        return 0.0
+
+    # Rule 2d: Apple display-size equality (disagreement-only). MacBook Air
+    # 13" vs 15" and MacBook Pro 14" vs 16" are distinct SKUs at different
+    # price points, often sold with the same chip. Same semantic as 2c —
+    # reject only when both sides emit a size and they disagree. Floored at
+    # 11 / capped at 16 so 4-inch knives and 27-inch monitors don't trigger.
+    product_sizes = _extract_apple_display_size_tokens(product_chip_text)
+    listing_sizes = _extract_apple_display_size_tokens(listing_title)
+    if product_sizes and listing_sizes and product_sizes != listing_sizes:
+        logger.info(
+            "apple_variant_gate_rejected rule=2d product_sizes=%s listing_sizes=%s "
+            "retailer_id=%s product_brand=%s listing_title=%r",
+            sorted(product_sizes), sorted(listing_sizes), retailer_id,
+            product.brand, listing_title[:120],
+        )
         return 0.0
 
     # Rule 3: Brand match (skip if brand is unknown). Falls back to the
