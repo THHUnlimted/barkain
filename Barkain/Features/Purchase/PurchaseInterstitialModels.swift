@@ -41,6 +41,19 @@ nonisolated struct PurchaseInterstitialContext: Identifiable, Equatable, Hashabl
     let activationRequired: Bool
     let activationUrl: String?
 
+    // MARK: - Identity + portal (savings-math-prominence Item 2)
+    //
+    // Carried so the canonical `StackingReceiptView` can render the full
+    // breakdown in the interstitial without re-fetching. Populated only
+    // on the recommendation-winner init path; the price-row entry path
+    // (non-winner retailer tap) sets these to zero/nil because the M6
+    // stacking math only exists on the winner.
+
+    let identitySavings: Double
+    let identitySource: String?
+    let portalSavings: Double
+    let portalSource: String?
+
     // MARK: - Portal CTAs (Step 3g-B)
 
     /// Up to 3 portal CTAs sorted by bonus rate descending. Pre-populated
@@ -81,6 +94,13 @@ nonisolated struct PurchaseInterstitialContext: Identifiable, Equatable, Hashabl
         }
         self.activationRequired = match?.activationRequired ?? false
         self.activationUrl = match?.activationUrl
+        // savings-math-prominence Item 2 — winner carries the full M6
+        // stacking math; receipt reads from these fields in the
+        // interstitial just like the hero does.
+        self.identitySavings = winner.identitySavings
+        self.identitySource = winner.identitySource
+        self.portalSavings = winner.portalSavings
+        self.portalSource = winner.portalSource
         // Step 3g-B — winner carries the resolved portal CTAs from M6.
         // StackedPath uses lowercase `portalCtas` to round-trip through
         // `.convertFromSnakeCase`; the context type keeps the canonical
@@ -113,6 +133,12 @@ nonisolated struct PurchaseInterstitialContext: Identifiable, Equatable, Hashabl
         }
         self.activationRequired = card?.activationRequired ?? false
         self.activationUrl = card?.activationUrl
+        // savings-math-prominence Item 2 — non-winner rows have no
+        // identity / portal stacking. Zeros suppress those receipt lines.
+        self.identitySavings = 0
+        self.identitySource = nil
+        self.portalSavings = 0
+        self.portalSource = nil
         self.portalCTAs = portalCTAs
     }
 
@@ -126,11 +152,7 @@ nonisolated struct PurchaseInterstitialContext: Identifiable, Equatable, Hashabl
     }
 
     static func formatMoney(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
-        formatter.maximumFractionDigits = 2
-        return formatter.string(from: NSNumber(value: value)) ?? "$\(value)"
+        Money.format(value)
     }
 
     // MARK: - Derived

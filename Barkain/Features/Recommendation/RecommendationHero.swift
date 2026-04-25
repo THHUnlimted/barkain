@@ -43,27 +43,29 @@ struct RecommendationHero: View {
     }
 
     // MARK: - Hero card
+    //
+    // savings-math-prominence Item 1: visual priority inverted so the
+    // first thing the eye hits is the dollar amount SAVED, not the
+    // dollar amount spent. Three centered lines:
+    //   1. "Save $47" — barkainHero (48pt), warm gold — the memorable moment
+    //   2. "$152.99 at Walmart" — 24pt regular — the effective price
+    //   3. recommendation.why — 14pt secondary — the explanatory caption
+    // Eyebrow + breakdown pills + CTA wrap them. When totalSavings is 0
+    // the savings line hides entirely (no "Save $0") and line 2 becomes
+    // the visual headline; pre-#63 the parent gates on whether a
+    // recommendation exists at all, so this view never has to render
+    // an empty state.
 
     private var heroCard: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
+        VStack(alignment: .center, spacing: Spacing.md) {
             eyebrow
-            Text(recommendation.headline)
-                .font(.barkainTitle2)
-                .fontWeight(.semibold)
-                .foregroundStyle(Color.barkainOnSurface)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("recommendationHeadline")
+            savingsLine
+            effectivePriceLine
+            whyLine
 
-            priceBlock
-
-            if !breakdownLayers.isEmpty {
-                breakdownPills
+            if receipt.hasAnyDiscount {
+                StackingReceiptView(receipt: receipt)
             }
-
-            Text(recommendation.why)
-                .font(.barkainCaption)
-                .foregroundStyle(Color.barkainOnSurfaceVariant)
-                .fixedSize(horizontal: false, vertical: true)
 
             actionButton
         }
@@ -92,76 +94,51 @@ struct RecommendationHero: View {
         .foregroundStyle(Color.barkainPrimary)
     }
 
-    // MARK: - Price block
+    // MARK: - Hero lines (savings-math-prominence Item 1)
 
-    private var priceBlock: some View {
-        HStack(alignment: .lastTextBaseline, spacing: Spacing.sm) {
-            Text(formatMoney(recommendation.winner.finalPrice))
-                .font(.system(size: 44, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.barkainOnSurface)
-            if recommendation.winner.base_price_strikethroughEligible {
-                Text(formatMoney(recommendation.winner.basePrice))
-                    .font(.barkainBody)
-                    .strikethrough()
-                    .foregroundStyle(Color.barkainOnSurfaceVariant)
-            }
-            Spacer(minLength: 0)
-            if recommendation.hasStackableValue, recommendation.winner.totalSavings > 0 {
-                savingsPill
-            }
+    /// Line 1 — the savings number. Hidden entirely when totalSavings ≤ 0
+    /// (avoids the "Save $0" anti-pattern flagged in the pack).
+    @ViewBuilder
+    private var savingsLine: some View {
+        if recommendation.winner.totalSavings > 0 {
+            Text("Save \(formatMoney(recommendation.winner.totalSavings))")
+                .font(.barkainHero)
+                .barkainDisplayTracking()
+                .foregroundStyle(Color.barkainPrimary)
+                .multilineTextAlignment(.center)
+                .accessibilityIdentifier("recommendationSavingsHeadline")
+                .accessibilityLabel(
+                    "You save \(formatMoney(recommendation.winner.totalSavings))"
+                )
         }
     }
 
-    private var savingsPill: some View {
-        Text("Save \(formatMoney(recommendation.winner.totalSavings))")
-            .font(.barkainLabel)
-            .fontWeight(.semibold)
+    /// Line 2 — the effective price + retailer. 24pt regular per pack.
+    /// Uses `effectiveCost` not `finalPrice` so card + portal rebates
+    /// actually pull this number down (matches the receipt's "Your price"
+    /// row in Item 2).
+    private var effectivePriceLine: some View {
+        Text("\(formatMoney(recommendation.winner.effectiveCost)) at \(recommendation.winner.retailerName)")
+            .font(.system(size: 24, weight: .regular, design: .rounded))
             .foregroundStyle(Color.barkainOnSurface)
-            .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, 4)
-            .background(Color.barkainPrimary.opacity(0.22))
-            .clipShape(Capsule())
+            .multilineTextAlignment(.center)
+            .accessibilityIdentifier("recommendationEffectivePrice")
     }
 
-    // MARK: - Breakdown pills
-
-    private var breakdownLayers: [BreakdownLayer] {
-        var out: [BreakdownLayer] = []
-        let w = recommendation.winner
-        if w.identitySavings > 0, let src = w.identitySource {
-            out.append(.init(id: "identity", label: src, amount: w.identitySavings, icon: "checkmark.seal.fill"))
-        }
-        if w.portalSavings > 0, let src = w.portalSource {
-            out.append(.init(id: "portal", label: src.capitalized, amount: w.portalSavings, icon: "bag.fill"))
-        }
-        if w.cardSavings > 0, let src = w.cardSource {
-            out.append(.init(id: "card", label: src, amount: w.cardSavings, icon: "creditcard.fill"))
-        }
-        return out
+    /// Line 3 — the explanatory "why" copy. 14pt secondary.
+    private var whyLine: some View {
+        Text(recommendation.why)
+            .font(.system(size: 14, weight: .regular))
+            .foregroundStyle(Color.barkainOnSurfaceVariant)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("recommendationWhy")
     }
 
-    private var breakdownPills: some View {
-        VStack(alignment: .leading, spacing: Spacing.xs) {
-            ForEach(breakdownLayers) { layer in
-                HStack(spacing: Spacing.xs) {
-                    Image(systemName: layer.icon)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.barkainPrimary)
-                    Text(layer.label)
-                        .font(.barkainCaption)
-                        .foregroundStyle(Color.barkainOnSurface)
-                    Spacer(minLength: Spacing.xs)
-                    Text("+\(formatMoney(layer.amount))")
-                        .font(.barkainCaption)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(Color.barkainPrimary)
-                }
-                .padding(.horizontal, Spacing.sm)
-                .padding(.vertical, 6)
-                .background(Color.barkainSurface.opacity(0.75))
-                .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous))
-            }
-        }
+    // MARK: - Receipt (savings-math-prominence Item 2)
+
+    private var receipt: StackingReceipt {
+        StackingReceipt(stackedPath: recommendation.winner)
     }
 
     // MARK: - Action button
@@ -251,31 +228,7 @@ struct RecommendationHero: View {
     // MARK: - Helpers
 
     private func formatMoney(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
-        formatter.maximumFractionDigits = 2
-        return formatter.string(from: NSNumber(value: value)) ?? "$\(value)"
-    }
-
-    // MARK: - Breakdown model
-
-    private struct BreakdownLayer: Identifiable, Hashable {
-        let id: String
-        let label: String
-        let amount: Double
-        let icon: String
+        Money.format(value)
     }
 }
 
-// MARK: - StackedPath helpers
-
-private extension StackedPath {
-    /// Only show the strikethrough base price when there's an actual
-    /// identity discount driving `final_price` below `base_price`.
-    /// Card + portal rebates don't change the sticker — showing a
-    /// strikethrough for them would be misleading.
-    var base_price_strikethroughEligible: Bool {
-        identitySavings > 0 && basePrice > finalPrice
-    }
-}

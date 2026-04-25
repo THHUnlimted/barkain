@@ -9,7 +9,13 @@ extension Font {
 
     // MARK: - Headlines (rounded system)
 
-    /// Display hero — 40pt black rounded. Pair with `.barkainDisplayTracking()`.
+    /// Hero — 48pt semibold rounded. Reserved for the savings-delta
+    /// headline on `RecommendationHero` (savings-math-prominence Item 1).
+    /// Pair with `.barkainDisplayTracking()` for tighter line height when
+    /// numbers grow into 3 digits.
+    static let barkainHero: Font = .system(size: 48, weight: .semibold, design: .rounded)
+
+    /// Display — 40pt black rounded. Pair with `.barkainDisplayTracking()`.
     static let barkainDisplay: Font = .system(size: 40, weight: .black, design: .rounded)
 
     /// Large title — 34pt black rounded.

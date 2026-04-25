@@ -290,14 +290,25 @@ struct PurchaseInterstitialSheet: View {
         }
     }
 
-    // MARK: - Summary block
+    // MARK: - Summary block (savings-math-prominence Item 2)
+    //
+    // The shared `StackingReceiptView` renders the math here too so the
+    // user sees the same line-by-line breakdown they did on the hero.
+    // The 1% baseline comparison stays as a small caption — different
+    // concern (portfolio quality), kept adjacent rather than dropped.
 
     private var summaryBlock: some View {
         VStack(alignment: .leading, spacing: Spacing.xxs) {
-            Text(viewModel.savingsHeadline)
-                .font(.barkainHeadline)
-                .foregroundStyle(Color.barkainOnSurface)
-                .accessibilityIdentifier("purchaseInterstitialSavingsDelta")
+            let receipt = StackingReceipt(interstitialContext: viewModel.context)
+            if receipt.hasAnyDiscount {
+                StackingReceiptView(receipt: receipt)
+                    .accessibilityIdentifier("purchaseInterstitialReceipt")
+            } else {
+                Text(viewModel.savingsHeadline)
+                    .font(.barkainHeadline)
+                    .foregroundStyle(Color.barkainOnSurface)
+                    .accessibilityIdentifier("purchaseInterstitialSavingsDelta")
+            }
             if viewModel.context.baselineOnePercentSavings > 0 {
                 Text(viewModel.baselineComparisonCopy)
                     .font(.barkainCaption)
