@@ -99,8 +99,8 @@ async def test_run_demo_check_returns_1_when_backend_unhealthy(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_demo_check_returns_1_when_below_threshold(monkeypatch):
-    """Only 5 of 9 retailers respond → below 7-threshold, exit 1."""
-    partial = demo_check.ACTIVE_RETAILERS[:5]
+    """Only 4 of 9 retailers respond → below 5-threshold, exit 1."""
+    partial = demo_check.ACTIVE_RETAILERS[:4]
     stream_lines = _make_success_stream_lines(partial)
     client = MagicMock()
     client.__aenter__ = AsyncMock(return_value=client)
