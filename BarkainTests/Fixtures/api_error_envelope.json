@@ -1,0 +1,11 @@
+{
+  "detail": {
+    "error": {
+      "code": "RECOMMEND_INSUFFICIENT_DATA",
+      "message": "Not enough price data for recommendation",
+      "details": {
+        "product_id": "abc123"
+      }
+    }
+  }
+}
