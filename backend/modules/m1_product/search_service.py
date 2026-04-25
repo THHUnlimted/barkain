@@ -251,6 +251,27 @@ def _query_model_codes(normalized_query: str) -> list[str]:
     return out
 
 
+# Strict-spec tokens that must match verbatim — voltage suffixes (40v / 80v
+# / 240v, len 2+) and 4+ digit pure-numeric model numbers (5200, 6400). Pre-
+# Fix `_query_model_codes` required len>=4 AND digit+letter, which missed
+# both shapes. Voltage tokens drove Greenworks 40V → 80V drift; pure-digit
+# model tokens drove Vitamix 5200 → Explorian E310 drift. iPhone 16 / Galaxy
+# S24 keep working because "16"/"24" are <4 digits and don't match these.
+# Added 2026-04-25 (interstitial-parity-1 demo audit, R1/R2).
+_VOLTAGE_TOKEN_RE = re.compile(r"^\d{2,3}v$", re.IGNORECASE)
+_PURE_DIGIT_MODEL_RE = re.compile(r"^\d{4,}$")
+
+
+def _query_strict_specs(normalized_query: str) -> list[str]:
+    """Voltage + pure-numeric model tokens that must match verbatim in row."""
+    out: list[str] = []
+    for raw in normalized_query.lower().split():
+        tok = _STRIP_PUNCT_RE.sub("", raw).strip()
+        if _VOLTAGE_TOKEN_RE.match(tok) or _PURE_DIGIT_MODEL_RE.match(tok):
+            out.append(tok)
+    return out
+
+
 def _is_tier2_noise(row: dict, *, query: str | None = None) -> bool:
     """Classify a Tier 2 row as accessory/service/peripheral noise.
 
@@ -297,13 +318,37 @@ def _is_tier2_noise(row: dict, *, query: str | None = None) -> bool:
         if code not in haystack:
             return True
 
+    # Same hard rule for strict numeric specs — voltage suffixes (40V vs
+    # 80V) and 4+ digit pure-numeric model numbers (Vitamix 5200 vs E310
+    # / 64068). The catalog often surfaces a same-brand-different-model
+    # row at high token overlap; without this gate the soft majority check
+    # below passes and we serve a wrong product.
+    for spec in _query_strict_specs(query):
+        if spec not in haystack:
+            return True
+
+    meaningful = _meaningful_query_tokens(query)
+    if not meaningful:
+        return False
+
+    # Hard brand-gate: the first meaningful, alpha-only token of the query
+    # almost always names a brand ("Toro Recycler", "Husqvarna 130BT",
+    # "DeWalt drill"). If it isn't echoed back anywhere in the row's
+    # title/brand/model, the row is the wrong brand. Pre-fix, Toro Recycler
+    # surfaced Greenworks/WORX mowers because the soft 50% token-overlap
+    # rule was satisfied by generic words like "self-propelled" and "mower".
+    # Added 2026-04-25 (interstitial-parity-1 demo audit, R3 brand-bleed).
+    # Cross-brand subsidiary cases (Anker → Soundcore, where query "anker"
+    # appears in the row title via "Soundcore - by Anker") still pass
+    # because the check is haystack substring, not brand-field equality.
+    leading = meaningful[0]
+    if leading.isalpha() and len(leading) >= 3 and leading not in haystack:
+        return True
+
     # Soft requirement: strict majority of meaningful query tokens must
     # appear in the haystack. Catches `leica q3` → KEF Q3 (no `leica`) and
     # `framework laptop 16` → LG gram (no `framework`), while leaving
     # genuine matches like `sony wh-1000xm5` → Sony WH-1000XM5 intact.
-    meaningful = _meaningful_query_tokens(query)
-    if not meaningful:
-        return False
     hits = sum(1 for tok in meaningful if tok in haystack)
     if hits * 2 <= len(meaningful):
         return True
