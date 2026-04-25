@@ -58,3 +58,9 @@ tmp/
 # ── Claude Code session state (agent-local, never commit) ─
 .claude/
 .tmp/
+
+# ── XcodeBuildMCP workflow config (workstation-local, load-bearing for UI automation) ─
+# config.yaml lives in both project root and Barkain.xcodeproj/ (Claude Code spawns
+# MCP child with cwd=.xcodeproj). Persists on disk across sessions; do not commit.
+.xcodebuildmcp/
+Barkain.xcodeproj/.xcodebuildmcp/
