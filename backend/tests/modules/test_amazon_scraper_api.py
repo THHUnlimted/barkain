@@ -280,3 +280,131 @@ async def test_container_client_falls_back_to_container_when_auth_missing(monkey
     monkeypatch.setattr(client, "extract", _fake_extract)
     await client._extract_one("amazon", "airpods", None, None, 5)
     assert called_container is True
+
+
+# MARK: - L1 brand-strip recovery (cat-rel-1-L1)
+
+
+def test_extract_brand_from_url_finds_leading_alpha_segment():
+    """Decodo URL slugs like /Weber-51040001-Q1200-... carry the brand."""
+    from modules.m2_prices.adapters.amazon_scraper_api import _extract_brand_from_url
+
+    assert _extract_brand_from_url(
+        "/Weber-51040001-Q1200-Liquid-Propane/dp/B010ILB4KU/ref=sr_1_1"
+    ) == "Weber"
+    assert _extract_brand_from_url(
+        "/Breville-BES870XL-Barista-Express-Espresso/dp/B00CH9OOMC"
+    ) == "Breville"
+
+
+def test_extract_brand_from_url_handles_absolute_urls():
+    """Works on absolute https URLs too."""
+    from modules.m2_prices.adapters.amazon_scraper_api import _extract_brand_from_url
+
+    assert _extract_brand_from_url(
+        "https://www.amazon.com/Weber-51040001-Q1200/dp/B010ILB4KU"
+    ) == "Weber"
+
+
+def test_extract_brand_from_url_rejects_dp_direct():
+    """Direct /dp/{asin} URLs (no slug) → None (denylist filters "dp")."""
+    from modules.m2_prices.adapters.amazon_scraper_api import _extract_brand_from_url
+
+    assert _extract_brand_from_url("/dp/B0FQFB8FMG") is None
+    assert _extract_brand_from_url("https://www.amazon.com/dp/B0FQFB8FMG") is None
+
+
+def test_extract_brand_from_url_rejects_digit_led_slug():
+    """Slugs starting with digits (product codes) → None."""
+    from modules.m2_prices.adapters.amazon_scraper_api import _extract_brand_from_url
+
+    assert _extract_brand_from_url("/304-Stainless-Steel-Burner/dp/B07ABC") is None
+
+
+def test_extract_brand_from_url_returns_none_for_empty():
+    """Empty / None URL → None (no crash)."""
+    from modules.m2_prices.adapters.amazon_scraper_api import _extract_brand_from_url
+
+    assert _extract_brand_from_url("") is None
+    assert _extract_brand_from_url(None) is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_amazon_reinjects_brand_from_url_slug_when_title_stripped():
+    """Decodo strips brand from title + ships empty manufacturer; the URL
+    slug carries the brand. Adapter prepends it so downstream relevance
+    scoring (Rule 3 brand check) sees a Weber-prefixed title.
+
+    Reproduces the live `weber q1200` query: title "Q1200 Liquid Propane
+    Portable Gas Grill" → "Weber Q1200 Liquid Propane Portable Gas Grill".
+    """
+    weber_organic = {
+        "asin": "B010ILB4KU",
+        "title": "Q1200 Liquid Propane Portable Gas Grill, Red",
+        "price": 279.0,
+        "currency": "USD",
+        "manufacturer": "",
+        "url": "/Weber-51040001-Q1200-Liquid-Propane/dp/B010ILB4KU/ref=sr_1_1",
+        "url_image": "https://m.media-amazon.com/images/I/71pqcAsufxL.jpg",
+        "is_sponsored": False,
+    }
+    respx.post(host="scraper-api.decodo.com").mock(
+        return_value=httpx.Response(200, json=_decodo_response([weber_organic])),
+    )
+
+    resp = await fetch_amazon(query="weber q1200", cfg=_cfg())
+
+    assert len(resp.listings) == 1
+    assert resp.listings[0].title.startswith("Weber Q1200")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_amazon_does_not_double_prefix_when_title_already_has_brand():
+    """If the title already contains the brand, no prefix is added."""
+    organic_with_brand = {
+        "asin": "B0ABC",
+        "title": "Sony WH-1000XM5 Wireless Headphones",
+        "price": 349.99,
+        "currency": "USD",
+        "manufacturer": "",
+        "url": "/Sony-WH-1000XM5-Wireless-Headphones/dp/B0ABC",
+        "url_image": "https://example.com/img.jpg",
+        "is_sponsored": False,
+    }
+    respx.post(host="scraper-api.decodo.com").mock(
+        return_value=httpx.Response(200, json=_decodo_response([organic_with_brand])),
+    )
+
+    resp = await fetch_amazon(query="sony", cfg=_cfg())
+
+    assert len(resp.listings) == 1
+    assert resp.listings[0].title == "Sony WH-1000XM5 Wireless Headphones"
+    # No double prefix.
+    assert not resp.listings[0].title.startswith("Sony Sony")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_amazon_skips_prefix_when_manufacturer_present():
+    """Decodo populated `manufacturer` → trust it, don't touch the title."""
+    organic = {
+        "asin": "B0XYZ",
+        "title": "Some Product Title",
+        "price": 99.99,
+        "currency": "USD",
+        "manufacturer": "Apple",
+        "url": "/Anker-Charging-Cable/dp/B0XYZ",
+        "url_image": "https://example.com/img.jpg",
+        "is_sponsored": False,
+    }
+    respx.post(host="scraper-api.decodo.com").mock(
+        return_value=httpx.Response(200, json=_decodo_response([organic])),
+    )
+
+    resp = await fetch_amazon(query="cable", cfg=_cfg())
+
+    assert len(resp.listings) == 1
+    # Title untouched — manufacturer was non-empty.
+    assert resp.listings[0].title == "Some Product Title"

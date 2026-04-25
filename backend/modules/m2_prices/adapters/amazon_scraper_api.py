@@ -40,6 +40,7 @@ special-casing. All failures are captured in ``response.error`` — never raises
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import UTC, datetime
 
@@ -75,6 +76,42 @@ def is_configured(cfg: Settings | None = None) -> bool:
 
 # MARK: - Response mapping
 
+# Decodo's Amazon parser routinely returns titles with the brand stripped
+# ("Q1200 Liquid Propane Grill" instead of "Weber Q1200 Liquid Propane Grill")
+# and an empty `manufacturer` field, but the canonical product URL slug
+# preserves it: "/Weber-51040001-Q1200-.../dp/B010ILB4KU/...". This regex
+# captures the leading slug segment when it looks like a brand: alpha-led,
+# 3-25 chars, no digits. Catches the realistic shapes (Weber, Breville,
+# DeWalt, Black-Decker via "Black"). Filters out direct `/dp/B0...` URLs
+# (where the first segment is "dp") and product-code-led slugs.
+_URL_BRAND_RE = re.compile(r"^/?([A-Za-z][A-Za-z]{2,24})[-/]")
+_URL_BRAND_DENYLIST = frozenset({
+    "dp", "gp", "ref", "stores", "amazon", "exec", "the", "and",
+})
+
+
+def _extract_brand_from_url(url: str | None) -> str | None:
+    """Pull the brand out of an Amazon product URL slug.
+
+    Returns None unless the leading slug segment is a plausible brand:
+    alpha-only (no digits), 3-25 chars, not a known Amazon path prefix.
+    """
+    if not url:
+        return None
+    # Strip protocol+host so we operate on path only.
+    if url.startswith("http"):
+        try:
+            url = "/" + url.split("://", 1)[1].split("/", 1)[1]
+        except IndexError:
+            return None
+    match = _URL_BRAND_RE.match(url)
+    if not match:
+        return None
+    candidate = match.group(1)
+    if candidate.lower() in _URL_BRAND_DENYLIST:
+        return None
+    return candidate
+
 
 def _map_organic_to_listing(item: dict) -> ContainerListing | None:
     """Map one Decodo-parsed organic Amazon item to a ``ContainerListing``.
@@ -102,10 +139,25 @@ def _map_organic_to_listing(item: dict) -> ContainerListing | None:
 
     # Prefer the canonical /dp/{asin} URL — Decodo sometimes returns
     # affiliate-style search-result URLs that 302 to the product page.
-    url = item.get("url") or _AMAZON_PRODUCT_URL.format(asin=asin)
-    if not url.startswith("http"):
+    raw_url = item.get("url") or _AMAZON_PRODUCT_URL.format(asin=asin)
+    if not raw_url.startswith("http"):
         # Decodo returns relative URLs ("/Foo/dp/B0...") in some result rows.
         url = _AMAZON_PRODUCT_URL.format(asin=asin)
+    else:
+        url = raw_url
+
+    # cat-rel-1-L1: Decodo's Amazon parser strips the brand from the title
+    # ("Q1200 Liquid Propane Grill") and ships an empty `manufacturer`,
+    # but the URL slug preserves it ("/Weber-51040001-Q1200-.../dp/..."").
+    # Reinject so downstream relevance scoring (Rule 3 brand check) and the
+    # iOS title both see the manufacturer. Skip when the title already
+    # contains it (avoids "Weber Weber Q1200…" duplication on listings the
+    # parser handled correctly).
+    manufacturer = (item.get("manufacturer") or "").strip()
+    if not manufacturer:
+        slug_brand = _extract_brand_from_url(item.get("url") or "")
+        if slug_brand and slug_brand.lower() not in title.lower():
+            title = f"{slug_brand} {title}"
 
     return ContainerListing(
         title=title,

@@ -134,6 +134,20 @@ _MODEL_PATTERNS = [
     # Marketplace soft-gate never tripped on Breville/DeWalt queries because
     # no identifiers were extracted.
     re.compile(r'\b[A-Z]{2,4}\d{3,5}[A-Z]{1,4}\d{0,2}\b'),
+    # Digit-led appliance SKU: 5 digits + optional 1-2 trailing letters.
+    # Matches Hamilton Beach 49981A / 49963A / 49988, Bissell 15999, Greenworks
+    # 24252, and similar catalog-numbered home-goods SKUs that all 8 prior
+    # patterns miss (every one of them required a leading letter prefix).
+    # Anchored at 5 digits to avoid 4-digit collisions (1080P, 4090Ti, 8500
+    # BTU). Negative lookahead skips capacity / unit suffixes (12000 BTU,
+    # 10000 mAh, 5000 lbs) that would otherwise produce false positives on
+    # appliance and battery listings. Added 2026-04-25 (cat-rel-1-L3): the
+    # original Known Issue flagged risk; the unit-lookahead resolves it.
+    re.compile(
+        r'\b\d{5}[A-Z]{0,2}\b'
+        r'(?!\s*(?:BTU|mAh|Wh|ml|cc|ft|sq|lbs?|oz|kg|RPM|MHz|GHz|Hz|MB|GB|TB|fps))',
+        re.IGNORECASE,
+    ),
 ]
 
 # Variant / sub-model discriminator words. If two titles disagree on which of
