@@ -52,6 +52,85 @@ async def test_resolve_rejects_missing_upc(client):
     assert response.status_code == 422
 
 
+# MARK: - Validation envelope shape (sim-edge-case-fixes-v1)
+
+
+@pytest.mark.asyncio
+async def test_validation_422_uses_wrapped_envelope(client):
+    """Pydantic 422s should match the canonical {detail:{error:{...}}} shape
+    so iOS APIClient.decodeErrorDetail surfaces a friendly message instead
+    of falling through to "Validation failed". Regression for sim Edge-Case
+    Findings #1 and #5.
+    """
+    response = await client.post(RESOLVE_URL, json={"upc": "12345"})
+    assert response.status_code == 422
+    body = response.json()
+    assert "detail" in body
+    detail = body["detail"]
+    # The wrapped envelope wraps a single `error` dict, not a list (which is
+    # what FastAPI's default Pydantic 422 returns).
+    assert isinstance(detail, dict)
+    assert "error" in detail
+    err = detail["error"]
+    assert err["code"] == "VALIDATION_ERROR"
+    assert isinstance(err.get("message"), str) and err["message"]
+    # Structured per-field errors stay available under details for telemetry.
+    assert isinstance(err.get("details"), dict)
+    assert isinstance(err["details"].get("errors"), list)
+
+
+# MARK: - Pattern-UPC guard (sim-edge-case-fixes-v1)
+
+
+@pytest.mark.asyncio
+async def test_resolve_rejects_pattern_upc_all_zeros_without_calling_gemini(
+    client, db_session, fake_redis
+):
+    """`000000000000` short-circuits to 404 before Gemini is invoked.
+
+    Regression for sim Edge-Case Finding #6 — Gemini hallucinated
+    "ORGANIC BLUE CORN TORTILLA CHIPS" for this UPC and the result was
+    persisted to PG. Cheaper to reject the obvious pattern up front.
+    """
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+        ) as mock_gemini,
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+        ) as mock_upcitemdb,
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": "000000000000"})
+    assert response.status_code == 404
+    body = response.json()
+    assert body["detail"]["error"]["code"] == "PRODUCT_NOT_FOUND"
+    mock_gemini.assert_not_called()
+    mock_upcitemdb.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resolve_rejects_pattern_upc_all_ones_without_calling_gemini(
+    client, db_session, fake_redis
+):
+    """All-same-digit reject covers `111111111111` too (not just zeros)."""
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+        ) as mock_gemini,
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+        ) as mock_upcitemdb,
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": "111111111111"})
+    assert response.status_code == 404
+    mock_gemini.assert_not_called()
+    mock_upcitemdb.assert_not_called()
+
+
 # MARK: - Auth
 
 

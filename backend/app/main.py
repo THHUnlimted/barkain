@@ -2,12 +2,15 @@ from datetime import UTC, datetime
 
 import redis.asyncio as aioredis
 import sqlalchemy
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.database import async_engine
 from app.dependencies import get_redis
 from app.ebay_webhook import router as ebay_webhook_router
+from app.errors import make_error_detail
 from app.middleware import setup_middleware
 from modules.m1_product.router import router as m1_product_router
 from modules.m2_prices.fb_location_router import router as m2_fb_location_router
@@ -28,6 +31,40 @@ app = FastAPI(
 )
 
 setup_middleware(app)
+
+
+# Wrap FastAPI's default Pydantic 422 (RequestValidationError) into the
+# canonical `{"detail": {"error": {"code", "message", "details"}}}` envelope
+# so iOS APIClient.decodeErrorDetail surfaces a friendly message instead of
+# falling through to "Validation failed". Picks the first error's `msg` for
+# a single-line user-facing message; keeps the full structured errors under
+# `details.errors` for telemetry.
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(
+    _request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    errors = exc.errors()
+    first_msg = ""
+    if errors:
+        msg = errors[0].get("msg") or ""
+        # Pydantic v2 prefixes with "Value error, " — strip for cleaner copy.
+        first_msg = msg.removeprefix("Value error, ").strip()
+    message = first_msg or "That input doesn't look right — give it another try."
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": make_error_detail(
+                code="VALIDATION_ERROR",
+                message=message,
+                details={"errors": [
+                    {"loc": list(e.get("loc", [])), "msg": e.get("msg", ""), "type": e.get("type", "")}
+                    for e in errors
+                ]},
+            )
+        },
+    )
+
+
 app.include_router(m1_product_router)
 app.include_router(m2_prices_router)
 app.include_router(m2_fb_location_router)

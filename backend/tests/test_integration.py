@@ -158,7 +158,7 @@ async def test_full_flow_empty_product_name(client, db_session):
     ):
         resolve_resp = await client.post(
             "/api/v1/products/resolve",
-            json={"upc": "111111111111"},
+            json={"upc": "111111111112"},
         )
 
     assert resolve_resp.status_code == 200
@@ -215,7 +215,7 @@ async def test_full_flow_missing_asin(client, db_session):
     ):
         resolve_resp = await client.post(
             "/api/v1/products/resolve",
-            json={"upc": "222222222222"},
+            json={"upc": "222222222223"},
         )
 
     assert resolve_resp.status_code == 200
@@ -269,7 +269,7 @@ async def test_full_flow_all_containers_timeout(client, db_session):
     ):
         resolve_resp = await client.post(
             "/api/v1/products/resolve",
-            json={"upc": "333333333333"},
+            json={"upc": "333333333334"},
         )
 
     product_id = resolve_resp.json()["id"]
@@ -309,7 +309,7 @@ async def test_full_flow_partial_results(client, db_session):
     ):
         resolve_resp = await client.post(
             "/api/v1/products/resolve",
-            json={"upc": "444444444444"},
+            json={"upc": "444444444445"},
         )
 
     product_id = resolve_resp.json()["id"]
@@ -353,7 +353,7 @@ async def test_full_flow_duplicate_upc_uses_cache(client, db_session, fake_redis
     ):
         resp1 = await client.post(
             "/api/v1/products/resolve",
-            json={"upc": "555555555555"},
+            json={"upc": "555555555556"},
         )
         assert resp1.status_code == 200
         assert mock_gemini.call_count == 1
@@ -375,7 +375,7 @@ async def test_full_flow_duplicate_upc_uses_cache(client, db_session, fake_redis
     ):
         resp2 = await client.post(
             "/api/v1/products/resolve",
-            json={"upc": "555555555555"},
+            json={"upc": "555555555556"},
         )
         assert resp2.status_code == 200
         mock_gemini_2.assert_not_called()
@@ -401,7 +401,7 @@ async def test_full_flow_force_refresh(client, db_session, fake_redis):
     ):
         resolve_resp = await client.post(
             "/api/v1/products/resolve",
-            json={"upc": "666666666666"},
+            json={"upc": "666666666667"},
         )
 
     product_id = resolve_resp.json()["id"]

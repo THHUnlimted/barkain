@@ -169,7 +169,26 @@ struct SearchView: View {
         .searchable(
             text: Binding(
                 get: { vm.query },
-                set: { newValue in Task { await vm.onQueryChange(newValue) } }
+                set: { newValue in
+                    // Update the bound `query` SYNCHRONOUSLY so the system X
+                    // "Clear text" button (and subsequent keystrokes) see a
+                    // fresh value immediately. Wrapping the whole setter in
+                    // a Task races against the next edit — that was the
+                    // root cause of the "Clear doesn't actually clear" bug.
+                    //
+                    // Mirrors the same spurious-empty guard `onQueryChange`
+                    // applies (see SearchViewModel comment): when a stream
+                    // is presented, an empty-value setter call is almost
+                    // certainly a SwiftUI .searchable teardown artifact and
+                    // would dismiss the comparison view if we wrote it
+                    // through. The async path still runs in either case so
+                    // suggestions and presented-VM dismissal stay correct.
+                    let isRealEdit = !newValue.isEmpty && newValue != vm.query
+                    if isRealEdit || (newValue.isEmpty && vm.presentedProductViewModel == nil) {
+                        vm.query = newValue
+                    }
+                    Task { await vm.onQueryChange(newValue) }
+                }
             ),
             placement: .navigationBarDrawer(displayMode: .always),
             prompt: "Sony WH-1000XM5, AirPods Pro…"
