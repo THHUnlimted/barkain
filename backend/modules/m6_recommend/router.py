@@ -56,7 +56,7 @@ async def recommend(
         raise_http_error(
             404,
             "PRODUCT_NOT_FOUND",
-            f"No product found with id {body.product_id}",
+            "We couldn't find that product.",
             {"product_id": str(body.product_id)},
         )
     except ProductNotFoundError:
@@ -66,13 +66,16 @@ async def recommend(
         raise_http_error(
             404,
             "PRODUCT_NOT_FOUND",
-            f"No product found with id {body.product_id}",
+            "We couldn't find that product.",
             {"product_id": str(body.product_id)},
         )
     except InsufficientPriceDataError as exc:
+        # iOS renders its own localized copy on this 422 — the engineer-
+        # tone exception message is kept in the response only as a debug
+        # signal for telemetry / log correlation, never surfaced to UI.
         raise_http_error(
             422,
             "RECOMMEND_INSUFFICIENT_DATA",
-            str(exc),
-            {"product_id": str(body.product_id)},
+            "We couldn't pick a best option for this one yet.",
+            {"product_id": str(body.product_id), "debug_reason": str(exc)},
         )

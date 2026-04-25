@@ -52,7 +52,12 @@ async def resolve_product(
         product = await service.resolve(body.upc)
         return ProductResponse.model_validate(product)
     except ProductNotFoundError:
-        raise_http_error(404, "PRODUCT_NOT_FOUND", f"No product found for UPC {body.upc}", {"upc": body.upc})
+        raise_http_error(
+            404,
+            "PRODUCT_NOT_FOUND",
+            "Couldn't find this barcode in our catalog.",
+            {"upc": body.upc},
+        )
 
 
 @router.post(
@@ -130,7 +135,7 @@ async def resolve_from_search(
         raise_http_error(
             409,
             "RESOLUTION_NEEDS_CONFIRMATION",
-            f"Low-confidence match ({body.confidence:.2f}) — user confirmation required",
+            "We need you to confirm this — is this the right product?",
             {
                 "device_name": body.device_name,
                 "brand": body.brand,
@@ -152,14 +157,14 @@ async def resolve_from_search(
         raise_http_error(
             404,
             "UPC_NOT_FOUND_FOR_PRODUCT",
-            f"Could not find a barcode for {body.device_name!r}",
+            "Couldn't find this product — try a different name or scan the barcode.",
             {"device_name": body.device_name},
         )
     except ProductNotFoundError as exc:
         raise_http_error(
             404,
             "PRODUCT_NOT_FOUND",
-            f"No product found for derived UPC {exc.upc}",
+            "Couldn't find this product in our catalog.",
             {"device_name": body.device_name, "derived_upc": exc.upc},
         )
 
@@ -221,13 +226,13 @@ async def resolve_from_search_confirm(
         raise_http_error(
             404,
             "UPC_NOT_FOUND_FOR_PRODUCT",
-            f"Could not find a barcode for {body.device_name!r}",
+            "Couldn't find this product — try a different name or scan the barcode.",
             {"device_name": body.device_name},
         )
     except ProductNotFoundError as exc:
         raise_http_error(
             404,
             "PRODUCT_NOT_FOUND",
-            f"No product found for derived UPC {exc.upc}",
+            "Couldn't find this product in our catalog.",
             {"device_name": body.device_name, "derived_upc": exc.upc},
         )

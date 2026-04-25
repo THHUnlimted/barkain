@@ -62,7 +62,12 @@ async def get_prices(
         )
         return PriceComparisonResponse.model_validate(result)
     except ProductNotFoundError:
-        raise_http_error(404, "PRODUCT_NOT_FOUND", f"No product found with id {product_id}", {"product_id": str(product_id)})
+        raise_http_error(
+            404,
+            "PRODUCT_NOT_FOUND",
+            "We couldn't find that product.",
+            {"product_id": str(product_id)},
+        )
 
 
 # MARK: - Streaming (Step 2c)
@@ -108,7 +113,7 @@ async def stream_prices_endpoint(
         raise_http_error(
             404,
             "PRODUCT_NOT_FOUND",
-            f"No product found with id {product_id}",
+            "We couldn't find that product.",
             {"product_id": str(product_id)},
         )
 
