@@ -3,7 +3,7 @@
 help:
 	@echo "Barkain make targets:"
 	@echo "  demo-check     — hit dev backend /health + resolve an evergreen UPC,"
-	@echo "                   verify ≥7 of 9 retailers respond w/ prices in 15s."
+	@echo "                   verify ≥5 of 9 retailers respond w/ prices in 15s."
 	@echo "                   Exits 0 (healthy) or 1 (something hard-down)."
 	@echo "                   Pass ARGS=\"--no-cache\" to bypass Redis replay."
 	@echo "                   Pass ARGS=\"--remote-containers=ec2\" to pre-flight"

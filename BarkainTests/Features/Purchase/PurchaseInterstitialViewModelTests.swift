@@ -175,6 +175,89 @@ struct PurchaseInterstitialSheetRenderTests {
         #expect(ctx.hasCardGuidance == false)
     }
 
+    @Test("Portal-only winner without a card still surfaces the receipt")
+    func receiptRendersWithoutCardWhenPortalSavingsExist() {
+        // Demo path: hero promises "$205.79 at eBay" via Befrugal portal
+        // cashback. User has no card on file (skipped onboarding). The
+        // interstitial must still show the receipt or the user lands on
+        // a sheet that contradicts the hero.
+        let portalOnlyWinner = StackedPath(
+            retailerId: "ebay_used",
+            retailerName: "eBay (Used/Refurb)",
+            basePrice: 209.99,
+            finalPrice: 209.99,
+            effectiveCost: 205.79,
+            totalSavings: 4.20,
+            identitySavings: 0,
+            identitySource: nil,
+            cardSavings: 0,
+            cardSource: nil,
+            portalSavings: 4.20,
+            portalSource: "befrugal",
+            condition: "used",
+            productUrl: "https://www.ebay.com/itm/X"
+        )
+        let ctx = PurchaseInterstitialContext(
+            winner: portalOnlyWinner,
+            productId: UUID(),
+            productName: "Apple MacBook Air M1",
+            cards: []
+        )
+        #expect(ctx.hasCardGuidance == false)
+
+        let receipt = StackingReceipt(interstitialContext: ctx)
+        #expect(receipt.hasAnyDiscount == true)
+        #expect(receipt.portalSavings == 4.20)
+        #expect(receipt.portalSource == "befrugal")
+        #expect(abs(receipt.yourPrice - 205.79) < 0.005)
+    }
+
+    @Test("Identity-only winner without a card still surfaces the receipt")
+    func receiptRendersWithoutCardWhenIdentitySavingsExist() {
+        let identityOnlyWinner = StackedPath(
+            retailerId: "best_buy",
+            retailerName: "Best Buy",
+            basePrice: 100.00,
+            finalPrice: 90.00,
+            effectiveCost: 90.00,
+            totalSavings: 10.00,
+            identitySavings: 10.00,
+            identitySource: "Student",
+            cardSavings: 0,
+            cardSource: nil,
+            portalSavings: 0,
+            portalSource: nil,
+            condition: "new",
+            productUrl: "https://www.bestbuy.com/X"
+        )
+        let ctx = PurchaseInterstitialContext(
+            winner: identityOnlyWinner,
+            productId: UUID(),
+            productName: "Sony WH-1000XM5",
+            cards: []
+        )
+        #expect(ctx.hasCardGuidance == false)
+
+        let receipt = StackingReceipt(interstitialContext: ctx)
+        #expect(receipt.hasAnyDiscount == true)
+        #expect(receipt.identitySavings == 10.00)
+        #expect(receipt.identitySource == "Student")
+    }
+
+    @Test("No card and no stack falls back to direct-purchase copy")
+    func directPurchaseWhenNothingToStack() {
+        let bareWinner = makeWinner(cardSavings: 0, cardSource: nil)
+        let ctx = PurchaseInterstitialContext(
+            winner: bareWinner,
+            productId: UUID(),
+            productName: "Sony WH-1000XM5",
+            cards: []
+        )
+        #expect(ctx.hasCardGuidance == false)
+        let receipt = StackingReceipt(interstitialContext: ctx)
+        #expect(receipt.hasAnyDiscount == false)
+    }
+
     @Test("continueButtonLabel includes retailer name")
     func continueLabelContainsRetailer() {
         let vm = PurchaseInterstitialViewModel(

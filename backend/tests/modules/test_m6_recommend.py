@@ -473,7 +473,13 @@ async def test_recommendation_stacks_all_three_layers_end_to_end(
     )
 
     service = RecommendationService(db_session, fake_redis)
-    rec = await service.get_recommendation(MOCK_USER_ID, product.id)
+    # Pass active rakuten membership so the seeded portal bonus stacks —
+    # the service only applies portal cashback for memberships the user
+    # has activated (otherwise the hero promises savings the Continue
+    # button can't actually transit).
+    rec = await service.get_recommendation(
+        MOCK_USER_ID, product.id, user_memberships={"rakuten": True}
+    )
 
     assert rec.winner.retailer_id == "samsung_direct"
     assert rec.winner.identity_savings > 0
@@ -483,6 +489,76 @@ async def test_recommendation_stacks_all_three_layers_end_to_end(
     assert rec.brand_direct_callout is not None
     assert rec.brand_direct_callout.retailer_id == "samsung_direct"
     assert len(rec.alternatives) == 1
+
+
+async def test_recommendation_skips_portal_savings_for_inactive_membership(
+    db_session, fake_redis
+):
+    """Without an active portal membership the receipt must not promise
+    portal savings — Continue would route direct-retailer and the rebate
+    would never post."""
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "samsung_direct", display_name="Samsung.com")
+    await _seed_retailer(db_session, "best_buy", display_name="Best Buy")
+    await _seed_health(db_session, "samsung_direct")
+    await _seed_health(db_session, "best_buy")
+    product = await _seed_product(
+        db_session, name="Samsung Galaxy S25 Ultra", brand="Samsung"
+    )
+    await _seed_price(db_session, product.id, "samsung_direct", 1000.0)
+    await _seed_price(db_session, product.id, "best_buy", 1050.0)
+    await _seed_portal(db_session, "rakuten", "samsung_direct", 4.0)
+    await db_session.flush()
+
+    import json
+    payload = {
+        "product_id": str(product.id),
+        "product_name": product.name,
+        "prices": [
+            {
+                "retailer_id": "samsung_direct",
+                "retailer_name": "Samsung.com",
+                "price": 1000.0, "condition": "new",
+                "url": "https://www.samsung.com/p",
+                "is_available": True,
+                "last_checked": datetime.now(UTC).isoformat(),
+            },
+            {
+                "retailer_id": "best_buy",
+                "retailer_name": "Best Buy",
+                "price": 1050.0, "condition": "new",
+                "url": "https://www.bestbuy.com/p",
+                "is_available": True,
+                "last_checked": datetime.now(UTC).isoformat(),
+            },
+        ],
+        "retailer_results": [],
+        "total_retailers": 2,
+        "retailers_succeeded": 2,
+        "retailers_failed": 0,
+        "cached": True,
+        "fetched_at": datetime.now(UTC).isoformat(),
+    }
+    await fake_redis.setex(
+        f"prices:product:{product.id}", 600, json.dumps(payload)
+    )
+
+    service = RecommendationService(db_session, fake_redis)
+    # User explicitly has rakuten DEACTIVATED — portal savings must not
+    # be applied.
+    rec = await service.get_recommendation(
+        MOCK_USER_ID, product.id, user_memberships={"rakuten": False}
+    )
+
+    assert rec.winner.portal_savings == 0.0
+    assert rec.winner.portal_source is None
+
+    # And the no-memberships case (empty dict) should be identical.
+    rec_empty = await service.get_recommendation(
+        MOCK_USER_ID, product.id, force_refresh=True, user_memberships={}
+    )
+    assert rec_empty.winner.portal_savings == 0.0
+    assert rec_empty.winner.portal_source is None
 
 
 async def test_recommendation_insufficient_data_raises(db_session, fake_redis):

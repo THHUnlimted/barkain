@@ -154,10 +154,8 @@ struct PurchaseInterstitialSheet: View {
                 cardBlock
                 Divider()
                     .padding(.vertical, Spacing.xxs)
-                summaryBlock
-            } else {
-                directPurchaseBlock
             }
+            priceBreakdownBlock
             if !viewModel.context.portalCTAs.isEmpty {
                 portalBlock
             }
@@ -290,48 +288,41 @@ struct PurchaseInterstitialSheet: View {
         }
     }
 
-    // MARK: - Summary block (savings-math-prominence Item 2)
+    // MARK: - Price breakdown
     //
-    // The shared `StackingReceiptView` renders the math here too so the
-    // user sees the same line-by-line breakdown they did on the hero.
-    // The 1% baseline comparison stays as a small caption — different
-    // concern (portfolio quality), kept adjacent rather than dropped.
+    // The shared `StackingReceiptView` renders whenever any savings line
+    // exists — card, identity, or portal — so the receipt the user just
+    // saw on the hero carries through unchanged. When there are no
+    // savings at all (no card portfolio + no identity/portal stack),
+    // falls back to a "Price: $X / No card bonus" direct copy. Gating
+    // the receipt on card-guidance alone would silently drop hero-
+    // promised portal/identity rows for users without a card on file.
 
-    private var summaryBlock: some View {
-        VStack(alignment: .leading, spacing: Spacing.xxs) {
-            let receipt = StackingReceipt(interstitialContext: viewModel.context)
+    private var priceBreakdownBlock: some View {
+        let receipt = StackingReceipt(interstitialContext: viewModel.context)
+        return VStack(alignment: .leading, spacing: Spacing.xxs) {
             if receipt.hasAnyDiscount {
                 StackingReceiptView(receipt: receipt)
                     .accessibilityIdentifier("purchaseInterstitialReceipt")
+                if viewModel.context.baselineOnePercentSavings > 0
+                    && viewModel.context.hasCardGuidance {
+                    Text(viewModel.baselineComparisonCopy)
+                        .font(.barkainCaption)
+                        .foregroundStyle(Color.barkainOnSurfaceVariant)
+                }
             } else {
-                Text(viewModel.savingsHeadline)
-                    .font(.barkainHeadline)
-                    .foregroundStyle(Color.barkainOnSurface)
-                    .accessibilityIdentifier("purchaseInterstitialSavingsDelta")
-            }
-            if viewModel.context.baselineOnePercentSavings > 0 {
-                Text(viewModel.baselineComparisonCopy)
+                Text(
+                    "Price: "
+                        + PurchaseInterstitialContext.formatMoney(
+                            viewModel.context.basePrice
+                        )
+                )
+                .font(.barkainHeadline)
+                .foregroundStyle(Color.barkainOnSurface)
+                Text("No card bonus for this retailer — add one in Profile.")
                     .font(.barkainCaption)
                     .foregroundStyle(Color.barkainOnSurfaceVariant)
             }
-        }
-    }
-
-    // MARK: - Direct purchase (no card match)
-
-    private var directPurchaseBlock: some View {
-        VStack(alignment: .leading, spacing: Spacing.xxs) {
-            Text(
-                "Price: "
-                    + PurchaseInterstitialContext.formatMoney(
-                        viewModel.context.basePrice
-                    )
-            )
-            .font(.barkainHeadline)
-            .foregroundStyle(Color.barkainOnSurface)
-            Text("No card bonus for this retailer — add one in Profile.")
-                .font(.barkainCaption)
-                .foregroundStyle(Color.barkainOnSurfaceVariant)
         }
     }
 

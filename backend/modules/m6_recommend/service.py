@@ -153,9 +153,17 @@ class RecommendationService:
         card_by_retailer: dict[str, CardRecommendation] = {
             c.retailer_id: c for c in cards_resp.recommendations
         }
+        # Only stack portal cashback for portals the user has activated.
+        # Without this gate, the hero promises savings via a portal the
+        # user has no path to transit on Continue, and the rebate never
+        # posts. The signup-referral upsell still surfaces independently
+        # via portal_ctas (resolve_cta_list emits SIGNUP_REFERRAL/
+        # GUIDED_ONLY rows for inactive memberships).
+        active_memberships = {k for k, v in memberships.items() if v}
         portal_by_retailer: dict[str, list[PortalBonus]] = {}
         for row in portal_rows:
-            portal_by_retailer.setdefault(row.retailer_id, []).append(row)
+            if row.portal_source in active_memberships:
+                portal_by_retailer.setdefault(row.retailer_id, []).append(row)
 
         # Stack each candidate.
         candidates: list[StackedPath] = []
