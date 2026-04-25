@@ -837,6 +837,26 @@ make demo-check
 
 Backend not running? The health hit fails fast and you see `connection failed: ...` — start `uvicorn app.main:app --reload --port 8000` and retry.
 
+#### Reliability flags (savings-math-prominence Pre-Fix C)
+
+The 2026-04-24 sim drive ran `make demo-check` 10× back-to-back and showed a stable `success=4 unavailable=4 no_match=1 exit=2` result. Two structural reasons:
+
+1. **Redis cache replay** — run 1 elapsed ~5 s; runs 2-10 finished in 0-1 s because the M2 Redis cache served the same SSE payload back. The replay masks degradation.
+2. **Local 4/9 cap** — the `target` / `home_depot` / `backmarket` / `fb_marketplace` paths run as per-retailer scraper containers and live exclusively on EC2 (ports 8084 / 8085 / 8090 / 8091). A local backend can never reach them, so they always show `unavailable` regardless of fanout health.
+
+Two flags address both:
+
+```bash
+make demo-check ARGS="--no-cache"                          # bypass Redis replay
+make demo-check ARGS="--remote-containers=ec2"             # pre-flight EC2 containers
+make demo-check ARGS="--no-cache --remote-containers=ec2"  # full real fanout against EC2
+```
+
+- `--no-cache` appends `?force_refresh=true` to the SSE call, which `m2_prices` already wires through to skip the Redis cache lookup. No new backend code path; uses the existing in-backend bypass.
+- `--remote-containers=ec2` reads `EC2_CONTAINER_BASE_URL` (single base, e.g. `http://54.197.27.219`) or per-retailer overrides `TARGET_CONTAINER_URL` / `HOMEDEPOT_CONTAINER_URL` / `BACKMARKET_CONTAINER_URL` / `FBMARKETPLACE_CONTAINER_URL`. If env is unset the script fails loud with the exact env-var names — does NOT silently fall back to localhost. When set, it pre-flights `GET {base}:{port}/health` against each EC2 container before the SSE call so an EC2 outage surfaces in 5 s instead of after a 15 s SSE timeout.
+
+Recommended pre-demo cadence (updated): `make demo-warm` 30 min out, `make demo-check ARGS="--no-cache --remote-containers=ec2"` at T-2 minutes for a real-fanout sweep against the live EC2 stack.
+
 ### `make demo-warm`
 
 Run ~30 minutes before F&F arrives to eliminate cold-start tail latency on the first scan:
