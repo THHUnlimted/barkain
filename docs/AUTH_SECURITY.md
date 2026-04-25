@@ -148,6 +148,10 @@ HTTP 429 Too Many Requests
 
 Header: `Retry-After: 42`
 
+### Canonical error envelope (all 4xx/5xx)
+
+Every API error response — including FastAPI's automatic Pydantic 422s — uses the same `{"detail":{"error":{"code":"…","message":"…","details":{…}}}}` envelope. The `RequestValidationError` exception handler in `app/main.py` (added in #65) rewraps Pydantic's default 422 shape into the envelope so iOS `APIClient.decodeErrorDetail()` can surface the real validation message ("UPC must be a 12 or 13 digit numeric string", "String should have at most 200 characters", etc.) instead of falling through to a generic "Validation failed". One backend touchpoint enforces the shape for every present and future Pydantic-validated endpoint. Per-field structured errors stay available under `details.errors[]` for telemetry. This contract is regression-pinned by `BarkainTests/Services/Networking/APIClientErrorEnvelopeTests.swift` (4-case suite added in #64) and `backend/tests/modules/test_m1_product.py::test_validation_422_uses_wrapped_envelope` (added in #65).
+
 ---
 
 ## CORS Configuration

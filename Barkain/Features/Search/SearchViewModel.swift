@@ -163,7 +163,9 @@ final class SearchViewModel {
     }
 
     /// Tapping a `.searchCompletion(term)` row replaces the query and
-    /// fires the search, then records the term as a recent.
+    /// fires the search, then records the term as a recent ONLY on success.
+    /// Recording on failure persists garbage queries (overlong strings,
+    /// XSS payloads) into the user's history forever.
     func onSuggestionTapped(_ term: String) async {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -171,17 +173,18 @@ final class SearchViewModel {
         suggestionsTask?.cancel()
         searchTask?.cancel()
         await performSearch(trimmed)
-        recordRecent(trimmed)
+        if error == nil { recordRecent(trimmed) }
     }
 
     /// Manual return-key submit (covers raw-typed queries, including the
     /// zero-match fallback row that submits the user's literal text).
+    /// Same success-only recording rule as `onSuggestionTapped`.
     func onSearchSubmitted(_ term: String) async {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else { return }
         searchTask?.cancel()
         await performSearch(trimmed)
-        recordRecent(trimmed)
+        if error == nil { recordRecent(trimmed) }
     }
 
     // MARK: - Network search

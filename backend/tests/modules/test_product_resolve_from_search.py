@@ -244,7 +244,7 @@ async def test_resolve_from_search_devupc_cache_short_circuits_gemini(
     client, db_session, fake_redis
 ):
     """A pre-populated cache entry skips both Gemini and UPCitemdb calls."""
-    cached_upc = "888888888888"
+    cached_upc = "888888888889"
     existing = Product(
         upc=cached_upc, name="Cached Product", brand="Steam", source="seed"
     )

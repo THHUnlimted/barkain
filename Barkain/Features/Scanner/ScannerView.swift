@@ -15,6 +15,10 @@ struct ScannerView: View {
     @State private var scannerError: BarcodeScannerError?
     @State private var showManualEntry = false
     @State private var manualUPC = ""
+    /// Inline error shown under the UPC field when the typed value fails
+    /// the client-side length check. Kept local to the sheet so the rest
+    /// of the screen doesn't need to know about manual-entry validation.
+    @State private var manualUPCError: String?
     @State private var showOnboardingFromCTA = false
     @State private var showAddCardsFromCTA = false
     // Owned here so the .sheet survives any inline conditional re-render
@@ -134,11 +138,33 @@ struct ScannerView: View {
                 Section("Enter UPC") {
                     TextField("12 or 13 digit UPC", text: $manualUPC)
                         .font(.system(.body, design: .monospaced))
+                        .keyboardType(.numberPad)
                         .autocorrectionDisabled(true)
                         .textInputAutocapitalization(.never)
                         .submitLabel(.go)
                         .onSubmit { submitManual(manualUPC) }
+                        // Strip non-digits as the user types so paste /
+                        // hardware-keyboard input can't put letters in a
+                        // numeric-only field. `.numberPad` alone doesn't
+                        // protect against paste or external keyboards.
+                        .onChange(of: manualUPC) { _, newValue in
+                            let digitsOnly = newValue.filter(\.isNumber)
+                            if digitsOnly != newValue {
+                                manualUPC = digitsOnly
+                            }
+                            // Clear the inline error as soon as the user
+                            // resumes editing — they're trying again.
+                            if manualUPCError != nil {
+                                manualUPCError = nil
+                            }
+                        }
                         .accessibilityIdentifier("upcTextField")
+                    if let manualUPCError {
+                        Text(manualUPCError)
+                            .font(.barkainCaption)
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("upcInlineError")
+                    }
                     Button("Resolve") {
                         submitManual(manualUPC)
                     }
@@ -166,7 +192,10 @@ struct ScannerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { showManualEntry = false }
+                    Button("Cancel") {
+                        manualUPCError = nil
+                        showManualEntry = false
+                    }
                 }
             }
         }
@@ -176,7 +205,18 @@ struct ScannerView: View {
         let trimmed = upc
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .filter(\.isNumber)
-        guard !trimmed.isEmpty, let viewModel else { return }
+        // Client-side guard: don't burn a backend roundtrip on a clearly-
+        // wrong-length UPC. Surfaces the error inline AND keeps the sheet
+        // open with the typed text intact, so the user can correct in
+        // place rather than re-opening the sheet from scratch.
+        guard trimmed.count == 12 || trimmed.count == 13 else {
+            manualUPCError = trimmed.isEmpty
+                ? "Enter a 12 or 13 digit UPC."
+                : "That's \(trimmed.count) digits — UPCs are 12 or 13."
+            return
+        }
+        guard let viewModel else { return }
+        manualUPCError = nil
         showManualEntry = false
         manualUPC = ""
         Task { await viewModel.handleBarcodeScan(upc: trimmed) }

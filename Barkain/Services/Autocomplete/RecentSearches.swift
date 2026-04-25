@@ -13,6 +13,11 @@ final class RecentSearches {
     static let storageKey = "barkain.recentSearches"
     static let legacyStorageKey = "recentSearches"
     static let maxEntries = 10
+    /// Hard cap on per-query character length when persisted. Backend caps
+    /// queries at 200 (Pydantic max_length), but a defensive iOS cap keeps
+    /// pasted megabyte log lines / accidental keyboard-mash from bloating
+    /// UserDefaults if a query somehow slips through validation.
+    static let maxQueryLength = 200
 
     // MARK: - Stored
 
@@ -37,14 +42,19 @@ final class RecentSearches {
         return decoded
     }
 
-    /// Trims, dedupes (case-insensitive), prepends the term, caps at
-    /// `maxEntries`, persists. No-op on empty trimmed input.
+    /// Trims, length-clamps to `maxQueryLength`, dedupes (case-insensitive),
+    /// prepends, caps at `maxEntries`, persists. No-op on empty trimmed input.
     @discardableResult
     func add(_ term: String) -> [String] {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return all() }
-        var existing = all().filter { $0.lowercased() != trimmed.lowercased() }
-        existing.insert(trimmed, at: 0)
+        // Defensive length clamp — backend already caps at 200, but caller
+        // may bypass that path (e.g. seeded recents). Belt + suspenders.
+        let clamped = trimmed.count > Self.maxQueryLength
+            ? String(trimmed.prefix(Self.maxQueryLength))
+            : trimmed
+        var existing = all().filter { $0.lowercased() != clamped.lowercased() }
+        existing.insert(clamped, at: 0)
         if existing.count > Self.maxEntries {
             existing = Array(existing.prefix(Self.maxEntries))
         }

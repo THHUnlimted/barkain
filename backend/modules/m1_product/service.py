@@ -52,6 +52,19 @@ DEVUPC_CACHE_TTL = 86400  # 24 hours
 
 
 _UPC_RE = re.compile(r"^\d{12,13}$")
+_PATTERN_UPC_RE = re.compile(r"^(\d)\1{11,12}$")  # all-same-digit (000…, 111…, etc.)
+
+
+def _is_pattern_upc(upc: str) -> bool:
+    """Reject obvious garbage UPCs (all-same-digit) before any external call.
+
+    A real GS1 barcode never has all 12 or 13 digits identical. Catches the
+    common test inputs (`000000000000`, `111111111111`) that otherwise cost
+    one Gemini call and pollute the products table with a hallucinated row.
+    Cheaper / more specific than a full GS1 mod-10 checksum, which would
+    also reject many real legitimate UPCs that happen to fail it.
+    """
+    return bool(_PATTERN_UPC_RE.match(upc))
 
 
 class ProductNotFoundError(Exception):
@@ -295,6 +308,14 @@ class ProductResolutionService:
         Raises:
             ProductNotFoundError: If no source can resolve the UPC.
         """
+        # Pattern-UPC guard: short-circuit obvious garbage (000000000000,
+        # 111111111111, etc.) before burning a Gemini call. Without this,
+        # Gemini hallucinates a plausible product for any 12-digit string
+        # and we persist the hallucination to PG forever.
+        if _is_pattern_upc(upc):
+            logger.info("Rejecting pattern UPC pre-resolution: %s", upc)
+            raise ProductNotFoundError(upc)
+
         # Step 1: Redis cache
         product = await self._check_redis(upc)
         if product:
