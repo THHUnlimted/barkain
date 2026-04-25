@@ -246,7 +246,10 @@ async def test_resolve_from_search_devupc_cache_short_circuits_gemini(
     """A pre-populated cache entry skips both Gemini and UPCitemdb calls."""
     cached_upc = "888888888889"
     existing = Product(
-        upc=cached_upc, name="Cached Product", brand="Steam", source="seed"
+        upc=cached_upc,
+        name="Valve Steam Deck OLED 1TB",
+        brand="Valve",
+        source="seed",
     )
     db_session.add(existing)
     await db_session.flush()
@@ -556,3 +559,287 @@ async def test_confirm_user_confirmed_false_logs_and_returns_empty(
     # nor UPCitemdb should be called.
     assert mock_gemini.call_count == 0
     assert mock_upcitemdb.call_count == 0
+
+
+# MARK: - L4 post-resolve sanity check (cat-rel-1-L4)
+
+
+def test_resolved_matches_query_passes_when_specs_and_brand_align():
+    """Happy path: brand + strict-spec match → True."""
+    from modules.m1_product.service import _resolved_matches_query
+
+    assert _resolved_matches_query(
+        query="Vitamix 5200",
+        query_brand="Vitamix",
+        resolved_name="Vitamix 5200 Variable Speed Blender",
+        resolved_brand="Vitamix",
+    ) is True
+
+
+def test_resolved_matches_query_rejects_pure_digit_drift():
+    """4+digit pure-numeric model in query missing from resolved name → False.
+
+    UPCitemdb maps 703113640681 to Vitamix Explorian E310; pre-fix the
+    user got E310 prices for a 5200 query.
+    """
+    from modules.m1_product.service import _resolved_matches_query
+
+    assert _resolved_matches_query(
+        query="Vitamix 5200",
+        query_brand="Vitamix",
+        resolved_name="Vitamix Explorian E310 Series Blender",
+        resolved_brand="Vitamix",
+    ) is False
+
+
+def test_resolved_matches_query_rejects_voltage_drift():
+    """Voltage spec drift (40V → 80V) → False."""
+    from modules.m1_product.service import _resolved_matches_query
+
+    assert _resolved_matches_query(
+        query="Greenworks 40V Mower",
+        query_brand="Greenworks",
+        resolved_name="Greenworks 80V Backpack Blower",
+        resolved_brand="Greenworks",
+    ) is False
+
+
+def test_resolved_matches_query_rejects_brand_mismatch():
+    """Query brand absent from resolved haystack → False (Toro→Greenworks)."""
+    from modules.m1_product.service import _resolved_matches_query
+
+    assert _resolved_matches_query(
+        query="Toro Recycler",
+        query_brand="Toro",
+        resolved_name="Greenworks 21-Inch Push Mower",
+        resolved_brand="Greenworks",
+    ) is False
+
+
+def test_resolved_matches_query_falls_back_to_query_leading_token_when_brand_absent():
+    """No brand param → leading meaningful query token serves as brand check."""
+    from modules.m1_product.service import _resolved_matches_query
+
+    assert _resolved_matches_query(
+        query="Vitamix 5200",
+        query_brand=None,
+        resolved_name="Explorian E310 Series Blender",
+        resolved_brand=None,
+    ) is False
+
+
+def test_resolved_matches_query_passes_with_no_strict_specs():
+    """Query has no voltage or 4+digit token → only brand gate runs."""
+    from modules.m1_product.service import _resolved_matches_query
+
+    # iPhone 16: "16" is 2 digits, below the 4-digit floor → no strict spec.
+    assert _resolved_matches_query(
+        query="iPhone 16 Pro",
+        query_brand="Apple",
+        resolved_name="Apple iPhone 16 Pro 256GB",
+        resolved_brand="Apple",
+    ) is True
+
+
+def test_resolved_matches_query_passes_when_brand_in_resolved_name_only():
+    """Brand check uses name+brand haystack, not just resolved_brand field."""
+    from modules.m1_product.service import _resolved_matches_query
+
+    # UPCitemdb sometimes returns an empty brand field but keeps the brand
+    # in the name string ("Anker Soundcore Q30 Headphones", brand=None).
+    assert _resolved_matches_query(
+        query="Anker Q30",
+        query_brand="Anker",
+        resolved_name="Anker Soundcore Q30 Wireless Headphones",
+        resolved_brand=None,
+    ) is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_404_when_resolved_drifts_on_voltage(
+    client, db_session, fake_redis
+):
+    """Greenworks 40V query → upstream resolves to 80V backpack blower → 404.
+
+    Catches `cat-rel-1-L4`: UPCitemdb maps 841821092511 to Greenworks 80V
+    even when the user asked for the 40V mower.
+    """
+    derived_upc = "841821092511"
+
+    async def fake_gemini(prompt, **kwargs):
+        system = kwargs.get("system_instruction", "") or ""
+        if "Universal Product Code" not in system:
+            return {"upc": derived_upc, "reasoning": "matched"}
+        return {
+            "device_name": "Greenworks 80V Backpack Blower",
+            "model": "BPB80L01",
+        }
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            side_effect=fake_gemini,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={
+                "device_name": "Greenworks 40V Mower",
+                "brand": "Greenworks",
+            },
+        )
+
+    assert response.status_code == 404
+    body = response.json()
+    assert body["detail"]["error"]["code"] == "UPC_NOT_FOUND_FOR_PRODUCT"
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_404_when_resolved_drifts_on_pure_digit_model(
+    client, db_session, fake_redis
+):
+    """Vitamix 5200 query → upstream resolves to Explorian E310 → 404."""
+    derived_upc = "703113640681"
+
+    async def fake_gemini(prompt, **kwargs):
+        system = kwargs.get("system_instruction", "") or ""
+        if "Universal Product Code" not in system:
+            return {"upc": derived_upc, "reasoning": "matched"}
+        return {
+            "device_name": "Vitamix Explorian E310 Series Blender",
+            "model": "E310",
+        }
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            side_effect=fake_gemini,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={"device_name": "Vitamix 5200", "brand": "Vitamix"},
+        )
+
+    assert response.status_code == 404
+    body = response.json()
+    assert body["detail"]["error"]["code"] == "UPC_NOT_FOUND_FOR_PRODUCT"
+
+
+@pytest.mark.asyncio
+async def test_gemini_null_logs_reasoning_for_obscure_sku_diagnosis(
+    client, db_session, fake_redis, caplog
+):
+    """When Gemini returns null on the retry pass, its stated reason is
+    logged. This is the only diagnostic signal for cat-rel-1-L2 cases
+    (Husqvarna 130BT, ASUS Chromebook CX1) where the SKU is genuinely
+    unverifiable. Forcing a UPC here is rejected — Gemini correctly
+    refuses to guess, per the prompt's anti-hallucination contract.
+    """
+    import logging
+
+    null_reason = (
+        "Major US retailers do not currently stock the Husqvarna 130BT, "
+        "and search results only return the model number 965102208."
+    )
+
+    async def fake_gemini(prompt, **kwargs):
+        # Both passes return null, with reasoning explaining why.
+        return {"upc": None, "reasoning": null_reason}
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            side_effect=fake_gemini,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "modules.m1_product.upcitemdb.search_keyword",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        caplog.at_level(logging.INFO, logger="barkain.m1"),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={
+                "device_name": "Husqvarna 130BT 29.5cc Backpack Leaf Blower",
+                "brand": "Husqvarna",
+                "model": "130BT",
+            },
+        )
+
+    assert response.status_code == 404
+    # Reasoning is on the retry-null log line.
+    matched = [
+        r for r in caplog.records
+        if "could not resolve device→UPC after retry" in r.getMessage()
+        and "Husqvarna 130BT" in r.getMessage()
+        and "Major US retailers do not currently stock" in r.getMessage()
+    ]
+    assert matched, (
+        "Gemini's null-reasoning must be in the log line for cat-rel-1-L2 diagnosis. "
+        f"Got: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_invalidates_bad_cache_entry(
+    client, db_session, fake_redis
+):
+    """A pre-fix cached UPC pointing at a wrong canonical → rejected, key deleted.
+
+    Pre-fix Redis entries can map (Vitamix 5200) → 703113640681 (E310).
+    On cache hit the resolve still runs through the sanity check and
+    deletes the bad entry so the next attempt re-fires both upstreams.
+    """
+    cached_upc = "703113640681"
+    existing = Product(
+        upc=cached_upc,
+        name="Vitamix Explorian E310 Series Blender",
+        brand="Vitamix",
+        source="seed",
+    )
+    db_session.add(existing)
+    await db_session.flush()
+
+    from modules.m1_product.service import ProductResolutionService
+    cache_key = ProductResolutionService._devupc_cache_key("Vitamix 5200", "Vitamix")
+    await fake_redis.set(cache_key, cached_upc)
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value={"upc": None},
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={"device_name": "Vitamix 5200", "brand": "Vitamix"},
+        )
+
+    assert response.status_code == 404
+    assert await fake_redis.get(cache_key) is None

@@ -36,6 +36,10 @@ from ai.prompts.upc_lookup import (
     build_upc_retry_prompt,
 )
 from modules.m1_product.models import Product
+from modules.m1_product.search_service import (
+    _RELEVANCE_STOPWORDS,
+    _query_strict_specs,
+)
 from modules.m1_product.upcitemdb import lookup_upc as upcitemdb_lookup
 
 logger = logging.getLogger("barkain.m1")
@@ -53,6 +57,59 @@ DEVUPC_CACHE_TTL = 86400  # 24 hours
 
 _UPC_RE = re.compile(r"^\d{12,13}$")
 _PATTERN_UPC_RE = re.compile(r"^(\d)\1{11,12}$")  # all-same-digit (000…, 111…, etc.)
+
+
+_RESOLVE_TOKEN_STRIP_RE = re.compile(r"^[\W_]+|[\W_]+$", re.UNICODE)
+
+
+def _resolved_matches_query(
+    query: str,
+    query_brand: str | None,
+    resolved_name: str,
+    resolved_brand: str | None,
+) -> bool:
+    """Sanity-check that a UPC's canonical product reflects the user's query.
+
+    Two gates, ANY miss → reject:
+
+    1. **Brand gate** — the supplied ``query_brand`` (or, when absent, the
+       leading meaningful alpha token of ``query``) must appear in the
+       resolved name+brand haystack. Catches Toro→Greenworks: UPCitemdb
+       maps `841821087104` to a Greenworks mower even though the user
+       searched "Toro Recycler".
+    2. **Strict-spec gate** — voltage tokens (40v/80v) and 4+digit
+       pure-numeric model numbers (5200/6400) extracted from the query
+       must echo back verbatim in the haystack. Catches Vitamix
+       5200→Explorian E310 and Greenworks 40V→80V drift, where the
+       upstream UPC database returns the wrong canonical row.
+
+    Reuses ``_query_strict_specs`` so search-time and resolve-time use
+    the same definition of "must match verbatim".
+    """
+    haystack = " ".join([
+        (resolved_name or "").lower(),
+        (resolved_brand or "").lower(),
+    ])
+
+    brand_token = (query_brand or "").strip().lower()
+    if not brand_token:
+        for raw in query.lower().split():
+            tok = _RESOLVE_TOKEN_STRIP_RE.sub("", raw).strip()
+            if (
+                len(tok) >= 3
+                and tok.isalpha()
+                and tok not in _RELEVANCE_STOPWORDS
+            ):
+                brand_token = tok
+                break
+    if brand_token and brand_token not in haystack:
+        return False
+
+    for spec in _query_strict_specs(query):
+        if spec not in haystack:
+            return False
+
+    return True
 
 
 def _is_pattern_upc(upc: str) -> bool:
@@ -126,7 +183,24 @@ class ProductResolutionService:
             logger.info(
                 "device→UPC cache hit: %r (brand=%s) → %s", device_name, brand, cached_upc
             )
-            return await self.resolve(cached_upc)
+            cached_product = await self.resolve(cached_upc)
+            if not _resolved_matches_query(
+                device_name, brand, cached_product.name, cached_product.brand
+            ):
+                # Pre-fix entries can persist in Redis up to 24h. Drop the
+                # bad mapping so the next attempt re-runs both upstreams.
+                logger.warning(
+                    "Cached UPC %s resolves to %r but does not match query %r — invalidating",
+                    cached_upc, cached_product.name, device_name,
+                )
+                try:
+                    await self.redis.delete(cache_key)
+                except Exception:
+                    logger.warning(
+                        "device→UPC cache delete failed for %s", cache_key, exc_info=True
+                    )
+                raise UPCNotFoundForDescriptionError(device_name)
+            return cached_product
 
         # Fire Gemini + UPCitemdb in parallel. Previously sequential, which
         # added UPCitemdb's 10s cap on top of Gemini's ~10-15s for every
@@ -156,8 +230,21 @@ class ProductResolutionService:
         if not upc:
             raise UPCNotFoundForDescriptionError(device_name)
 
+        # Resolve the UPC to a canonical Product (may persist a new row).
+        # We sanity-check the result against the user's query AFTER persistence
+        # because the row itself is real — it just isn't what the user asked
+        # for. Leaving it in PG benefits future scans of the right barcode;
+        # we just refuse to surface it for this query.
+        product = await self.resolve(upc)
+        if not _resolved_matches_query(device_name, brand, product.name, product.brand):
+            logger.warning(
+                "Resolved product %r (upc=%s, brand=%s) does not match query %r — rejecting",
+                product.name, upc, product.brand, device_name,
+            )
+            raise UPCNotFoundForDescriptionError(device_name)
+
         await self._cache_devupc(cache_key, upc)
-        return await self.resolve(upc)
+        return product
 
     async def resolve_from_search_confirmed(
         self,
@@ -286,8 +373,18 @@ class ProductResolutionService:
             if upc:
                 logger.info("Gemini resolved device→UPC: %r → %s", device_name, upc)
             else:
+                # Log the model's stated reason on the retry pass — for
+                # genuinely-unverifiable SKUs (Husqvarna dealer-stock,
+                # multi-variant product lines) Gemini explains *why* it
+                # refused, which is the only signal we have for diagnosing
+                # repeat failures (cat-rel-1-L2). Truncate to 200 chars to
+                # keep log lines readable.
+                reasoning = ""
+                if isinstance(raw, dict):
+                    reasoning = str(raw.get("reasoning") or "")[:200]
                 logger.info(
-                    "Gemini could not resolve device→UPC after retry: %r", device_name
+                    "Gemini could not resolve device→UPC after retry: %r reason=%r",
+                    device_name, reasoning,
                 )
             return upc
         except Exception:

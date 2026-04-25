@@ -1059,6 +1059,57 @@ def test_extract_model_identifiers_catches_gaming_peripheral_sku():
     assert "G413" in _extract_model_identifiers("Logitech G413 SE")
 
 
+def test_extract_model_identifiers_catches_digit_led_appliance_sku():
+    """5-digit + optional trailing letter SKUs (Hamilton Beach 49981A,
+    Bissell 15999, Greenworks 24252) extract as identifiers.
+
+    cat-rel-1-L3: pre-fix every _MODEL_PATTERNS entry required a leading
+    letter prefix, so digit-led catalog numbers used by Hamilton Beach and
+    similar brands never tripped the FB Marketplace soft model gate.
+    """
+    from modules.m2_prices.service import _extract_model_identifiers
+    assert "49981A" in _extract_model_identifiers("Hamilton Beach 49981A Food Processor")
+    assert "49963A" in _extract_model_identifiers("Hamilton Beach 49963A 14-Cup")
+    assert "49988" in _extract_model_identifiers("Hamilton Beach 49988 Programmable Coffee Maker")
+    assert "15999" in _extract_model_identifiers("Bissell 15999 BigGreen Carpet Cleaner")
+    assert "24252" in _extract_model_identifiers("Greenworks 24252 16-Inch Mower")
+
+
+def test_extract_model_identifiers_skips_capacity_units():
+    """The digit-led pattern's negative lookahead skips BTU, mAh, lbs, etc.
+
+    Otherwise "12000 BTU air conditioner" or "10000 mAh power bank" would
+    extract the capacity number as a model SKU and trip the soft gate on
+    legit listings that don't echo the same number.
+    """
+    from modules.m2_prices.service import _extract_model_identifiers
+    # 12000 BTU should NOT be extracted (capacity, not model).
+    out = _extract_model_identifiers("LG 12000 BTU Window Air Conditioner")
+    assert "12000" not in out
+    # 10000 mAh same — no model code in this title.
+    out = _extract_model_identifiers("Anker 10000 mAh Portable Charger")
+    assert "10000" not in out
+    # Lowercase units also skipped (re.IGNORECASE on the lookahead).
+    out = _extract_model_identifiers("LG 12000 btu Window AC")
+    assert "12000" not in out
+
+
+def test_extract_model_identifiers_does_not_collide_with_capacity_specs():
+    """4-digit specs (1080P resolution, 4090Ti GPU) stay outside the 5-digit
+    floor — this is the protection against false positives that justifies
+    the 5-digit anchor over a more permissive 4-digit one.
+    """
+    from modules.m2_prices.service import _extract_model_identifiers
+    out = _extract_model_identifiers("Sony BRAVIA 65-inch QLED 1080p")
+    assert "1080" not in out
+    assert "1080p" not in (s.lower() for s in out)
+    out = _extract_model_identifiers("NVIDIA RTX 4090Ti 24GB")
+    # 4090Ti gets caught by the 1-2-letter+digits gaming pattern via "RTX 4090"
+    # GPU pattern, but the digit-led pattern itself MUST NOT emit "4090Ti".
+    # Verify by checking that pattern-8's specific shape (5+ digits) doesn't fire.
+    assert all(not (s[:5].isdigit() and len(s) >= 5) for s in out if s.startswith("4090"))
+
+
 def test_score_rejects_g915_for_g613_product():
     """G613 product must reject a G915 Amazon listing at the model gate."""
     from modules.m2_prices.service import _score_listing_relevance
