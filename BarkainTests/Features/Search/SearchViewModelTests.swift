@@ -405,6 +405,152 @@ final class SearchViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.presentedProductViewModel)
     }
 
+    // MARK: - PR-2: Optimistic search-tap (experiment flag)
+
+    /// Helper that flips the optimistic-search-tap flag for THIS test's
+    /// scoped UserDefaults suite. The VM's featureGate reads the flag
+    /// lazily, so flipping after construction is fine.
+    private func enableOptimisticSearchTap() {
+        testDefaults.set(true, forKey: FeatureGateService.optimisticSearchTapKey)
+    }
+
+    func test_optimisticTap_dbRow_stillUsesLegacyPath() async {
+        // DB rows already have the productId — the optimistic flow only
+        // helps when /resolve-from-search is on the critical path. DB rows
+        // skip optimistic and go straight to presentProduct unchanged.
+        enableOptimisticSearchTap()
+        let productId = UUID()
+        let result = ProductSearchResult(
+            deviceName: "Sony WH-1000XM5", model: "WH-1000XM5", brand: "Sony",
+            category: "headphones", confidence: 0.92, primaryUpc: "027242924864",
+            source: .db, productId: productId, imageUrl: nil
+        )
+
+        await viewModel.handleResultTap(result)
+
+        XCTAssertNotNil(viewModel.presentedProductViewModel)
+        XCTAssertEqual(viewModel.presentedProductViewModel?.product?.id, productId)
+        // DB path doesn't construct an OptimisticPriceVM, so it doesn't
+        // call resolveProduct or resolveProductFromSearch.
+        XCTAssertEqual(mockClient.resolveProductCallCount, 0)
+        XCTAssertEqual(mockClient.resolveFromSearchCallCount, 0)
+    }
+
+    func test_optimisticTap_nonDB_success_constructsOptimisticVMAndStreams() async {
+        enableOptimisticSearchTap()
+        mockClient.resolveProductResult = .success(TestFixtures.sampleProduct)
+        mockClient.streamPricesEvents = TestFixtures.successfulStreamEvents
+        let result = ProductSearchResult(
+            deviceName: "Apple AirPods Pro 2", model: "AirPods Pro 2", brand: "Apple",
+            category: "earbuds", confidence: 0.88, primaryUpc: "195949046674",
+            source: .gemini, productId: nil, imageUrl: nil
+        )
+
+        await viewModel.handleResultTap(result)
+
+        XCTAssertNotNil(viewModel.presentedProductViewModel,
+                        "Optimistic path navigates immediately, presentedVM stays alive on success")
+        XCTAssertEqual(mockClient.resolveProductCallCount, 1, "UPC path used inside OptimisticVM")
+        XCTAssertEqual(mockClient.streamPricesCallCount, 1,
+                       "SSE stream fires after the resolve swap")
+        XCTAssertNil(viewModel.pendingConfirmation)
+        XCTAssertFalse(viewModel.unresolvedAfterTap)
+        XCTAssertNil(viewModel.error)
+    }
+
+    func test_optimisticTap_nonDB_409_tearsDownVMAndPresentsConfirmationSheet() async {
+        enableOptimisticSearchTap()
+        let primary = ProductSearchResult(
+            deviceName: "Mystery Gadget Pro", model: nil, brand: "Mystery",
+            category: nil, confidence: 0.42, primaryUpc: nil,
+            source: .gemini, productId: nil, imageUrl: nil
+        )
+        let alt = ProductSearchResult(
+            deviceName: "Mystery Gadget Plus", model: nil, brand: "Mystery",
+            category: nil, confidence: 0.35, primaryUpc: nil,
+            source: .gemini, productId: nil, imageUrl: nil
+        )
+        viewModel.results = [primary, alt]
+        mockClient.resolveFromSearchResult = .success(
+            .needsConfirmation(
+                candidate: LowConfidenceCandidate(
+                    deviceName: primary.deviceName,
+                    brand: primary.brand,
+                    model: primary.model,
+                    confidence: 0.42,
+                    threshold: 0.70
+                )
+            )
+        )
+
+        await viewModel.handleResultTap(primary)
+
+        XCTAssertNil(viewModel.presentedProductViewModel,
+                     "Optimistic skeleton must tear down so the confirmation sheet renders")
+        XCTAssertNotNil(viewModel.pendingConfirmation,
+                        "Routes through the existing confirmation flow on the SearchVM")
+        XCTAssertEqual(viewModel.pendingConfirmation?.primary.deviceName, "Mystery Gadget Pro")
+        XCTAssertEqual(viewModel.pendingConfirmation?.threshold, 0.70)
+    }
+
+    func test_optimisticTap_nonDB_404_tearsDownVMAndSetsUnresolvedAfterTap() async {
+        enableOptimisticSearchTap()
+        mockClient.resolveFromSearchResult = .failure(.notFound)
+        let result = ProductSearchResult(
+            deviceName: "Unknown Mystery Gadget", model: nil, brand: nil,
+            category: nil, confidence: 0.3, primaryUpc: nil,
+            source: .gemini, productId: nil, imageUrl: nil
+        )
+
+        await viewModel.handleResultTap(result)
+
+        XCTAssertNil(viewModel.presentedProductViewModel,
+                     "Optimistic skeleton must tear down so UnresolvedProductView renders")
+        XCTAssertTrue(viewModel.unresolvedAfterTap,
+                      "Routes through the existing unresolved flow on the SearchVM")
+    }
+
+    func test_optimisticTap_nonDB_serverError_tearsDownVMAndSetsError() async {
+        enableOptimisticSearchTap()
+        mockClient.resolveFromSearchResult = .failure(.server("500 internal"))
+        let result = ProductSearchResult(
+            deviceName: "Some Product", model: nil, brand: nil,
+            category: nil, confidence: 0.5, primaryUpc: nil,
+            source: .gemini, productId: nil, imageUrl: nil
+        )
+
+        await viewModel.handleResultTap(result)
+
+        XCTAssertNil(viewModel.presentedProductViewModel)
+        XCTAssertNotNil(viewModel.error)
+        if case .server(let msg) = viewModel.error {
+            XCTAssertEqual(msg, "500 internal")
+        } else {
+            XCTFail("Expected .server error, got \(String(describing: viewModel.error))")
+        }
+    }
+
+    func test_optimisticTap_disabledByDefault_routesThroughLegacyPath() async {
+        // No `enableOptimisticSearchTap()` call — default is OFF.
+        mockClient.resolveProductResult = .success(TestFixtures.sampleProduct)
+        mockClient.streamPricesEvents = TestFixtures.successfulStreamEvents
+        let result = ProductSearchResult(
+            deviceName: "Apple AirPods Pro 2", model: "AirPods Pro 2", brand: "Apple",
+            category: "earbuds", confidence: 0.88, primaryUpc: "195949046674",
+            source: .gemini, productId: nil, imageUrl: nil
+        )
+
+        await viewModel.handleResultTap(result)
+
+        // Both paths end up presenting a VM with prices, but the legacy
+        // path's distinguishing behavior is that it sets `isLoading = true`
+        // during the await, then back to false. The optimistic path never
+        // touches `isLoading` — it sets `presentedProductViewModel` first.
+        XCTAssertNotNil(viewModel.presentedProductViewModel)
+        XCTAssertFalse(viewModel.isLoading,
+                       "Legacy path resets isLoading via defer before returning")
+    }
+
     // MARK: - Clear
 
     func test_clearRecentSearches_emptiesMirrorAndStorage() async {

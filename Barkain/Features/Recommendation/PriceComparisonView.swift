@@ -24,7 +24,7 @@ struct PriceComparisonView: View {
 
     let product: Product
     let comparison: PriceComparison
-    let viewModel: ScannerViewModel
+    let viewModel: any PriceComparisonProviding
     // Step 2g + 2026-04-19 fix: browser sheet state is OWNED by the parent
     // (SearchView / ScannerView) and passed in as a binding. PriceComparisonView
     // is rendered inside a parent's `if let` conditional that re-evaluates on
@@ -465,7 +465,7 @@ struct PriceComparisonView: View {
     private var actionButtons: some View {
         VStack(spacing: Spacing.sm) {
             Button {
-                Task { await viewModel.fetchPrices(forceRefresh: true) }
+                Task { await viewModel.fetchPrices(forceRefresh: true, queryOverride: nil) }
             } label: {
                 HStack {
                     Image(systemName: "arrow.clockwise")
