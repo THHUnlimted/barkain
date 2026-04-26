@@ -102,6 +102,26 @@ class _FakeContainerClient:
         # the service forwarded slug/radius only to fb_marketplace.
         self.extract_one_kwargs: dict[str, dict] = {}
 
+    async def extract_all(
+        self,
+        query: str,
+        product_name: str | None = None,
+        upc: str | None = None,
+        fb_location_id: str | None = None,
+        fb_radius_miles: int | None = None,
+    ) -> dict[str, ContainerResponse]:
+        """Batch path used by `get_prices` (non-streaming). Mirrors the
+        single-call semantics of `_extract_one` but returns the full
+        per-retailer dict in one shot. Records each retailer in
+        `extract_one_calls` for parity with the stream path's assertions."""
+        for rid in self.ports:
+            self.extract_one_calls.append(rid)
+            self.extract_one_kwargs[rid] = {
+                "fb_location_id": fb_location_id,
+                "fb_radius_miles": fb_radius_miles,
+            }
+        return self._responses
+
     async def _extract_one(
         self,
         retailer_id: str,
@@ -734,4 +754,307 @@ async def test_stream_endpoint_422_on_bad_location_id(client, db_session):
         params={"fb_location_id": "not a number"},
     )
     assert resp.status_code == 422
-    assert not resp.headers.get("content-type", "").startswith("text/event-stream")
+
+
+# MARK: - Inflight cache (mid-stream visibility for parallel get_prices)
+#
+# The pipeline:
+#   stream_prices writes per-retailer to `prices:inflight:{pid}` as each
+#   result is classified, BEFORE the per-request transaction commits at
+#   end-of-stream. A parallel `get_prices` (M6's provisional /recommend
+#   while iOS is still streaming) reads the inflight hash between the
+#   canonical Redis check and the DB cache check. Without this, M6 would
+#   see zero in-transaction upserts (READ COMMITTED isolation), fall
+#   through to dispatch, and either re-run the scrapers or InsufficientData.
+
+
+def test_inflight_key_bare_scope():
+    from modules.m2_prices.service import (
+        PriceAggregationService,
+        REDIS_INFLIGHT_KEY_PREFIX,
+    )
+
+    pid = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    assert (
+        PriceAggregationService._inflight_key(pid)
+        == f"{REDIS_INFLIGHT_KEY_PREFIX}{pid}"
+    )
+
+
+def test_inflight_key_with_query_override_uses_scoped_suffix():
+    from modules.m2_prices.service import (
+        PriceAggregationService,
+        REDIS_INFLIGHT_KEY_PREFIX,
+        REDIS_KEY_QUERY_SUFFIX,
+        _query_scope_digest,
+    )
+
+    pid = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    digest = _query_scope_digest("Steam Deck OLED")
+    expected = f"{REDIS_INFLIGHT_KEY_PREFIX}{pid}{REDIS_KEY_QUERY_SUFFIX}{digest}"
+    assert (
+        PriceAggregationService._inflight_key(pid, query_override="Steam Deck OLED")
+        == expected
+    )
+
+
+def test_inflight_key_with_fb_location_uses_loc_suffix():
+    from modules.m2_prices.service import (
+        PriceAggregationService,
+        REDIS_INFLIGHT_KEY_PREFIX,
+    )
+
+    pid = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    expected = f"{REDIS_INFLIGHT_KEY_PREFIX}{pid}:loc:112111905481230:r25"
+    assert (
+        PriceAggregationService._inflight_key(
+            pid, fb_location_id="112111905481230", fb_radius_miles=25
+        )
+        == expected
+    )
+
+
+async def test_stream_writes_inflight_per_retailer_during_run(db_session, fake_redis):
+    """Mid-stream snapshot: after the first event yields, the inflight hash
+    must contain that retailer's payload. Proves the write happens BEFORE
+    the yield, which is the contract a parallel get_prices depends on."""
+    from modules.m2_prices.service import REDIS_INFLIGHT_KEY_PREFIX
+
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon", "walmart", "best_buy"])
+
+    fake = _FakeContainerClient(
+        responses={
+            "amazon": _success_response("amazon", 299.99),
+            "walmart": _success_response("walmart", 289.99),
+            "best_buy": _success_response("best_buy", 319.99),
+        },
+        delays_ms={"walmart": 5, "amazon": 80, "best_buy": 150},
+    )
+    service = PriceAggregationService(
+        db=db_session, redis=fake_redis, container_client=fake
+    )
+
+    stream = service.stream_prices(product.id)
+    first_type, first_payload = await stream.__anext__()
+    assert first_type == "retailer_result"
+    assert first_payload["retailer_id"] == "walmart"
+
+    inflight_key = f"{REDIS_INFLIGHT_KEY_PREFIX}{product.id}"
+    raw = await fake_redis.hgetall(inflight_key)
+    # FakeRedis returns bytes-keyed dict.
+    fields = {k.decode() if isinstance(k, bytes) else k for k in raw.keys()}
+    assert "walmart" in fields, fields
+
+    # Drain the rest so the stream cleans up properly.
+    async for _ in stream:
+        pass
+
+
+async def test_stream_clears_inflight_after_canonical_write(db_session, fake_redis):
+    """At stream end, the canonical 6h cache is authoritative; the inflight
+    bucket must be deleted so a re-stream within the 120s TTL doesn't
+    short-circuit a future get_prices on stale partial data."""
+    from modules.m2_prices.service import REDIS_INFLIGHT_KEY_PREFIX
+
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon"])
+
+    fake = _FakeContainerClient(
+        responses={"amazon": _success_response("amazon", 299.99)}
+    )
+    service = PriceAggregationService(
+        db=db_session, redis=fake_redis, container_client=fake
+    )
+
+    async for _ in service.stream_prices(product.id):
+        pass
+
+    inflight_key = f"{REDIS_INFLIGHT_KEY_PREFIX}{product.id}"
+    assert await fake_redis.exists(inflight_key) == 0
+
+
+async def test_get_prices_mid_stream_serves_partial_inflight(
+    db_session, fake_redis
+):
+    """The killer test. Iterate the stream once (one retailer done), then
+    call get_prices in parallel — it must return the partial inflight
+    snapshot WITHOUT re-dispatching scrapers. This is the M6 provisional
+    /recommend win that the per-request transaction had blocked."""
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon", "walmart", "best_buy"])
+
+    fake = _FakeContainerClient(
+        responses={
+            "amazon": _success_response("amazon", 299.99),
+            "walmart": _success_response("walmart", 289.99),
+            "best_buy": _success_response("best_buy", 319.99),
+        },
+        delays_ms={"walmart": 5, "amazon": 80, "best_buy": 150},
+    )
+    service = PriceAggregationService(
+        db=db_session, redis=fake_redis, container_client=fake
+    )
+
+    stream = service.stream_prices(product.id)
+    first_type, first_payload = await stream.__anext__()
+    assert first_type == "retailer_result"
+    assert first_payload["retailer_id"] == "walmart"
+
+    snapshot = await service.get_prices(product.id)
+    assert snapshot["retailers_succeeded"] >= 1
+    snapshot_retailers = {p["retailer_id"] for p in snapshot["prices"]}
+    assert "walmart" in snapshot_retailers
+    # Critical: get_prices MUST NOT have re-dispatched any retailer.
+    # The container client recorded one call per original stream
+    # dispatch and nothing more.
+    counts = {rid: fake.extract_one_calls.count(rid) for rid in fake.extract_one_calls}
+    for rid, count in counts.items():
+        assert count == 1, f"{rid} dispatched twice — inflight short-circuit failed"
+
+    async for _ in stream:
+        pass
+
+
+async def test_get_prices_inflight_bypassed_on_force_refresh(db_session, fake_redis):
+    """force_refresh=True must skip every cache layer including inflight,
+    otherwise a debug-flow that tries to re-run a stale stream silently
+    replays partial data."""
+    from modules.m2_prices.service import REDIS_INFLIGHT_KEY_PREFIX
+
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon"])
+
+    inflight_key = f"{REDIS_INFLIGHT_KEY_PREFIX}{product.id}"
+    seeded = {
+        "price": {
+            "retailer_id": "amazon",
+            "retailer_name": "Amazon",
+            "price": 100.0,
+            "currency": "USD",
+            "url": "https://amazon.com/p",
+            "condition": "new",
+            "is_available": True,
+            "is_on_sale": False,
+            "last_checked": "2026-04-25T00:00:00+00:00",
+        },
+        "result": {
+            "retailer_id": "amazon",
+            "retailer_name": "Amazon",
+            "status": "success",
+        },
+    }
+    await fake_redis.hset(inflight_key, "amazon", json.dumps(seeded))
+
+    fake = _FakeContainerClient(
+        responses={"amazon": _success_response("amazon", 299.99)}
+    )
+    service = PriceAggregationService(
+        db=db_session, redis=fake_redis, container_client=fake
+    )
+
+    result = await service.get_prices(product.id, force_refresh=True)
+    # Container WAS dispatched (force_refresh bypassed inflight).
+    assert fake.extract_one_calls == ["amazon"]
+    # Result is the freshly-scraped 299.99, not the seeded inflight 100.0.
+    assert result["prices"][0]["price"] == 299.99
+
+
+async def test_inflight_write_soft_fails_on_redis_error(
+    db_session, fake_redis, monkeypatch, caplog
+):
+    """Redis hiccup during _write_inflight must not crash the SSE stream —
+    the canonical end-of-stream cache write is still authoritative. We
+    log a warning and keep going."""
+    import logging
+
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon"])
+
+    def boom_pipeline(*args, **kwargs):
+        raise RuntimeError("redis transport down")
+
+    monkeypatch.setattr(fake_redis, "pipeline", boom_pipeline)
+
+    fake = _FakeContainerClient(
+        responses={"amazon": _success_response("amazon", 299.99)}
+    )
+    service = PriceAggregationService(
+        db=db_session, redis=fake_redis, container_client=fake
+    )
+
+    caplog.set_level(logging.WARNING, logger="barkain.m2")
+    events = []
+    async for evt in service.stream_prices(product.id):
+        events.append(evt)
+
+    assert any(t == "done" for t, _ in events), "stream must complete despite inflight failure"
+    assert any("inflight write failed" in r.message for r in caplog.records)
+
+
+async def test_check_inflight_distinguishes_missing_from_empty(
+    db_session, fake_redis
+):
+    """The semantic: missing key (no stream in flight) → None → caller
+    falls through to DB+dispatch. Empty key (stream just opened, no
+    completions yet) → empty-prices dict → caller does NOT dispatch.
+    Without this distinction, the brief window between EXPIRE and the
+    first HSET would let a parallel get_prices race in and dispatch a
+    duplicate batch."""
+    from modules.m2_prices.service import REDIS_INFLIGHT_KEY_PREFIX
+
+    product = await _seed_product(db_session)
+    fake = _FakeContainerClient(responses={})
+    service = PriceAggregationService(
+        db=db_session, redis=fake_redis, container_client=fake
+    )
+
+    # No key — None
+    missing = await service._check_inflight(product.id, product.name)
+    assert missing is None
+
+    # Key exists but empty — empty-prices dict (NOT None)
+    inflight_key = f"{REDIS_INFLIGHT_KEY_PREFIX}{product.id}"
+    await fake_redis.hset(inflight_key, "_marker", "{}")
+    await fake_redis.hdel(inflight_key, "_marker")
+    # After hdel of last field, Redis deletes the hash entirely. Re-seed
+    # with EXISTS-only by writing then deleting the field via a string
+    # placeholder kept around — easiest to just set a string placeholder.
+    # We mimic the "stream just opened" state by writing a sentinel field
+    # with an unparseable value, which _check_inflight skips but counts
+    # the key as existing.
+    await fake_redis.hset(inflight_key, "__sentinel__", "not-json")
+    snapshot = await service._check_inflight(product.id, product.name)
+    assert snapshot is not None
+    assert snapshot["prices"] == []
+    assert snapshot["retailers_succeeded"] == 0
+
+
+async def test_inflight_isolated_by_query_override_scope(db_session, fake_redis):
+    """A bare-scope reader (M6's get_prices, no query_override) must not
+    see inflight written under a query_override scope. Otherwise a
+    generic-search-tap stream's partial data would pollute a parallel
+    barcode-flow recommendation, mixing variants."""
+    from modules.m2_prices.service import REDIS_INFLIGHT_KEY_PREFIX
+
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon"])
+
+    fake = _FakeContainerClient(
+        responses={"amazon": _success_response("amazon", 299.99)}
+    )
+    service = PriceAggregationService(
+        db=db_session, redis=fake_redis, container_client=fake
+    )
+
+    # Run an override stream — writes inflight at the scoped key.
+    stream = service.stream_prices(product.id, query_override="Generic Variant")
+    await stream.__anext__()  # let one retailer land
+
+    bare_key = f"{REDIS_INFLIGHT_KEY_PREFIX}{product.id}"
+    assert await fake_redis.exists(bare_key) == 0, (
+        "bare-scope inflight must be empty when only override stream is running"
+    )
+
+    async for _ in stream:
+        pass

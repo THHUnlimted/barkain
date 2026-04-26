@@ -487,6 +487,100 @@ async def test_empty_results_get_shorter_redis_ttl(db_session, fake_redis):
     assert ttl > 0
 
 
+# MARK: - get_prices query_override threading (inflight-cache-1-L2)
+
+
+async def test_get_prices_with_query_override_uses_override_as_dispatch_query(
+    db_session, fake_redis
+):
+    """When the caller passes query_override, the dispatched container
+    query AND the per-container product_name hint must be the override
+    string — not the product's resolved name. Mirrors stream_prices.
+    Without this, the parallel /recommend would dispatch with the wrong
+    query and undo the bare-name search the SSE stream is running."""
+    from modules.m2_prices.service import PriceAggregationService
+
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon"])
+
+    captured_kwargs: dict = {}
+
+    async def _capturing_extract_all(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {"amazon": _make_container_response("amazon", 99.99)}
+
+    mock_client = AsyncMock()
+    mock_client.extract_all = _capturing_extract_all
+
+    service = PriceAggregationService(
+        db=db_session, redis=fake_redis, container_client=mock_client
+    )
+    await service.get_prices(
+        product.id, force_refresh=True, query_override="Apple iPhone Any Variant"
+    )
+
+    assert captured_kwargs["query"] == "Apple iPhone Any Variant", (
+        f"dispatch query should be the override string, got {captured_kwargs['query']!r}"
+    )
+    assert captured_kwargs["product_name"] == "Apple iPhone Any Variant", (
+        f"product_name hint should also be override, got {captured_kwargs['product_name']!r}"
+    )
+
+
+async def test_get_prices_with_query_override_skips_db_cache_short_circuit(
+    db_session, fake_redis
+):
+    """A bare-name override stream wrote SCOPED data; the prices table
+    rows have no scope tag. Falling through to the DB cache on a
+    query_override call would serve a cross-scope row (SKU-resolved row
+    served to a bare-name caller, or vice versa). Mirror's stream_prices'
+    same guard."""
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from modules.m2_prices.models import Price
+    from modules.m2_prices.service import PriceAggregationService
+
+    product = await _seed_product(db_session)
+    await _seed_retailers(db_session, ["amazon"])
+
+    # Seed a fresh DB price — would be served by _check_db_prices in
+    # the no-override path.
+    db_session.add(
+        Price(
+            product_id=product.id,
+            retailer_id="amazon",
+            price=Decimal("500.00"),
+            currency="USD",
+            condition="new",
+            url="https://amazon.com/p",
+            is_available=True,
+            is_on_sale=False,
+            last_checked=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+    )
+    await db_session.flush()
+
+    # Container client is dispatched ONLY when DB cache is correctly skipped.
+    mock_client = AsyncMock()
+    mock_client.extract_all = AsyncMock(
+        return_value={"amazon": _make_container_response("amazon", 100.00)}
+    )
+
+    service = PriceAggregationService(
+        db=db_session, redis=fake_redis, container_client=mock_client
+    )
+    result = await service.get_prices(
+        product.id, query_override="Apple iPhone Any Variant"
+    )
+
+    # Must dispatch (DB skipped). Resulting price = the dispatched 100.00,
+    # not the seeded DB row's 500.00.
+    mock_client.extract_all.assert_awaited_once()
+    assert result["prices"][0]["price"] == 100.00
+
+
 # MARK: - Relevance Scoring (Step 2b)
 
 

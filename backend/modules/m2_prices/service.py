@@ -41,6 +41,15 @@ REDIS_CACHE_TTL_QUERY = 1800  # 30 minutes for bare-name (query_override) result
 REDIS_KEY_PREFIX = "prices:product:"
 REDIS_KEY_QUERY_SUFFIX = ":q:"  # appended with sha1 hex digest of the override query
 
+# In-flight bucket: SSE writes here per retailer the moment a result is
+# classified, so a parallel `get_prices` (e.g. M6's provisional /recommend
+# while the stream is still running) can read what's been scraped without
+# having to re-dispatch the containers. Cleared at stream end after the
+# canonical cache is written. TTL covers the slowest retailer + headroom
+# so a crashed stream's bucket auto-evicts.
+REDIS_INFLIGHT_KEY_PREFIX = "prices:inflight:"
+REDIS_INFLIGHT_TTL = 120  # seconds — Best Buy ~91s p95 + buffer
+
 
 def _query_scope_digest(query: str) -> str:
     """SHA-1 hex digest of a normalized query — short, predictable, redis-safe."""
@@ -683,12 +692,25 @@ class PriceAggregationService:
         force_refresh: bool = False,
         fb_location_id: str | None = None,
         fb_radius_miles: int | None = None,
+        query_override: str | None = None,
     ) -> dict:
         """Full price comparison pipeline. Returns dict matching PriceComparisonResponse.
 
         ``fb_location_id`` / ``fb_radius_miles`` scope the FB Marketplace
         leg (and therefore the cache bucket) to the caller's chosen city.
         Omitting them shares the env-default bucket with other callers.
+
+        ``query_override`` mirrors `stream_prices`'s flag: when set, replaces
+        both the dispatch query AND the per-container product_name hint
+        with the bare string, and scopes every cache layer (Redis canonical
+        + in-flight + write-back) to the same `…:q:<sha1>` key the stream
+        uses. Skips the DB cache short-circuit because the prices table has
+        no notion of "which scope produced this row" — falling through to
+        DB on a bare-name override would serve cross-scope data. Only
+        callers that actually opened the stream with the same override
+        should pass it (today: M6 in the optimistic-search-tap path so
+        the parallel `/recommend` reads the stream's scoped inflight bucket
+        instead of the bare bucket; closes inflight-cache-1-L2).
         """
         # Step 1: Validate product exists
         product = await self._validate_product(product_id)
@@ -697,6 +719,7 @@ class PriceAggregationService:
         if not force_refresh:
             cached = await self._check_redis(
                 product_id,
+                query_override,
                 fb_location_id=fb_location_id,
                 fb_radius_miles=fb_radius_miles,
             )
@@ -704,8 +727,36 @@ class PriceAggregationService:
                 logger.info("Price cache hit (Redis) for product %s", product_id)
                 return cached
 
-        # Step 3: Check DB for fresh prices
-        if not force_refresh:
+            # Step 2.5: Check in-flight bucket. A non-None return means an
+            # SSE stream is mid-run for this product+scope; the dict may
+            # be partial (rows accumulating) or empty (stream just opened).
+            # Either way we MUST NOT fall through to DB-then-dispatch —
+            # that would re-run all 9 scrapers in parallel with the live
+            # stream, doubling backend work and never delivering fresher
+            # data than the stream itself will commit. Solves the M6
+            # transaction-visibility blocker that made the original
+            # provisional /recommend (PR-3) silently no-op.
+            inflight = await self._check_inflight(
+                product_id,
+                product.name,
+                query_override=query_override,
+                fb_location_id=fb_location_id,
+                fb_radius_miles=fb_radius_miles,
+            )
+            if inflight is not None:
+                logger.info(
+                    "Price cache hit (inflight, %d succeeded) for product %s",
+                    inflight["retailers_succeeded"],
+                    product_id,
+                )
+                return inflight
+
+        # Step 3: Check DB for fresh prices.
+        # Skip when query_override is set — DB rows aren't tagged with the
+        # scope that produced them, so a bare-name override falling through
+        # to DB would serve a SKU-resolved row (or vice versa). Mirrors the
+        # equivalent guard in stream_prices.
+        if not force_refresh and not query_override:
             db_result = await self._check_db_prices(product_id, product.name)
             if db_result is not None:
                 logger.info("Price cache hit (DB) for product %s", product_id)
@@ -717,12 +768,18 @@ class PriceAggregationService:
                 )
                 return db_result
 
-        # Step 4: Dispatch to containers
-        query = self._build_query(product)
+        # Step 4: Dispatch to containers. When the caller supplied a
+        # query_override, use that string verbatim and drop the variant-
+        # specific product_name hint — otherwise containers might still
+        # latch onto the SKU title and undo the bare-name search.
+        query = query_override if query_override else self._build_query(product)
+        product_name_for_containers = (
+            query_override if query_override else product.name
+        )
         logger.info("Dispatching to containers for product %s: %s", product_id, query)
         responses = await self.container_client.extract_all(
             query=query,
-            product_name=product.name,
+            product_name=product_name_for_containers,
             upc=product.upc,
             fb_location_id=fb_location_id,
             fb_radius_miles=fb_radius_miles,
@@ -787,10 +844,12 @@ class PriceAggregationService:
             "fetched_at": now.isoformat(),
         }
 
-        # Step 10: Cache to Redis
+        # Step 10: Cache to Redis (scoped if query_override is set so a
+        # bare-name run can't pollute the SKU-resolved bucket).
         await self._cache_to_redis(
             product_id,
             result,
+            query_override,
             fb_location_id=fb_location_id,
             fb_radius_miles=fb_radius_miles,
         )
@@ -955,6 +1014,22 @@ class PriceAggregationService:
                 else:
                     failed += 1
 
+                # Mid-stream visibility: write this retailer's result to
+                # the inflight hash so a parallel `get_prices` (M6's
+                # provisional /recommend) can see it without waiting for
+                # the per-request transaction to commit at end-of-stream.
+                # Soft-fails on Redis errors — the canonical cache write
+                # at stream end is still authoritative.
+                await self._write_inflight(
+                    product_id,
+                    retailer_id,
+                    price_payload=price_payload if result["status"] == "success" else None,
+                    result=result,
+                    query_override=query_override,
+                    fb_location_id=fb_location_id,
+                    fb_radius_miles=fb_radius_miles,
+                )
+
                 yield ("retailer_result", {**result, "price": price_payload})
 
             await self.db.flush()
@@ -998,6 +1073,16 @@ class PriceAggregationService:
             product_id,
             final,
             query_override,
+            fb_location_id=fb_location_id,
+            fb_radius_miles=fb_radius_miles,
+        )
+        # Canonical cache is now authoritative. Drop the inflight bucket
+        # so a re-stream within TTL doesn't replay the just-completed
+        # bucket via `get_prices` and short-circuit fresh dispatch on
+        # `force_refresh=True` paths.
+        await self._clear_inflight(
+            product_id,
+            query_override=query_override,
             fb_location_id=fb_location_id,
             fb_radius_miles=fb_radius_miles,
         )
@@ -1444,3 +1529,177 @@ class PriceAggregationService:
         else:
             ttl = REDIS_CACHE_TTL
         await self.redis.set(key, serialized, ex=ttl)
+
+    # MARK: - In-flight cache (mid-stream visibility)
+
+    @staticmethod
+    def _inflight_key(
+        product_id: uuid.UUID,
+        query_override: str | None = None,
+        fb_location_id: str | None = None,
+        fb_radius_miles: int | None = None,
+    ) -> str:
+        """Compose the in-flight Redis hash key for an active price stream.
+
+        Scope mirrors `_cache_key` so a SKU-resolved stream's bucket can't
+        be served to a bare-name caller (or vice versa) by accident. M6's
+        `get_prices` doesn't pass `query_override` today, so it reads the
+        bare-scope bucket — which is the one the barcode + SKU-search
+        flows write to. Generic-search-tap (`query_override` set) flows
+        write a scoped bucket that M6 won't see; the provisional /recommend
+        win is therefore SKU-flow-only by design. Documented as the trade
+        in the inflight-cache-1 changelog.
+        """
+        key = f"{REDIS_INFLIGHT_KEY_PREFIX}{product_id}"
+        if query_override:
+            key += f"{REDIS_KEY_QUERY_SUFFIX}{_query_scope_digest(query_override)}"
+        if fb_location_id:
+            radius_label = str(fb_radius_miles) if fb_radius_miles else "x"
+            key += f":loc:{fb_location_id}:r{radius_label}"
+        return key
+
+    async def _write_inflight(
+        self,
+        product_id: uuid.UUID,
+        retailer_id: str,
+        *,
+        price_payload: dict | None,
+        result: dict,
+        query_override: str | None = None,
+        fb_location_id: str | None = None,
+        fb_radius_miles: int | None = None,
+    ) -> None:
+        """Write one retailer's stream-emitted result to the in-flight hash.
+
+        Stored as one JSON-serialized dict per retailer field so a parallel
+        `get_prices` call can rebuild a partial PriceComparison payload
+        without waiting for the stream's per-request transaction to commit
+        (which is what makes `_upsert_price` writes invisible to other
+        requests under READ COMMITTED). Soft-fails on Redis errors — the
+        canonical end-of-stream cache is still authoritative.
+        """
+        payload = {"price": price_payload, "result": result}
+        serialized = json.dumps(payload, default=_json_serializer)
+        key = self._inflight_key(
+            product_id, query_override, fb_location_id, fb_radius_miles
+        )
+        try:
+            pipe = self.redis.pipeline()
+            pipe.hset(key, retailer_id, serialized)
+            pipe.expire(key, REDIS_INFLIGHT_TTL)
+            await pipe.execute()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "inflight write failed for %s/%s: %s", product_id, retailer_id, exc
+            )
+
+    async def _check_inflight(
+        self,
+        product_id: uuid.UUID,
+        product_name: str,
+        *,
+        query_override: str | None = None,
+        fb_location_id: str | None = None,
+        fb_radius_miles: int | None = None,
+    ) -> dict | None:
+        """Reconstruct a partial PriceComparison-shaped dict from the
+        in-flight hash. Returns None when no stream is in flight.
+
+        Distinguishes "no key" (return None → caller falls through to DB
+        and dispatch) from "key exists but empty" (return empty-prices
+        dict → caller treats as 'stream in flight, no completions yet'
+        and does NOT dispatch a parallel batch). The latter is rare —
+        the SSE worker writes the bucket on the FIRST classified result,
+        so an empty bucket only exists between `expire` and the first
+        `hset` of a fresh stream.
+        """
+        key = self._inflight_key(
+            product_id, query_override, fb_location_id, fb_radius_miles
+        )
+        try:
+            raw_entries = await self.redis.hgetall(key)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("inflight read failed for %s: %s", product_id, exc)
+            return None
+
+        if not raw_entries:
+            try:
+                exists = await self.redis.exists(key)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inflight EXISTS failed for %s: %s", product_id, exc)
+                return None
+            if not exists:
+                return None
+            raw_entries = {}
+
+        prices_data: list[dict] = []
+        retailer_results: list[dict] = []
+        succeeded = 0
+        failed = 0
+        for _retailer_field, entry_bytes in raw_entries.items():
+            try:
+                entry = json.loads(
+                    entry_bytes if isinstance(entry_bytes, str) else entry_bytes.decode()
+                )
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            result = entry.get("result")
+            price_payload = entry.get("price")
+            if not result:
+                continue
+            retailer_results.append(result)
+            if result.get("status") == "success":
+                succeeded += 1
+                if price_payload:
+                    prices_data.append(price_payload)
+            else:
+                failed += 1
+
+        prices_data.sort(key=lambda p: p["price"])
+        _status_order = {"success": 0, "no_match": 1, "unavailable": 2}
+        retailer_results.sort(
+            key=lambda r: (_status_order.get(r["status"], 99), r["retailer_name"])
+        )
+
+        return {
+            "product_id": str(product_id),
+            "product_name": product_name,
+            "prices": prices_data,
+            "retailer_results": retailer_results,
+            "total_retailers": len(retailer_results),
+            "retailers_succeeded": succeeded,
+            "retailers_failed": failed,
+            "cached": False,
+            "fetched_at": datetime.now(UTC).isoformat(),
+            # Internal marker (underscore-prefixed so Pydantic schemas with
+            # `extra="ignore"` drop it on serialization). Lets M6 detect
+            # that this payload is partial-data origin and skip writing
+            # the recommendation to its 15-min cache — otherwise a
+            # provisional rec built from a 5/9 snapshot could serve the
+            # same user for up to 15 min after the stream completes,
+            # masking the canonical 9/9 result.
+            "_inflight": True,
+        }
+
+    async def _clear_inflight(
+        self,
+        product_id: uuid.UUID,
+        *,
+        query_override: str | None = None,
+        fb_location_id: str | None = None,
+        fb_radius_miles: int | None = None,
+    ) -> None:
+        """Drop the in-flight hash after the canonical cache is authoritative.
+
+        Without this, a future re-stream within the 120s TTL would replay
+        the OLD partial bucket via `get_prices` instead of dispatching
+        fresh — the canonical 6h cache would catch it on the SSE side,
+        but `get_prices` cache-checks inflight before DB.
+        """
+        key = self._inflight_key(
+            product_id, query_override, fb_location_id, fb_radius_miles
+        )
+        try:
+            await self.redis.delete(key)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("inflight clear failed for %s: %s", product_id, exc)
