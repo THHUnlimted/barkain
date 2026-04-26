@@ -852,6 +852,330 @@ async def test_recommend_endpoint_422_on_insufficient_data(
 
 
 
+# MARK: - Inflight cache contamination guard (inflight-cache-1-L1)
+
+
+async def test_recommendation_skips_cache_write_when_prices_came_from_inflight(
+    db_session, fake_redis, caplog
+):
+    """When the prices payload comes from m2's in-flight bucket (mid-stream
+    snapshot), the recommendation must NOT be persisted to M6's 15-min
+    cache. Otherwise a provisional rec built from a 5/9 retailer snapshot
+    would serve the same user for up to 15 min after the stream completes,
+    masking the canonical 9/9 result.
+
+    Also asserts the structured log line so future agents debugging
+    "why is my rec stale" can grep for it.
+    """
+    import logging
+
+    from modules.m2_prices.service import PriceAggregationService
+
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "amazon")
+    await _seed_retailer(db_session, "best_buy")
+    await _seed_health(db_session, "amazon")
+    await _seed_health(db_session, "best_buy")
+    product = await _seed_product(db_session)
+    await db_session.flush()
+
+    # Seed the inflight bucket directly via m2's writer — exactly what
+    # `stream_prices` would do mid-run for each completed retailer.
+    price_service = PriceAggregationService(db=db_session, redis=fake_redis)
+    for rid, price in [("amazon", 100.0), ("best_buy", 110.0)]:
+        await price_service._write_inflight(
+            product.id,
+            rid,
+            price_payload=_wire_price(rid, price),
+            result={
+                "retailer_id": rid,
+                "retailer_name": rid.replace("_", " ").title(),
+                "status": "success",
+            },
+        )
+
+    # No canonical Redis cache for this product — forces M6's get_prices
+    # to fall through past Step 2 and hit the inflight bucket at Step 2.5.
+    bare_canonical = f"prices:product:{product.id}"
+    assert await fake_redis.get(bare_canonical) is None
+
+    caplog.set_level(logging.INFO, logger="barkain.m6")
+
+    service = RecommendationService(db_session, fake_redis)
+    rec = await service.get_recommendation(MOCK_USER_ID, product.id)
+    assert rec.cached is False  # fresh build, not a cache hit
+
+    # CRITICAL: M6's cache key must NOT have been written.
+    from modules.m6_recommend.service import _portal_membership_hash
+    user_card_hash = await service._user_card_hash(MOCK_USER_ID)
+    identity_hash = await service._identity_flag_hash(MOCK_USER_ID)
+    portal_hash = _portal_membership_hash({})
+    m6_cache_key = service._cache_key(
+        MOCK_USER_ID, product.id, user_card_hash, identity_hash, portal_hash
+    )
+    assert await fake_redis.get(m6_cache_key) is None, (
+        "M6 cache must not be written when prices came from inflight"
+    )
+
+    # Telemetry assertion — the structured log line is the only signal
+    # to operators that a rec was built from a partial snapshot.
+    assert any(
+        "recommendation_built_from_inflight" in r.getMessage()
+        for r in caplog.records
+    ), [r.getMessage() for r in caplog.records]
+
+    # Second call re-computes (no cache to hit) — the regression we're
+    # protecting against is "second call returns the stale provisional".
+    second = await service.get_recommendation(MOCK_USER_ID, product.id)
+    assert second.cached is False
+
+
+async def test_recommendation_writes_cache_when_prices_came_from_canonical(
+    db_session, fake_redis
+):
+    """Counter-test: a normal canonical-cache rec MUST still write to
+    M6's cache. Otherwise the inflight-skip wiring accidentally disables
+    all caching."""
+    import json
+
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "amazon")
+    await _seed_retailer(db_session, "best_buy")
+    await _seed_health(db_session, "amazon")
+    await _seed_health(db_session, "best_buy")
+    product = await _seed_product(db_session)
+    await db_session.flush()
+
+    payload = {
+        "product_id": str(product.id),
+        "product_name": product.name,
+        "prices": [_wire_price("amazon", 100.0), _wire_price("best_buy", 110.0)],
+        "retailer_results": [],
+        "total_retailers": 2,
+        "retailers_succeeded": 2,
+        "retailers_failed": 0,
+        "cached": True,
+        "fetched_at": datetime.now(UTC).isoformat(),
+    }
+    await fake_redis.setex(
+        f"prices:product:{product.id}", 600, json.dumps(payload)
+    )
+
+    service = RecommendationService(db_session, fake_redis)
+    rec = await service.get_recommendation(MOCK_USER_ID, product.id)
+    assert rec.cached is False
+
+    # Cache key MUST exist.
+    from modules.m6_recommend.service import _portal_membership_hash
+    user_card_hash = await service._user_card_hash(MOCK_USER_ID)
+    identity_hash = await service._identity_flag_hash(MOCK_USER_ID)
+    portal_hash = _portal_membership_hash({})
+    m6_cache_key = service._cache_key(
+        MOCK_USER_ID, product.id, user_card_hash, identity_hash, portal_hash
+    )
+    assert await fake_redis.get(m6_cache_key) is not None, (
+        "canonical-source recs must still cache (regression guard for inflight-cache-1-L1)"
+    )
+
+
+# MARK: - query_override scope plumbing (inflight-cache-1-L2)
+
+
+async def test_recommendation_with_query_override_reads_scoped_inflight(
+    db_session, fake_redis
+):
+    """When iOS opens the SSE stream with a `query=Apple iPhone` bare-name
+    override and then fires `/recommend?query_override=Apple iPhone`
+    mid-stream, M6 must read the SCOPED inflight bucket — not the bare
+    bucket. Pre-fix, M6 ignored query_override and read the bare bucket
+    which would be empty (the optimistic-tap stream wrote SCOPED), causing
+    a fall-through to dispatch and double the scrapers."""
+    from modules.m2_prices.service import PriceAggregationService
+
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "amazon")
+    await _seed_retailer(db_session, "best_buy")
+    await _seed_health(db_session, "amazon")
+    await _seed_health(db_session, "best_buy")
+    product = await _seed_product(db_session)
+    await db_session.flush()
+
+    price_service = PriceAggregationService(db=db_session, redis=fake_redis)
+    # Two distinct inflight buckets for the same product, one bare and one
+    # scoped. M6 must pick the scoped one when query_override is passed.
+    await price_service._write_inflight(
+        product.id,
+        "amazon",
+        price_payload=_wire_price("amazon", 999.99),  # bare-bucket price
+        result={"retailer_id": "amazon", "retailer_name": "Amazon", "status": "success"},
+    )
+    await price_service._write_inflight(
+        product.id,
+        "best_buy",
+        price_payload=_wire_price("best_buy", 999.99),  # bare-bucket price
+        result={"retailer_id": "best_buy", "retailer_name": "Best Buy", "status": "success"},
+    )
+    await price_service._write_inflight(
+        product.id,
+        "amazon",
+        price_payload=_wire_price("amazon", 100.0),  # scoped-bucket price
+        result={"retailer_id": "amazon", "retailer_name": "Amazon", "status": "success"},
+        query_override="Apple iPhone",
+    )
+    await price_service._write_inflight(
+        product.id,
+        "best_buy",
+        price_payload=_wire_price("best_buy", 110.0),  # scoped-bucket price
+        result={"retailer_id": "best_buy", "retailer_name": "Best Buy", "status": "success"},
+        query_override="Apple iPhone",
+    )
+
+    service = RecommendationService(db_session, fake_redis)
+    rec = await service.get_recommendation(
+        MOCK_USER_ID, product.id, query_override="Apple iPhone"
+    )
+
+    # Winner price MUST come from scoped bucket ($100), not bare ($999.99).
+    assert rec.winner.base_price == 100.0, (
+        f"Expected scoped-bucket price $100 but got {rec.winner.base_price}"
+    )
+
+
+async def test_recommendation_cache_isolated_by_query_override_scope(
+    db_session, fake_redis
+):
+    """Same user + product + state, but different query_override → DIFFERENT
+    cache keys. The two recs can legitimately differ because their inflight
+    buckets differ; sharing a cache key would let one scope serve the other.
+
+    This is the L2 analog of the v5 portal-membership cache-key bump."""
+    import json
+
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "amazon")
+    await _seed_retailer(db_session, "best_buy")
+    await _seed_health(db_session, "amazon")
+    await _seed_health(db_session, "best_buy")
+    product = await _seed_product(db_session)
+    await db_session.flush()
+
+    # Bare canonical Redis cache — drives the no-override get_recommendation.
+    bare_payload = {
+        "product_id": str(product.id),
+        "product_name": product.name,
+        "prices": [_wire_price("amazon", 100.0), _wire_price("best_buy", 110.0)],
+        "retailer_results": [],
+        "total_retailers": 2,
+        "retailers_succeeded": 2,
+        "retailers_failed": 0,
+        "cached": True,
+        "fetched_at": datetime.now(UTC).isoformat(),
+    }
+    await fake_redis.setex(
+        f"prices:product:{product.id}", 600, json.dumps(bare_payload)
+    )
+
+    # Scoped Redis cache for the override path.
+    from modules.m2_prices.service import _query_scope_digest
+    scoped_key = (
+        f"prices:product:{product.id}:q:{_query_scope_digest('Apple iPhone')}"
+    )
+    scoped_payload = {
+        **bare_payload,
+        "prices": [_wire_price("amazon", 200.0), _wire_price("best_buy", 210.0)],
+    }
+    await fake_redis.setex(scoped_key, 600, json.dumps(scoped_payload))
+
+    service = RecommendationService(db_session, fake_redis)
+    bare_rec = await service.get_recommendation(MOCK_USER_ID, product.id)
+    scoped_rec = await service.get_recommendation(
+        MOCK_USER_ID, product.id, query_override="Apple iPhone"
+    )
+
+    assert bare_rec.winner.base_price == 100.0
+    assert scoped_rec.winner.base_price == 200.0
+
+    # Cache key isolation: each rec should have written to its OWN key.
+    user_card_hash = await service._user_card_hash(MOCK_USER_ID)
+    identity_hash = await service._identity_flag_hash(MOCK_USER_ID)
+    from modules.m6_recommend.service import _portal_membership_hash
+    portal_hash = _portal_membership_hash({})
+    bare_cache_key = service._cache_key(
+        MOCK_USER_ID, product.id, user_card_hash, identity_hash, portal_hash
+    )
+    scoped_cache_key = service._cache_key(
+        MOCK_USER_ID,
+        product.id,
+        user_card_hash,
+        identity_hash,
+        portal_hash,
+        query_override="Apple iPhone",
+    )
+    assert bare_cache_key != scoped_cache_key, (
+        "query_override must produce a distinct cache key"
+    )
+    assert await fake_redis.get(bare_cache_key) is not None
+    assert await fake_redis.get(scoped_cache_key) is not None
+
+    # Re-call each path — both should hit their respective caches.
+    bare_again = await service.get_recommendation(MOCK_USER_ID, product.id)
+    scoped_again = await service.get_recommendation(
+        MOCK_USER_ID, product.id, query_override="Apple iPhone"
+    )
+    assert bare_again.cached is True
+    assert scoped_again.cached is True
+
+
+async def test_recommendation_no_override_unchanged_by_l2_wiring(
+    db_session, fake_redis
+):
+    """Regression guard: the existing barcode + SKU-search flow (no
+    query_override) must continue to read the bare bucket and write to
+    the bare cache key — same shape as before L2."""
+    import json
+
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "amazon")
+    await _seed_retailer(db_session, "best_buy")
+    await _seed_health(db_session, "amazon")
+    await _seed_health(db_session, "best_buy")
+    product = await _seed_product(db_session)
+    await db_session.flush()
+
+    payload = {
+        "product_id": str(product.id),
+        "product_name": product.name,
+        "prices": [_wire_price("amazon", 100.0), _wire_price("best_buy", 110.0)],
+        "retailer_results": [],
+        "total_retailers": 2,
+        "retailers_succeeded": 2,
+        "retailers_failed": 0,
+        "cached": True,
+        "fetched_at": datetime.now(UTC).isoformat(),
+    }
+    await fake_redis.setex(
+        f"prices:product:{product.id}", 600, json.dumps(payload)
+    )
+
+    service = RecommendationService(db_session, fake_redis)
+    rec = await service.get_recommendation(MOCK_USER_ID, product.id)
+    assert rec.cached is False
+
+    # Cache key MUST be the bare shape (no `:q...` segment) so existing
+    # v5 entries stay reachable.
+    user_card_hash = await service._user_card_hash(MOCK_USER_ID)
+    identity_hash = await service._identity_flag_hash(MOCK_USER_ID)
+    from modules.m6_recommend.service import _portal_membership_hash
+    portal_hash = _portal_membership_hash({})
+    expected_key = (
+        f"recommend:user:{MOCK_USER_ID}:product:{product.id}"
+        f":c{user_card_hash}:i{identity_hash}:p{portal_hash}:v5"
+    )
+    assert await fake_redis.get(expected_key) is not None, (
+        "no-override callers must continue to read/write the bare v5 key"
+    )
+
+
 # MARK: - Wire-shape helper
 
 

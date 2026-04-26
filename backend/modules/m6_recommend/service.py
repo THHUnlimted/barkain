@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core_models import Retailer, RetailerHealth
 from modules.m1_product.models import Product
-from modules.m2_prices.service import PriceAggregationService
+from modules.m2_prices.service import PriceAggregationService, _query_scope_digest
 from modules.m5_identity.card_schemas import CardRecommendation
 from modules.m5_identity.card_service import CardService
 from modules.m5_identity.models import PortalBonus, UserCard, UserDiscountProfile
@@ -104,8 +104,18 @@ class RecommendationService:
         *,
         force_refresh: bool = False,
         user_memberships: dict[str, bool] | None = None,
+        query_override: str | None = None,
     ) -> Recommendation:
-        """Build the full recommendation. Raises on insufficient data."""
+        """Build the full recommendation. Raises on insufficient data.
+
+        ``query_override`` plumbs through to `PriceAggregationService.get_prices`
+        and (when set) to the cache key as a `:q<sha1>` segment. Used by the
+        optimistic-search-tap flow: when iOS opens the SSE stream with a
+        bare-name override and then fires /recommend mid-stream, this lets
+        M6 read the SAME scoped inflight bucket the stream is writing to,
+        instead of falling back to the bare bucket and doubling-dispatching.
+        Closes inflight-cache-1-L2.
+        """
         started = time.perf_counter()
         memberships = user_memberships or {}
 
@@ -119,7 +129,12 @@ class RecommendationService:
 
         if not force_refresh:
             cached = await self._read_cache(
-                user_id, product_id, user_card_hash, identity_hash, portal_hash
+                user_id,
+                product_id,
+                user_card_hash,
+                identity_hash,
+                portal_hash,
+                query_override=query_override,
             )
             if cached is not None:
                 return cached.model_copy(update={"cached": True})
@@ -132,7 +147,9 @@ class RecommendationService:
             portal_rows,
             active_retailer_ids,
             drift_flagged,
-        ) = await self._gather_inputs(user_id, product_id)
+        ) = await self._gather_inputs(
+            user_id, product_id, query_override=query_override
+        )
 
         # Filter prices to the successful, active, healthy set.
         eligible_prices = self._filter_prices(
@@ -216,15 +233,42 @@ class RecommendationService:
             cached=False,
         )
 
-        await self._write_cache(
-            user_id, product_id, rec, user_card_hash, identity_hash, portal_hash
-        )
+        # When the prices payload came from m2's in-flight bucket (an SSE
+        # stream is mid-run for this product), skip the 15-min cache write.
+        # Otherwise a provisional rec built from a 5/9 snapshot would
+        # serve the same user for up to 15 min after the stream completes,
+        # masking the canonical 9/9 result the final /recommend call is
+        # about to compute. Marker is set in m2's `_check_inflight` —
+        # underscore-prefixed so it stays internal to the price service
+        # contract and never reaches the wire.
+        if prices_payload.get("_inflight"):
+            logger.info(
+                "recommendation_built_from_inflight user=%s product=%s "
+                "succeeded=%d skipping cache write",
+                user_id,
+                product_id,
+                prices_payload.get("retailers_succeeded", 0),
+            )
+        else:
+            await self._write_cache(
+                user_id,
+                product_id,
+                rec,
+                user_card_hash,
+                identity_hash,
+                portal_hash,
+                query_override=query_override,
+            )
         return rec
 
     # MARK: - Input gathering
 
     async def _gather_inputs(
-        self, user_id: str, product_id: UUID
+        self,
+        user_id: str,
+        product_id: UUID,
+        *,
+        query_override: str | None = None,
     ) -> tuple[
         Product,
         dict,
@@ -238,6 +282,9 @@ class RecommendationService:
 
         Loads product row first (serially) because `get_prices` needs it to
         exist and we want a clean 404 path. Everything else fans out.
+
+        ``query_override`` only affects the price lookup — identity, cards,
+        portals, retailer-active, and drift queries are scope-agnostic.
         """
         product = await self.db.get(Product, product_id)
         if product is None:
@@ -251,7 +298,9 @@ class RecommendationService:
             active_retailer_ids,
             drift_flagged,
         ) = await asyncio.gather(
-            self.price_service.get_prices(product_id),
+            self.price_service.get_prices(
+                product_id, query_override=query_override
+            ),
             self.identity_service.get_eligible_discounts(user_id, product_id),
             self.card_service.get_best_cards_for_product(user_id, product_id),
             self._load_portal_bonuses(),
@@ -327,9 +376,18 @@ class RecommendationService:
         user_card_hash: str,
         identity_hash: str,
         portal_hash: str,
+        query_override: str | None = None,
     ) -> str:
         """Cache key scoped to user + product + card portfolio + identity flags
-        + portal-membership state.
+        + portal-membership state, optionally extended with a per-search-scope
+        segment when the caller is in the optimistic-search-tap flow.
+
+        When ``query_override`` is set, a `:q<sha1>` segment is inserted before
+        the version suffix — this lets a user's barcode-flow rec (no override)
+        and their generic-search-tap rec (override set) for the same product
+        live in DISJOINT cache spaces. The two recs can legitimately differ
+        because their underlying inflight buckets differ. No version bump:
+        no-override callers continue to read the existing `…:v5` keys.
 
         Version bumped to v5 in 3g-B to add the `:p<portal_hash>` segment.
         Without it, toggling "I'm a Rakuten member" in Profile leaves the
@@ -343,9 +401,12 @@ class RecommendationService:
         * v4 — fixed identity scoping; no portal-membership signal.
         v1–v4 keys are not read and expire on their 15-min TTL naturally.
         """
+        scope_segment = (
+            f":q{_query_scope_digest(query_override)}" if query_override else ""
+        )
         return (
             f"{_CACHE_KEY_PREFIX}{user_id}:product:{product_id}"
-            f":c{user_card_hash}:i{identity_hash}:p{portal_hash}:v5"
+            f":c{user_card_hash}:i{identity_hash}:p{portal_hash}{scope_segment}:v5"
         )
 
     async def _user_card_hash(self, user_id: str) -> str:
@@ -397,11 +458,18 @@ class RecommendationService:
         user_card_hash: str,
         identity_hash: str,
         portal_hash: str,
+        *,
+        query_override: str | None = None,
     ) -> Recommendation | None:
         try:
             raw = await self.redis.get(
                 self._cache_key(
-                    user_id, product_id, user_card_hash, identity_hash, portal_hash
+                    user_id,
+                    product_id,
+                    user_card_hash,
+                    identity_hash,
+                    portal_hash,
+                    query_override,
                 )
             )
             if raw is None:
@@ -422,11 +490,18 @@ class RecommendationService:
         user_card_hash: str,
         identity_hash: str,
         portal_hash: str,
+        *,
+        query_override: str | None = None,
     ) -> None:
         try:
             await self.redis.setex(
                 self._cache_key(
-                    user_id, product_id, user_card_hash, identity_hash, portal_hash
+                    user_id,
+                    product_id,
+                    user_card_hash,
+                    identity_hash,
+                    portal_hash,
+                    query_override,
                 ),
                 _CACHE_TTL_SECONDS,
                 rec.model_dump_json(),

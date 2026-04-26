@@ -24,11 +24,21 @@ class RecommendationRequest(BaseModel):
     busts stale recs immediately — same class of bug as adding a card
     that 3f's `:c<sha1(card_ids)>` pattern solved. Missing keys are
     treated as non-member; explicit False is also non-member.
+
+    `query_override` is set ONLY by the optimistic-search-tap flow when
+    iOS opened the SSE stream with a bare-name override (a generic-row
+    tap like "Apple iPhone 16 [Any variant]"). When set, M6 reads the
+    SAME scoped inflight bucket the stream is writing to — without it
+    the parallel /recommend would read the bare bucket and double-
+    dispatch all 9 scrapers. Must match the value passed on the
+    corresponding `/prices/{id}/stream?query=...` call. Closes
+    inflight-cache-1-L2.
     """
 
     product_id: UUID
     force_refresh: bool = False
     user_memberships: dict[str, bool] = Field(default_factory=dict)
+    query_override: str | None = None
 
 
 # MARK: - Stacked Path

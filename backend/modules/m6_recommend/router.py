@@ -51,6 +51,7 @@ async def recommend(
             body.product_id,
             force_refresh=body.force_refresh,
             user_memberships=body.user_memberships,
+            query_override=body.query_override,
         )
     except RecommendationProductNotFoundError:
         raise_http_error(
