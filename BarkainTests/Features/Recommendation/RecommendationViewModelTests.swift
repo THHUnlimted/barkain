@@ -18,6 +18,7 @@ final class RecommendationViewModelTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        IdentityCache.shared.invalidateAll()
         mockClient = MockAPIClient()
         let suite = "test.recommend_vm.\(UUID().uuidString)"
         testDefaults = UserDefaults(suiteName: suite)!

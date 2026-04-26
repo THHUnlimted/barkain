@@ -16,6 +16,7 @@ final class SearchViewModelTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        IdentityCache.shared.invalidateAll()
         mockClient = MockAPIClient()
         mockAutocomplete = MockAutocompleteService()
         let suite = "test.search_vm.\(UUID().uuidString)"

@@ -83,6 +83,7 @@ final class ScannerViewModel {
     private let featureGate: FeatureGateService
     private let locationPreferences: LocationPreferences
     private let portalMembershipPreferences: PortalMembershipPreferences
+    private let identityCache: IdentityCache
 
     /// Step 3f: PriceComparisonView's PurchaseInterstitialSheet needs the
     /// same client for its affiliate-click call. Exposing this avoids
@@ -111,12 +112,14 @@ final class ScannerViewModel {
         apiClient: any APIClientProtocol,
         featureGate: FeatureGateService? = nil,
         locationPreferences: LocationPreferences = LocationPreferences(),
-        portalMembershipPreferences: PortalMembershipPreferences = PortalMembershipPreferences()
+        portalMembershipPreferences: PortalMembershipPreferences = PortalMembershipPreferences(),
+        identityCache: IdentityCache = .shared
     ) {
         self.apiClient = apiClient
         self.featureGate = featureGate ?? FeatureGateService(proTierProvider: { false })
         self.locationPreferences = locationPreferences
         self.portalMembershipPreferences = portalMembershipPreferences
+        self.identityCache = identityCache
     }
 
     // MARK: - Actions
@@ -261,7 +264,7 @@ final class ScannerViewModel {
     /// primary UX and must not be hidden by a secondary-feature failure.
     private func fetchIdentityDiscounts(productId: UUID) async {
         do {
-            let response = try await apiClient.getEligibleDiscounts(productId: productId)
+            let response = try await identityCache.fetchIdentity(productId: productId, apiClient: apiClient)
             identityDiscounts = response.eligibleDiscounts
             sseLog.info("fetchIdentityDiscounts: received \(response.eligibleDiscounts.count, privacy: .public) discounts for \(response.identityGroupsActive.count, privacy: .public) active groups")
         } catch {
@@ -281,7 +284,7 @@ final class ScannerViewModel {
     /// `PriceComparisonView` when no cards are on file.
     private func fetchCardRecommendations(productId: UUID) async {
         do {
-            let response = try await apiClient.getCardRecommendations(productId: productId)
+            let response = try await identityCache.fetchCards(productId: productId, apiClient: apiClient)
             cardRecommendations = response.recommendations
             userHasCards = response.userHasCards
             sseLog.info("fetchCardRecommendations: received \(response.recommendations.count, privacy: .public) recs userHasCards=\(response.userHasCards, privacy: .public)")

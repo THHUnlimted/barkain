@@ -41,6 +41,7 @@ final class CardSelectionViewModelTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        IdentityCache.shared.invalidateAll()
         mockClient = MockAPIClient()
         viewModel = CardSelectionViewModel(apiClient: mockClient)
     }

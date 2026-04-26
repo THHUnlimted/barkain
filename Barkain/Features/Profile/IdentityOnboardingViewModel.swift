@@ -20,13 +20,19 @@ final class IdentityOnboardingViewModel {
     // MARK: - Dependencies
 
     private let apiClient: APIClientProtocol
+    private let identityCache: IdentityCache
 
     // MARK: - Init
 
     /// Create a fresh onboarding draft. Pass `initial` to pre-populate for the
     /// "Edit Profile" flow — all 17 flags are copied out of the stored profile.
-    init(apiClient: APIClientProtocol, initial: IdentityProfile? = nil) {
+    init(
+        apiClient: APIClientProtocol,
+        initial: IdentityProfile? = nil,
+        identityCache: IdentityCache = .shared
+    ) {
         self.apiClient = apiClient
+        self.identityCache = identityCache
         if let initial {
             self.request = IdentityProfileRequest(from: initial)
         }
@@ -42,6 +48,10 @@ final class IdentityOnboardingViewModel {
 
         do {
             _ = try await apiClient.updateIdentityProfile(request)
+            // Identity changes shift downstream discount eligibility and card
+            // recommendations (M5 join). Bust both caches so the next scan
+            // sees fresh data immediately.
+            identityCache.invalidateAll()
             error = nil
             saved = true
         } catch let apiError as APIError {
