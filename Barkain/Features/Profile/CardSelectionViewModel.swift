@@ -20,12 +20,14 @@ final class CardSelectionViewModel {
     var pendingCategorySelection: UserCardSummary?
 
     private let apiClient: APIClientProtocol
+    private let identityCache: IdentityCache
     private let log = Logger(subsystem: "com.barkain.app", category: "CardSelection")
 
     // MARK: - Init
 
-    init(apiClient: APIClientProtocol) {
+    init(apiClient: APIClientProtocol, identityCache: IdentityCache = .shared) {
         self.apiClient = apiClient
+        self.identityCache = identityCache
     }
 
     // MARK: - Load
@@ -95,6 +97,7 @@ final class CardSelectionViewModel {
             // Replace any stale entry with the fresh one and append if absent.
             userCards.removeAll { $0.cardProgramId == program.id }
             userCards.append(added)
+            identityCache.invalidateCards()
             error = nil
             // If the card supports user-selected categories, prompt immediately.
             if program.userSelectedAllowed?.isEmpty == false {
@@ -113,6 +116,7 @@ final class CardSelectionViewModel {
         do {
             try await apiClient.removeCard(userCardId: userCard.id)
             userCards.removeAll { $0.id == userCard.id }
+            identityCache.invalidateCards()
             error = nil
         } catch let err as APIError {
             error = err
@@ -141,6 +145,7 @@ final class CardSelectionViewModel {
                     rewardCurrency: $0.rewardCurrency
                 )
             }
+            identityCache.invalidateCards()
             error = nil
         } catch let err as APIError {
             error = err
@@ -155,6 +160,7 @@ final class CardSelectionViewModel {
                 userCardId: userCard.id,
                 request: SetCategoriesRequest(categories: categories, quarter: quarter)
             )
+            identityCache.invalidateCards()
             error = nil
             pendingCategorySelection = nil
         } catch let err as APIError {

@@ -14,6 +14,9 @@ final class ScannerViewModelTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        // Reset the singleton identity cache so call-count assertions on the
+        // mock client are not skewed by a prior test having warmed it.
+        IdentityCache.shared.invalidateAll()
         mockClient = MockAPIClient()
         // Step 2f: each test gets a private UserDefaults suite for the
         // feature gate so daily scan counts don't leak across tests.

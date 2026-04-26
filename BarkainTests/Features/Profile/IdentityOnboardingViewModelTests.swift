@@ -13,6 +13,7 @@ final class IdentityOnboardingViewModelTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        IdentityCache.shared.invalidateAll()
         mockClient = MockAPIClient()
         viewModel = IdentityOnboardingViewModel(apiClient: mockClient)
     }
