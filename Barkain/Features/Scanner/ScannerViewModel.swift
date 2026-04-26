@@ -69,6 +69,24 @@ final class ScannerViewModel {
     private var cardsLoaded = false
     private var recommendationTask: Task<Void, Never>?
 
+    // PR-3: identity + cards now fire in PARALLEL with the SSE stream instead
+    // of sequentially after stream-close. They depend only on productId
+    // (already known when fetchPrices starts), not on stream results.
+    //
+    // Win: hero appears max(stream, identity, cards) instead of
+    // stream + identity + cards. Scales with cache-hot calls — on a fully
+    // cached repeat-scan (~50 ms each leg) the user sees 50 ms instead of
+    // ~150 ms. On a cold slow-stream (~30-90 s) saves ~400 ms — real but
+    // not perceptually huge. Compounds with PR-1's IdentityCache.
+    //
+    // The original PR-3 plan (provisional /recommend at 5/9 retailers — the
+    // 60-90s win) requires backend changes to make in-flight SSE upserts
+    // visible to a separate /recommend request before the stream commits;
+    // that's a separate PR. iOS scaffolding for it is stashed:
+    //   git stash list | grep "PR-3 provisional"
+    private var identityFetchTask: Task<Void, Never>?
+    private var cardsFetchTask: Task<Void, Never>?
+
     /// Test-only hook to await the in-flight recommendation fetch. Production
     /// call sites should never need this — the observable `recommendation`
     /// property drives the UI. Used by RecommendationViewModelTests so the
@@ -138,6 +156,10 @@ final class ScannerViewModel {
         cardsLoaded = false
         recommendationTask?.cancel()
         recommendationTask = nil
+        identityFetchTask?.cancel()
+        identityFetchTask = nil
+        cardsFetchTask?.cancel()
+        cardsFetchTask = nil
         isLoading = true
 
         do {
@@ -176,7 +198,23 @@ final class ScannerViewModel {
         cardsLoaded = false
         recommendationTask?.cancel()
         recommendationTask = nil
+        identityFetchTask?.cancel()
+        identityFetchTask = nil
+        cardsFetchTask?.cancel()
+        cardsFetchTask = nil
         isPriceLoading = true
+
+        // PR-3: kick off identity + cards in parallel with the SSE stream.
+        // Both depend only on productId (already known) and have no
+        // dependency on stream results, so racing them with the stream means
+        // the hero gate fires as soon as the slowest of the three settles
+        // — instead of stream + identity + cards in series.
+        identityFetchTask = Task { [weak self] in
+            await self?.fetchIdentityDiscounts(productId: product.id)
+        }
+        cardsFetchTask = Task { [weak self] in
+            await self?.fetchCardRecommendations(productId: product.id)
+        }
 
         // Step 2c: consume the SSE stream. Each retailer_result event mutates
         // `priceComparison` in place (lazy-seeded on first event). On stream
@@ -249,7 +287,13 @@ final class ScannerViewModel {
         sseLog.info("fetchPrices: stream completed successfully")
         streamClosed = true
         attemptFetchRecommendation()
-        await fetchIdentityDiscounts(productId: product.id)
+        // PR-3: identity + cards were spawned at the top in parallel with the
+        // stream. Await them here so callers that `await fetchPrices()` still
+        // observe a fully-settled state when the call returns. By now both
+        // tasks have almost certainly finished (~200 ms each vs a multi-
+        // second stream) — these awaits typically resolve immediately.
+        await identityFetchTask?.value
+        await cardsFetchTask?.value
         isPriceLoading = false
     }
 
@@ -273,7 +317,8 @@ final class ScannerViewModel {
         }
         identityLoaded = true
         attemptFetchRecommendation()
-        await fetchCardRecommendations(productId: productId)
+        // PR-3: card recommendations no longer chain off identity — both fire
+        // in parallel from fetchPrices() since neither depends on the other.
     }
 
     // MARK: - Step 2e: Card Recommendations
@@ -416,7 +461,10 @@ final class ScannerViewModel {
             // Batch success is equivalent to SSE `done` for the hero gate.
             streamClosed = true
             attemptFetchRecommendation()
-            await fetchIdentityDiscounts(productId: product.id)
+            // PR-3: identity + cards are already running in parallel from
+            // fetchPrices(). Await them so the contract holds.
+            await identityFetchTask?.value
+            await cardsFetchTask?.value
         } catch let apiError as APIError {
             // Clear any partial seed so callers see a clean failure state.
             if !preserveSeeded {
@@ -449,6 +497,10 @@ final class ScannerViewModel {
         cardsLoaded = false
         recommendationTask?.cancel()
         recommendationTask = nil
+        identityFetchTask?.cancel()
+        identityFetchTask = nil
+        cardsFetchTask?.cancel()
+        cardsFetchTask = nil
     }
 
     // MARK: - Step 2g: Affiliate URL resolution
