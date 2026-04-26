@@ -67,8 +67,10 @@ final class SearchViewModel {
     }
 
     /// Present after a successful tap — the `PriceComparisonView` is driven
-    /// by this ScannerViewModel (same destination as the Scanner tab uses).
-    var presentedProductViewModel: ScannerViewModel?
+    /// by this VM. Type lifted to the `PriceComparisonProviding` protocol in
+    /// PR-2 so the optimistic-search-tap flow (`OptimisticPriceVM`) can flow
+    /// through the same render path as the legacy `ScannerViewModel`.
+    var presentedProductViewModel: (any PriceComparisonProviding)?
 
     // MARK: - Dependencies
 
@@ -270,6 +272,16 @@ final class SearchViewModel {
             await presentProduct(product)
 
         case .bestBuy, .upcitemdb, .gemini, .generic:
+            // PR-2: optimistic-search-tap (default-OFF experiment flag).
+            // When enabled, navigate immediately to the PriceComparisonView
+            // skeleton built from this row's hint and let OptimisticPriceVM
+            // run resolve+stream in the background. The user sees the
+            // product card + sniffing dog instead of a 3-7s spinner on the
+            // search list.
+            if featureGate.isOptimisticSearchTapEnabled {
+                await presentOptimistic(result)
+                return
+            }
             isLoading = true
             defer { isLoading = false }
             do {
@@ -406,6 +418,58 @@ final class SearchViewModel {
         vm.product = product
         presentedProductViewModel = vm
         await vm.fetchPrices(queryOverride: queryOverride)
+    }
+
+    // MARK: - PR-2: Optimistic search-tap
+
+    /// Constructs an OptimisticPriceVM with the row's hint, navigates
+    /// immediately, and lets the VM run resolve+stream in the background.
+    /// On non-success resolve outcomes the VM reports back via callback;
+    /// SearchVM tears down the optimistic VM and routes through its
+    /// existing confirmation / unresolved / error sheets.
+    private func presentOptimistic(_ result: ProductSearchResult) async {
+        let vm = OptimisticPriceVM(
+            result: result,
+            query: query,
+            apiClient: apiClient,
+            featureGate: featureGate
+        )
+        vm.onResolveOutcome = { [weak self] outcome in
+            self?.handleOptimisticOutcome(outcome, primary: result)
+        }
+        presentedProductViewModel = vm
+        await vm.start()
+    }
+
+    private func handleOptimisticOutcome(
+        _ outcome: OptimisticResolveOutcome,
+        primary: ProductSearchResult
+    ) {
+        switch outcome {
+        case .success:
+            // VM continues internally — fetchPrices() drives the SSE +
+            // identity + cards + recommend pipeline. Nothing to do here.
+            return
+        case .needsConfirmation(let candidate):
+            // Tear down the optimistic skeleton and route through the
+            // existing confirmation sheet. On confirm, presentProduct()
+            // (the legacy path) takes over from confirmResolution().
+            presentedProductViewModel = nil
+            let alternatives = results
+                .filter { $0.deviceName != primary.deviceName && $0.source != .db }
+                .prefix(2)
+            pendingConfirmation = PendingConfirmation(
+                primary: primary,
+                alternatives: Array(alternatives),
+                threshold: candidate.threshold
+            )
+        case .unresolved:
+            presentedProductViewModel = nil
+            unresolvedAfterTap = true
+        case .failed(let apiError):
+            presentedProductViewModel = nil
+            error = apiError
+        }
     }
 
     // MARK: - Recent searches

@@ -54,6 +54,20 @@ final class FeatureGateService {
     private static let scanCountKey = "barkain.featureGate.dailyScanCount"
     private static let scanDateKey = "barkain.featureGate.lastScanDateKey"
 
+    // MARK: - Experiment flags
+    //
+    // Default-OFF feature flags backed by UserDefaults. Production access
+    // routes through these accessors so tests can flip them via the
+    // injected `defaults` suite without touching `.standard`.
+
+    /// PR-2: optimistic search-tap navigation. When ON, tapping a non-DB
+    /// search result navigates to the PriceComparisonView skeleton
+    /// immediately and runs `/resolve-from-search` in the background; when
+    /// OFF, the legacy await-resolve-then-navigate flow runs. Default OFF
+    /// for one TestFlight build per the rollout plan — flip via a debug
+    /// gesture or remote config when ready.
+    static let optimisticSearchTapKey = "experiment.optimisticSearchTap"
+
     // MARK: - Observable state
 
     private(set) var dailyScanCount: Int = 0
@@ -93,6 +107,13 @@ final class FeatureGateService {
     // MARK: - Tier
 
     var isPro: Bool { proTierProvider() }
+
+    // MARK: - Experiment flags
+
+    /// PR-2 default-OFF: see `optimisticSearchTapKey` documentation.
+    var isOptimisticSearchTapEnabled: Bool {
+        defaults.bool(forKey: Self.optimisticSearchTapKey)
+    }
 
     // MARK: - Feature access
 
