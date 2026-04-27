@@ -85,6 +85,8 @@ async def gemini_generate(
     max_retries: int = 1,
     retry_delay: float = 1.0,
     system_instruction: str | None = None,
+    grounded: bool = True,
+    thinking_budget: int | None = None,
 ) -> str:
     """Send a prompt to Gemini and return the text response.
 
@@ -96,6 +98,14 @@ async def gemini_generate(
         max_retries: Number of retries on transient failures.
         retry_delay: Base delay in seconds between retries (doubles each retry).
         system_instruction: Optional system instruction for the model.
+        grounded: When True (default), wires Tool(google_search=GoogleSearch())
+            so Gemini can issue real-time web searches. Set False for the
+            Serper-then-synthesis path in ai/web_search.py.
+        thinking_budget: When None (default), uses ThinkingLevel.LOW (PR #75).
+            When set to an integer, uses ThinkingConfig(thinking_budget=N) —
+            0 disables thinking entirely, -1 = dynamic. Used by the synthesis
+            path which bench-validated thinking_budget=0 as the cheapest
+            winning configuration (vendor-migrate-1).
 
     Returns:
         Raw text response from Gemini.
@@ -106,12 +116,17 @@ async def gemini_generate(
     """
     client = _get_gemini_client()
 
+    if thinking_budget is None:
+        tc = ThinkingConfig(thinking_level=ThinkingLevel.LOW)
+    else:
+        tc = ThinkingConfig(thinking_budget=thinking_budget)
+
     config = types.GenerateContentConfig(
-        temperature=1.0,
+        temperature=temperature,
         max_output_tokens=max_output_tokens,
         system_instruction=system_instruction,
-        thinking_config=ThinkingConfig(thinking_level=ThinkingLevel.LOW),
-        tools=[Tool(google_search=GoogleSearch())],
+        thinking_config=tc,
+        tools=[Tool(google_search=GoogleSearch())] if grounded else None,
     )
 
     last_error: Exception | None = None
@@ -149,6 +164,8 @@ async def gemini_generate_json(
     max_retries: int = 1,
     retry_delay: float = 1.0,
     system_instruction: str | None = None,
+    grounded: bool = True,
+    thinking_budget: int | None = None,
 ) -> dict:
     """Send a prompt to Gemini and parse the response as JSON.
 
@@ -169,6 +186,8 @@ async def gemini_generate_json(
         max_retries=max_retries,
         retry_delay=retry_delay,
         system_instruction=system_instruction,
+        grounded=grounded,
+        thinking_budget=thinking_budget,
     )
 
     # Strip markdown code fences

@@ -1,0 +1,265 @@
+{
+  "completed_at": "2026-04-27T05:26:32.469275+00:00",
+  "cases": [
+    {
+      "label": "jbl_flip_6",
+      "upc": "848061073966",
+      "expected": "JBL Flip 6",
+      "latency_ms": 626.2694580000243,
+      "organic_count": 2,
+      "knowledgeGraph": null,
+      "organic_top5": [
+        {
+          "title": "Amazon.com: 12 Oz Parmesan Cheese Shaker/salt and pepper ...",
+          "snippet": "12 Oz Parmesan Cheese Shaker/salt and pepper shakers with Stainless Steel Lid, Clear Plastic seasoning shaker, sugar/spice dispenser, large salt and pepper ...",
+          "link": "https://www.amazon.com/Stainless-seasoning-dispenser-GEEX-DEPOT/dp/B0CPYN8X5T"
+        },
+        {
+          "title": "Blue Magic 707 Convertible Top Cleaner With Trigger - 16 Fl. Oz.",
+          "snippet": "Cleans, brightens and protects \u00b7 Great for convertible tops \u00b7 Great for Vinyl tops and canvas \u00b7 Great for boat curtains \u00b7 Great for truck bed covers.",
+          "link": "https://www.ebay.com/itm/314751341244"
+        }
+      ]
+    },
+    {
+      "label": "bose_qc45",
+      "upc": "017817841634",
+      "expected": "Bose QuietComfort 45",
+      "latency_ms": 715.2349590032827,
+      "organic_count": 4,
+      "knowledgeGraph": null,
+      "organic_top5": [
+        {
+          "title": "UPC Lookup for 0178178##### - Meros.io",
+          "snippet": "UPC Lookup for 0178178##### ... Instantly search millions of UPC codes for product pricing, availability, and more! Brand: ASROCK INCORPORATION; Category: General ...",
+          "link": "https://meros.io/0178178"
+        },
+        {
+          "title": "6pc (Set of 3) Plastic Food Storage Container Set Blue - Target",
+          "snippet": "This set includes three plastic food storage containers and three blue lids \u2014 two with a capacity of three cups and one with a five-cup capacity. Plus, the ...",
+          "link": "https://www.target.com/p/6pc-set-of-3-plastic-food-storage-container-set-blue-room-essentials-8482/-/A-94164341"
+        },
+        {
+          "title": "AHIOU HOME 16.1-in W x 44.1-in L x 70.9-in H Brown ... - Lowe's",
+          "snippet": "This raised planter bed offers an arch with two lattice trellises and a pergola-like roof,it can accommodate climbing plants such as grape vines on the sides ...",
+          "link": "https://www.lowes.com/pd/AHIOU-HOME-16-1-in-W-x-44-1-in-L-x-70-9-in-H-Elevated-Brown-Wood-Raised-Garden-Bed/5015644057"
+        },
+        {
+          "title": "Premier Housewares Homeitem, Multicolour, One Size - Amazon.com",
+          "snippet": "White finish iron, This metal planter is a tough, lightweight weather resistant planter. Display it as a decoration outside and it will enhance the elements ...",
+          "link": "https://www.amazon.com/Premier-Housewares-1411665-Homeitem-Multicolour/dp/B0B6J3J752"
+        }
+      ]
+    },
+    {
+      "label": "sonos_era_100",
+      "upc": "878269009993",
+      "expected": "Sonos Era 100",
+      "latency_ms": 716.8568749984843,
+      "organic_count": 3,
+      "knowledgeGraph": null,
+      "organic_top5": [
+        {
+          "title": "Sonos Five - Wireless Speaker for Music Streaming, Black, (FIVE ...",
+          "snippet": "Product Details ; Locale, AU ; List price, $749.00 ; EAN, 087826900999 ; UPC, 878269009993 ; SKU, B0883NV3FN.",
+          "link": "https://au.camelcamelcamel.com/product/B0883NV3FN?cpf=new"
+        },
+        {
+          "title": "Sonos Five - Wireless Speaker for Music Streaming, Black, (FIVE)",
+          "snippet": "UPC, 878269009993. Global Trade Identification Number, 00878269009993. Manufacturer, Sonos. Item Type Name, Five - Wireless Speaker for Music Streaming.",
+          "link": "https://www.amazon.com.au/Sonos-Five-Wireless-Speaker-Streaming/dp/B0883NV3FN"
+        },
+        {
+          "title": "Sonos Wireless Hi-Fi Music Streaming Speaker System Black ...",
+          "snippet": "Sonos Wireless Hi-Fi Music Streaming Speaker System Black FIVE1AU1BLK. UPC: 878269009993 SKU: FIVE1AU1BLK ... Be notified when this product is back in stock.",
+          "link": "https://www.elite-electronics.com.au/Home_Entertainment/Home_Speakers/Wireless/Sonos_Wireless_Hi-Fi_Music_Streaming_Speaker_System_Black_FIVE1AU1BLK?srsltid=AfmBOoovXwWw4zrJCBKnutxXqfJfAosuTLDpjsUlYHIBiYyoF2CT-6cV"
+        }
+      ]
+    },
+    {
+      "label": "ps5_slim",
+      "upc": "711719577331",
+      "expected": "Sony PS5 Slim",
+      "latency_ms": 1024.4259999963106,
+      "organic_count": 2,
+      "knowledgeGraph": null,
+      "organic_top5": [
+        {
+          "title": "UPC Lookup for 7117195#####",
+          "snippet": "Instantly search millions of UPC codes for product pricing, availability, and more! Brands: Sony / Sony Music Entertainment UK Limited; Category: Outlet; GS1 ...",
+          "link": "https://meros.io/7117195"
+        },
+        {
+          "title": "DINZI LVJ Long Wall Shelves, 47.3Inch Wall Mounted ...",
+          "snippet": "Buy DINZI LVJ Long Wall Shelves, 47.3Inch Wall Mounted Shelves Set of 2, Extra Large Wall Storage Ledges with Sturdy Metal Brackets for Living Room, ...",
+          "link": "https://www.amazon.com/DINZI-LVJ-47-3Inch-Brackets-Bathroom/dp/B0BTPQ1B59"
+        }
+      ]
+    },
+    {
+      "label": "switch_oled",
+      "upc": "045496883843",
+      "expected": "Nintendo Switch OLED",
+      "latency_ms": 817.2019999983604,
+      "organic_count": 5,
+      "knowledgeGraph": null,
+      "organic_top5": [
+        {
+          "title": "UPC Lookup for 0454968##### - Meros.io",
+          "snippet": "Instantly search millions of UPC codes for product pricing, availability, and more! Brand: Sony Chemicals Corporation Of America; Category: General; GS1 Country ...",
+          "link": "https://meros.io/0454968"
+        },
+        {
+          "title": "Home Collection Red 3pc Set Oven Mitt & Potholders - Amazon.com",
+          "snippet": "Color: Red. Brand: Home Collection. Outer Material: Cotton. Product Dimensions: 10.9\"L x 7.9\"W. Product Care Instructions: Machine Wash. Shape: Hand.",
+          "link": "https://www.amazon.com/Home-Collection-Oven-Mitt-Potholders/dp/B00YQWQ3N6"
+        },
+        {
+          "title": "Bounty Select-A-Size 2-Ply Paper Towels, Double Roll, 11\" x 6 ...",
+          "snippet": "Quickly contain spills with Bounty Select-A-Size Paper Towels. Thanks to the perforated sheets, it's easy to tear off the right size for the task at hand.",
+          "link": "https://www.officesupply.com/cleaning-breakroom/cleaning-janitorial-supplies/paper-products-dispensers/paper-towels/bounty-select-size-paper-towels-double-roll-white-sheets-roll-pack-rolls/p1289908.html?srsltid=AfmBOoqPeCo2hDzyVEfwMqwzuGEeDmnVZ6jgl0VUXkXD1YhpWX52jIFL"
+        },
+        {
+          "title": "Winado 3 Pieces 8\u201d/10\u201d/11\u201d Stainless Steel Frying Pan Set Cooking ...",
+          "snippet": "Winado - 3 Pieces 8\u201d/10\u201d/11\u201d Stainless Steel Frying Pan Set Cooking Pans with 2 Lids & Comfortable Grip Handles, Dishwasher Safe - Silver. Model: G47001231.",
+          "link": "https://www.bestbuy.com/product/winado-3-pieces-8-10-11-stainless-steel-frying-pan-set-cooking-pans-with-2-lids-comfortable-grip-handles-dishwasher-safe-silver/JX389Q8PJ8"
+        },
+        {
+          "title": "DIRYZON 3 Light Bathroom Vanity Light,Industrial Black Wall ...",
+          "snippet": "DIRYZON 3 Light Bathroom Vanity Light,Industrial Black Wall Sconces,Rustic Wall Light Fixtures with Metal Shade for Hallway Kitchen Sink - Amazon.com.",
+          "link": "https://www.amazon.com/DIRYZON-Bathroom-Industrial-Sconces-Fixtures/dp/B0CKVT96PL"
+        }
+      ]
+    },
+    {
+      "label": "dualsense_ps5",
+      "upc": "711719541073",
+      "expected": "Sony DualSense PS5 Controller",
+      "latency_ms": 616.0765000022366,
+      "organic_count": 3,
+      "knowledgeGraph": null,
+      "organic_top5": [
+        {
+          "title": "UPC Lookup for 7117195##### - Meros.io",
+          "snippet": "UPC Lookup for 7117195##### ... Instantly search millions of UPC codes for product pricing, availability, and more! Brands: Sony / Sony Music Entertainment UK ...",
+          "link": "https://meros.io/7117195"
+        },
+        {
+          "title": "Pimpernel Placemats, Multi : Home & Kitchen - Amazon.com",
+          "snippet": "This set of 4 placemats from Pimpernel add a fresh feel to the table. Product: Placemats Material: Cork-backed Board Dimensions: 15.7 x 11.7 inches. Product ...",
+          "link": "https://www.amazon.com/Pimpernel-2010648727-Placemats-Multi/dp/B00BXP5A7O"
+        },
+        {
+          "title": "Apple [180g Eco Vinyl LP] [LP] - Best Buy",
+          "snippet": "Specifications ; Genre \u00b7 Pop/Rock ; Release Date \u00b7 10-03-2025 ; Artist \u00b7 Mother Love Bone ; Album Level Flags \u00b7 Studio Recording ; Release Level Flags \u00b7 Studio Recording ...",
+          "link": "https://www.bestbuy.com/product/apple-180g-eco-vinyl-lp-lp/J2FTWKR5JH"
+        }
+      ]
+    },
+    {
+      "label": "galaxy_s24_ultra",
+      "upc": "887276752815",
+      "expected": "Samsung Galaxy S24 Ultra",
+      "latency_ms": 638.6279580037808,
+      "organic_count": 1,
+      "knowledgeGraph": null,
+      "organic_top5": [
+        {
+          "title": "Matte Black Silverware Set, Bysta 20-Piece Stainless Steel Flatware ...",
+          "snippet": "The stainless steel silverware set is designed to beautifully blend into any setting. Just simple design with clean lines that come off as timeless.",
+          "link": "https://www.amazon.com/Silverware-Bysta-20-Piece-Stainless-Dishwasher/dp/B07QVQ8HMZ"
+        }
+      ]
+    },
+    {
+      "label": "apple_watch_s9",
+      "upc": "195949013690",
+      "expected": "Apple Watch Series 9 41mm",
+      "latency_ms": 692.2770829987712,
+      "organic_count": 5,
+      "knowledgeGraph": null,
+      "organic_top5": [
+        {
+          "title": "Apple MBP14 L23 M3/8/512 SVDEMO - Micro Center",
+          "snippet": "Mfr Part#: 3M132LL/A ; Product Information. SKU. 647917. Mfr Part#. 3M132LL/A. UPC. 195949013690 ; Mfr Part#. 3M132LL/A ; Main Website \u00b7 http://www.apple.com/ ...",
+          "link": "https://www.microcenter.com/product/674917/apple-mbp14-l23-m3-8-512-svdemo"
+        },
+        {
+          "title": "Amazonia 11 Piece Extendable Rectangular Dining Set - Walmart.com",
+          "snippet": "Seating capacity. 10 \u00b7 Table shape. Rectangle \u00b7 Items included. Table,Chair \u00b7 Dining furniture set type. Dining Table with Chair \u00b7 Color. Brown \u00b7 Piece count. 11.",
+          "link": "https://www.walmart.com/ip/Amazonia-11-Piece-Extendable-Rectangular-Dining-Set/783936626"
+        },
+        {
+          "title": "Amazon.com: OCG Pull Out Cabinet Organizer 14\" W x 21\" D, 2 Tier ...",
+          "snippet": "Installation Video - 2 tier individual pull out drawer ; Color. Wooden ; Material. Metal, Oak ; Frame Material. Metal ; Brand. OCG ; Product Dimensions. 21\"D x 14\"W ...",
+          "link": "https://www.amazon.com/OCG-Organizer-Heavy-Duty-Cabinets-Organization/dp/B0CSFPBRBV"
+        },
+        {
+          "title": "Apple 3M132LL/A 14.2\" (2023) - Apple M3, 8GB RAM, 512GB SSD",
+          "snippet": "Apple - MacBook Pro 14\" Laptop - M3 chip Built for Apple Intelligence - 8GB Memory - 10-core GPU - 512GB SSD - Silver ; Battery Life 22.0hrs ; Weight 1.54kg.",
+          "link": "https://barcodedb.net/products/00195949013690"
+        },
+        {
+          "title": "Ferret Nation-Double Unit With Stand, 36\" x 25\" x 62 1/2\" - CountryMax",
+          "snippet": "Ferret Nation-Double Unit With Stand, 36\" x 25\" x 62 1/2\". MIDWEST HOMES FOR PETS. $379.99. Add To Cart For Price. (No reviews yet) Write a Review ...",
+          "link": "https://www.countrymax.com/ferret-nation-double-unit-with-stand-36-x-25-x-62-1-2/?srsltid=AfmBOorS2M0RjOb_VYM3wtF5diyA8acVphj5me0H47NhwO7bSzJmFjK7"
+        }
+      ]
+    },
+    {
+      "label": "kitchenaid_artisan",
+      "upc": "883049010113",
+      "expected": "KitchenAid Artisan stand mixer",
+      "latency_ms": 614.7982499969658,
+      "organic_count": 3,
+      "knowledgeGraph": null,
+      "organic_top5": [
+        {
+          "title": "UPC Lookup for 8830490##### - Meros.io",
+          "snippet": "Instantly search millions of UPC codes for product pricing, availability, and more! ... 883049010113 883049010120 883049010137 883049010144 883049010151 ...",
+          "link": "https://meros.io/8830490"
+        },
+        {
+          "title": "Outdoor Rug 8x10 Ft Waterproof Plastic Straw Rugs for Patio,RV ...",
+          "snippet": "Made from virgin plastic straws to withstand tough outdoor conditions. Size - 8'x10'; Rug waterproof while still allowing air to flow through ensuring ...",
+          "link": "https://www.amazon.com/SatisInside-Outdoor-Waterproof-Plastic-Backyard/dp/B0D3PYB91V"
+        },
+        {
+          "title": "American Metalcraft 10\"x13\" Faux Leather Menu Cover",
+          "snippet": "Elevate your menu with the American Metalcraft MCTRLSBL Securit\u00ae Trendy Sewn Menu Cover. Faux leather finish and de-bossed lettering for a pro look.",
+          "link": "https://kitchenrestock.com/products/american-metalcraft-mctrlsbl-securit-trendy-sewn-menu-cover-10-x-13-faux-leather-finish-with-de-bossed-lettering-on-front-cover?srsltid=AfmBOoqj6lGQaQIOPbdSD2iZKGNbuq1zBvJ9VJvEXQJgP0zfwb63JJd1"
+        }
+      ]
+    },
+    {
+      "label": "dewalt_dcd800b",
+      "upc": "885911685320",
+      "expected": "DeWalt DCD800B 20V drill",
+      "latency_ms": 614.4271669982118,
+      "organic_count": 4,
+      "knowledgeGraph": null,
+      "organic_top5": [
+        {
+          "title": "UPC Lookup for 8859116##### - Meros.io",
+          "snippet": "UPC Lookup for 8859116#####. Search. Instantly search millions of UPC codes for product pricing, availability, and more! Brand: DEWALT; Category: General.",
+          "link": "https://meros.io/8859116"
+        },
+        {
+          "title": "PEET, Original Dryer, Electric Shoe Dryer, Effective Drying for Work ...",
+          "snippet": "Shoe Dryer Patented in 1968: Works silently by gently warming air that rises and dries footwear; Removes moisture, sweat, & odor from your shoes, ...",
+          "link": "https://www.amazon.com/PEET-Original-2-Shoe-Electric-Dryer/dp/B001J4HQ76"
+        },
+        {
+          "title": "MUG-16 oz CAFE-FOOTED - Lee Distributors",
+          "snippet": "UPC: 076440830453Availability: Out of stock SKU: AH-83045A Category: Drink & Stemware Tag: PESACH. Brand. Brand. Brand. ANCHOR HOCKING. Related products.",
+          "link": "https://www.leedistributors.com/product/mug-16-oz-cafe-footed/"
+        },
+        {
+          "title": "Emperor's Select 16 oz. Asian Microwavable Paper Take-Out ...",
+          "snippet": "This Emperor's Select Asian microwavable paper take-out container is a cost-effective and versatile choice for your take-out needs! \u00b7 Recyclable \u00b7 No PFAS Added.",
+          "link": "https://www.webstaurantstore.com/emperors-select-16-oz-asian-microwavable-paper-take-out-container-pack/99916ESPRT.html?srsltid=AfmBOopLa9MrVLEWPx6V-V8IYPYYpBJzNa7vGCEvvCt55RAFWtwzHYqD"
+        }
+      ]
+    }
+  ]
+}

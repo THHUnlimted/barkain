@@ -119,6 +119,33 @@ async def fake_redis():
     await r.aclose()
 
 
+# MARK: - Serper synthesis bypass (vendor-migrate-1)
+
+@pytest.fixture(autouse=True)
+def _serper_synthesis_disabled(monkeypatch):
+    """Force ``resolve_via_serper`` → None for every test by default.
+
+    The Serper-then-grounded wire-up in m1_product/service.py:_get_gemini_data
+    fires resolve_via_serper before falling back to grounded Gemini. Tests
+    that mock the grounded path (``gemini_generate_json``) without also
+    handling Serper would otherwise hit the real Serper API (developers
+    keep SERPER_API_KEY in .env for the bench scripts) and either return
+    surprising real results or fail intermittently.
+
+    This fixture short-circuits the Serper path universally; tests that
+    specifically want to assert Serper-path behavior can patch
+    ``modules.m1_product.service.resolve_via_serper`` themselves to
+    override this default.
+    """
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(
+        "modules.m1_product.service.resolve_via_serper",
+        AsyncMock(return_value=None),
+    )
+    yield
+
+
 # MARK: - Demo mode toggle (Step 3f Pre-Fix #4)
 
 @pytest.fixture
