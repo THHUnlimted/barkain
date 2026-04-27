@@ -1,0 +1,203 @@
+"""Web-search synthesis path for product UPC resolution.
+
+Pipeline: Serper SERP top-5 organic → constrained Gemini synthesis (no
+grounding, ``thinking_budget=0``). Used as the **primary** AI leg of the
+``asyncio.gather`` in ``m1_product/service.py``; the grounded path remains
+as a fallback when this returns None.
+
+**Bench validation** — bench/vendor-migrate-1 against 9 user-verified UPCs
+(Switch Lite Hyrule, Instant Pot Duo, DeWalt DCD791D2, PS5 DualSense White,
+Samsung PRO Plus Sonic 128GB microSD, Minisforum UM760 Slim Mini PC, iPad
+Air M4 13", Dell Inspiron 14 7445, Lenovo Legion Go):
+
+  - **E_current_budget0  : 45/45 (100% recall)**
+  - E_hardened_budget512 : 40/45 ( 89% recall)
+  - B_grounded_low       : 24/45 ( 53% recall) — current production baseline
+
+  - p50 latency: **1627 ms** vs B's 3083 ms (-47%)
+  - p90 latency: 2429 ms vs B's 4561 ms (-47%)
+  - per-call cost: $0.00109 vs B's $0.040 (~36× cheaper)
+
+Why budget=0 wins: Serper's top-5 organic for a real UPC tend to be
+title-clear retail listings naming the product directly. Small thinking
+budgets (256-1024) actually *hurt* recall on these clean snippets — the
+model uses the tokens to second-guess itself. Setting ``thinking_budget=0``
+forces direct snippet extraction, which is the right behavior for SERP
+synthesis.
+
+Soft-fails to None on:
+  - SERPER_API_KEY not configured (logged as warning once per cold start)
+  - Serper non-200 / network error
+  - Zero organic results
+  - Synthesis returns null device_name (model couldn't identify)
+  - Any unexpected exception (logged with ``exc_info=True``)
+
+Callers treat None as "not found" and fall back to grounded resolution.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+import time
+
+import httpx
+
+from ai.abstraction import gemini_generate
+from app.config import settings
+
+logger = logging.getLogger("barkain.ai.web_search")
+
+SERPER_URL = "https://google.serper.dev/search"
+SERPER_TIMEOUT_SEC = 10.0
+SERPER_NUM_RESULTS = 10
+SERPER_TOP_N_FOR_PROMPT = 5
+SYNTHESIS_MAX_TOKENS = 1024
+SYNTHESIS_THINKING_BUDGET = 0
+
+# Bench-winning prompt — vendor-migrate-1's E_current_budget0. Tightening
+# this prompt is risky: hardened wording regressed recall in mini-grid
+# testing. Change only with a fresh bench run. See bench/vendor-migrate-1.
+SYNTHESIS_PROMPT = """You will identify a product from these search results for UPC barcode {upc}.
+
+Use ONLY the snippets below. Do not invent. If the snippets are insufficient
+to identify the product, return device_name: null.
+
+Snippets:
+{snippets}
+
+Return STRICT JSON with this shape (no markdown, no commentary):
+{{
+  "device_name": "<full product name with brand>",
+  "model": "<model number/identifier or null>",
+  "chip": "<Apple silicon chip e.g. M4, M3 Pro, A18 Pro — null if not Apple>",
+  "display_size_in": <integer inches for displays/tablets/laptops, null otherwise>
+}}"""
+
+
+_FENCE_OPEN_RE = re.compile(r"^```(?:json)?\s*\n?")
+_FENCE_CLOSE_RE = re.compile(r"\n?```\s*$")
+_FIRST_OBJ_RE = re.compile(r"\{[\s\S]*\}", re.M)
+
+
+async def _serper_fetch(upc: str) -> list[dict] | None:
+    """Issue one Serper /search call. Returns organic results list, or None
+    on missing key, non-200, network error, or zero organic results."""
+    api_key = settings.SERPER_API_KEY
+    if not api_key:
+        logger.warning("SERPER_API_KEY not configured — Serper synthesis disabled")
+        return None
+    body = {"q": f"UPC {upc}", "num": SERPER_NUM_RESULTS}
+    headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
+    t0 = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=SERPER_TIMEOUT_SEC) as client:
+            resp = await client.post(SERPER_URL, json=body, headers=headers)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+    except (httpx.HTTPError, httpx.TimeoutException) as exc:
+        logger.warning(
+            "Serper fetch failed for UPC %s: %s: %r",
+            upc, type(exc).__name__, exc,
+        )
+        return None
+
+    if resp.status_code != 200:
+        logger.warning(
+            "Serper non-200 for UPC %s: status=%s elapsed=%.0fms",
+            upc, resp.status_code, elapsed_ms,
+        )
+        return None
+
+    try:
+        data = resp.json()
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("Serper JSON parse failed for UPC %s: %r", upc, exc)
+        return None
+
+    organic = data.get("organic")
+    if not organic:
+        logger.info(
+            "Serper UPC %s: zero organic results elapsed=%.0fms",
+            upc, elapsed_ms,
+        )
+        return None
+    logger.info(
+        "Serper UPC %s: organic=%d elapsed=%.0fms",
+        upc, len(organic), elapsed_ms,
+    )
+    return organic
+
+
+def _format_snippets(organic: list[dict], *, top: int = SERPER_TOP_N_FOR_PROMPT) -> str:
+    """Render the top-N organic results as a compact text block for the
+    synthesis prompt. Title + snippet only — link is dropped to keep the
+    prompt short and reduce noise."""
+    lines: list[str] = []
+    for i, hit in enumerate(organic[:top], start=1):
+        title = (hit.get("title") or "").strip()
+        snippet = (hit.get("snippet") or "").strip()
+        lines.append(f"{i}. {title}\n   {snippet}")
+    return "\n".join(lines)
+
+
+def _parse_synthesis_json(raw: str) -> dict:
+    """Parse the strict JSON output from the synthesis call. Strips markdown
+    code fences. Falls back to first-object regex if direct parse fails.
+    Returns {} on unrecoverable parse failure."""
+    if not raw:
+        return {}
+    cleaned = _FENCE_OPEN_RE.sub("", raw.strip())
+    cleaned = _FENCE_CLOSE_RE.sub("", cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = _FIRST_OBJ_RE.search(cleaned)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+    logger.warning("Synthesis JSON parse failed: %r", raw[:300])
+    return {}
+
+
+async def resolve_via_serper(upc: str) -> dict | None:
+    """Resolve a UPC via Serper SERP → Gemini synthesis.
+
+    Returns ``{"name": str, "gemini_model": str | None}`` on success
+    (matches the shape that ``ProductService._get_gemini_data`` returns), or
+    None when Serper missed or the synthesis returned null. Never raises —
+    callers can rely on None as the "fall back to grounded" signal.
+    """
+    organic = await _serper_fetch(upc)
+    if not organic:
+        return None
+
+    snippets = _format_snippets(organic)
+    prompt = SYNTHESIS_PROMPT.format(upc=upc, snippets=snippets)
+
+    try:
+        raw = await gemini_generate(
+            prompt,
+            max_output_tokens=SYNTHESIS_MAX_TOKENS,
+            grounded=False,
+            thinking_budget=SYNTHESIS_THINKING_BUDGET,
+        )
+    except Exception:
+        logger.warning(
+            "Gemini synthesis call failed for UPC %s",
+            upc, exc_info=True,
+        )
+        return None
+
+    parsed = _parse_synthesis_json(raw)
+    device_name = parsed.get("device_name")
+    if not device_name:
+        logger.info("Serper synthesis returned null device_name for UPC %s", upc)
+        return None
+
+    return {
+        "name": device_name,
+        "gemini_model": parsed.get("model"),
+    }

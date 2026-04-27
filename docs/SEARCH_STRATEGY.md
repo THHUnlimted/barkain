@@ -263,6 +263,28 @@ Replaces v1's contaminated catalog with a dual-filter pre-validated 9-entry cata
 
 **Recommendation: MIGRATE B → E with synthesis-prompt hardening first** (`bench/vendor-migrate-1`). Suggested rollout: (1) tighten synthesis prompt from "Use ONLY snippets… if insufficient return null" → "if 3+ snippets clearly name the same product, return it; only return null if snippets contradict each other or none clearly name a single product" + small re-bench to confirm Xbox 4/4 without AirPods regression; (2) add E-with-fallback-to-B in production (when E returns null, fire B; cost-blended ~$0.0074/call avg = still 5× cheaper than B-only); (3) swap `gather(B, UPCitemdb)` → `gather(E-with-fallback, UPCitemdb)` in `m1_product/service.py`. Catalog limitations (honest tradeoff): Apple-audio-heavy (5/7 valid UPCs are AirPods); only 1 chip-pair + 1 display-size pair; no mid/obscure-tier coverage. UPCitemdb's trial DB is the bottleneck — most non-Apple consumer-electronics UPCs aren't indexed there. Filter generalizability to non-Apple-audio is unknown until vendor-compare-3 lands. New `docs/BENCH_VENDOR_COMPARE_V2.md` has the full analysis. Closes Known Issue `bench-cat-1`; opens `bench-cat-2` (broader-category catalog for vendor-compare-3, optional after vendor-migrate-1 ships clean).
 
+### `bench/vendor-migrate-1` (2026-04-27) — Production switched to Serper-then-grounded
+
+Production AI-resolve leg in `m1_product/service.py:_get_gemini_data` now uses **Serper SERP top-5 → Gemini synthesis (no grounding, `thinking_budget=0`, `max_output_tokens=1024`)** as the primary path; the existing grounded path remains as a fallback when Serper returns null or errors. `gemini_generate` in `ai/abstraction.py` gains `grounded` and `thinking_budget` kwargs; defaults preserve PR #75 (grounded + LOW). The `asyncio.gather(_get_gemini_data, _get_upcitemdb_data)` shape is unchanged so cross-validation still fires. New `backend/ai/web_search.py` module with `resolve_via_serper(upc)`. Soft-fails to None on missing API key, httpx error, non-200, zero organic, synthesis null device_name, or any unexpected exception.
+
+The original v5.37 plan was to harden the synthesis prompt to fix vendor-compare-2's Xbox 4/4 nulls. **vendor-migrate-1 found a stronger fix path**: Xbox null wasn't a prompt issue, it was a `thinking_budget` issue. The v2 E config used `thinking_level=LOW` (translates to a small non-zero budget); the bench mini-grid measured that small budgets (256/512/1024) actively HURT recall on clean SERP because the model uses thinking tokens to second-guess the snippets. **`thinking_budget=0` (no thinking) forces direct snippet extraction** and resolved Xbox 5/5 in the verified-catalog head-to-head. The hardened prompt was tested at multiple budgets and *regressed* on AirPods at high thinking — worse on both axes. **Net: shipped `current_prompt + budget=0` instead of `hardened_prompt + medium_budget`.**
+
+**Bench validation** — 5 scripts ran across 4 budget × prompt combos × multiple catalog generations. The decisive run was `scripts/bench_synthesis_verified.py` against a **Mike-verified 9-UPC catalog** (Switch Lite Hyrule, Instant Pot Duo, DeWalt DCD791D2, PS5 DualSense White, Samsung PRO Plus Sonic, Minisforum UM760, iPad Air M4 13", Dell Inspiron 14, Lenovo Legion Go — Mike checked each UPC against manufacturer site or Amazon before adding). 3 configs × 9 UPCs × 5 runs = 135 calls.
+
+| Config | Recall | p50 | p90 | $/call |
+|---|---|---|---|---|
+| `E_current_budget0` | **45/45 (100%)** | **1627ms** | **2429ms** | **$0.00109** |
+| `E_hardened_budget512` | 40/45 (89%) | 1875ms | 2335ms | $0.00030 |
+| `B_grounded_low` | 24/45 (53%) | 3083ms | 4561ms | $0.040 |
+
+B's failures included confidently wrong "Damerin furniture" 5/5 on DeWalt, "Zintown BBQ Charcoal Grill" 5/5 on Lenovo Legion Go — Google grounded search hit wrong-UPC product associations on the open web. iPad Air M4 13" passed 5/5 with chip="M4" and display_size_in=13 correctly inferred (Apple Rule 2c+2d coverage holds on the synthesis path).
+
+**Counterintuitive lesson learned during bench: small thinking budgets ≠ better synthesis on clean SERP.** Speed curve from `bench_synthesis_grid.py`: budget=0 → 921ms p50, 256 → 1226ms, 512 → 1228ms, 1024 → 2148ms, dynamic → 3174ms. ~3.4× latency multiplier from thinking; for SERP synthesis specifically (where the snippets already contain the answer in plain text), thinking is pure waste — the model second-guesses an already-correct extraction.
+
+**Hidden bug also fixed**: `gemini_generate` was hardcoding `temperature=1.0` inside `GenerateContentConfig`, ignoring the parameter. All UPC-lookup callers ran at temp=1.0 in production despite asking for 0.1. Bench was at 0.1 via its own client. vendor-migrate-1 brings production into agreement with bench — factual-lookup tasks become more deterministic.
+
+**`SERPER_API_KEY` empty default = back-compat skip**: when not set in production env, `resolve_via_serper` short-circuits to None on the first line and the request runs grounded-only as it did pre-vendor-migrate-1. Rollback safety. Closes `bench-cat-2` in spirit (the Mike-verified catalog gave us the answer; broader-category bench would refine but not change the migration call). Opens `vendor-migrate-1-L1` LOW (production monitoring): watch the `Serper synthesis returned null device_name for UPC %s` log frequency in `barkain.ai.web_search` — if >15% of cold-path resolves hit grounded fallback, options are multi-query Serper, top-N expansion, or alternate SERP source.
+
 ---
 
 ```

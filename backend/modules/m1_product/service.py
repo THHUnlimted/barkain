@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai.abstraction import gemini_generate_json
+from ai.web_search import resolve_via_serper
 from ai.prompts.device_to_upc import (
     DEVICE_TO_UPC_SYSTEM_INSTRUCTION,
     build_device_to_upc_prompt,
@@ -527,14 +528,43 @@ class ProductResolutionService:
         return await self._persist_product(upc, product_data, source_label)
 
     async def _get_gemini_data(self, upc: str, *, allow_retry: bool = True) -> dict | None:
-        """Call Gemini API to resolve UPC. Returns raw dict or None.
+        """Resolve a UPC via Serper-then-grounded.
 
-        ``allow_retry=True`` (the legacy behavior) retries once with a
-        broader prompt if the first attempt returns null. In the
-        parallel cross-validation path the retry is driven externally
-        via ``_get_gemini_data_retry`` so we can gate it on UPCitemdb's
-        outcome; callers from that path pass ``allow_retry=False``.
+        E-then-B: try ``resolve_via_serper`` first (Serper SERP top-5 →
+        Gemini synthesis without grounding, ``thinking_budget=0``); on
+        None fall back to the grounded path. Bench-validated in
+        bench/vendor-migrate-1: on user-verified UPCs the Serper path
+        hit 100 % recall vs the grounded path's 53 %, with p50 latency
+        47 % lower and per-call cost ~36× cheaper. The grounded
+        fallback covers Serper-coverage gaps (obscure SKUs, non-US
+        retail).
+
+        ``allow_retry=True`` (the legacy behavior) retries the grounded
+        path once with a broader prompt if the first attempt returns
+        null. In the parallel cross-validation path the retry is driven
+        externally via ``_get_gemini_data_retry`` so we can gate it on
+        UPCitemdb's outcome; callers from that path pass
+        ``allow_retry=False``. The Serper path itself does not retry —
+        if it fails or returns null we go straight to grounded.
         """
+        # E (Serper synthesis) — fast/cheap path
+        try:
+            serper_result = await resolve_via_serper(upc)
+        except Exception:
+            logger.warning(
+                "Serper synthesis raised for UPC %s — falling back to grounded",
+                upc, exc_info=True,
+            )
+            serper_result = None
+
+        if serper_result is not None:
+            logger.info(
+                "UPC %s resolved via Serper synthesis: name=%r model=%r",
+                upc, serper_result.get("name"), serper_result.get("gemini_model"),
+            )
+            return serper_result
+
+        # B (grounded Gemini) — fallback
         try:
             prompt = build_upc_lookup_prompt(upc)
             raw = await gemini_generate_json(

@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     # AI — Product Resolution
     GEMINI_API_KEY: str = ""
     UPCITEMDB_API_KEY: str = ""
+    # Serper SERP API key for the AI resolve leg's E-then-B path. When set,
+    # m1_product first attempts UPC resolution via Serper top-5 organic →
+    # Gemini synthesis (fast, cheap), then falls back to grounded Gemini on
+    # null. When empty, the path soft-skips Serper and runs grounded only.
+    # See bench/vendor-migrate-1 for the validation. Get one at serper.dev.
+    SERPER_API_KEY: str = ""
 
     # AI — Watchdog / Anthropic
     ANTHROPIC_API_KEY: str = ""

@@ -725,3 +725,122 @@ async def test_resolve_handles_null_gemini_model(client, db_session, fake_redis)
     assert data["model"] is None
     assert data["name"] == "Sony WH-1000XM5 Wireless Headphones"
     assert data["source"] == "gemini_upc"
+
+
+# MARK: - Serper-then-grounded wire-up (vendor-migrate-1)
+
+
+@pytest.mark.asyncio
+async def test_resolve_uses_serper_when_serper_returns_value(
+    client, db_session, fake_redis
+):
+    """When ``resolve_via_serper`` returns a result, the grounded path is
+    NOT called — Serper-then-grounded short-circuits on Serper success.
+
+    This is the load-bearing latency win: the grounded path takes ~3s p50,
+    Serper synthesis takes ~1.6s p50. If a future change accidentally
+    calls grounded anyway, the latency win evaporates without anyone
+    noticing for weeks.
+    """
+    serper_result = {
+        "name": "Apple iPad Air 13-inch (M4) Wi-Fi 128GB",
+        "gemini_model": "MV2C3LL/A",
+    }
+
+    with (
+        patch(
+            "modules.m1_product.service.resolve_via_serper",
+            new_callable=AsyncMock,
+            return_value=serper_result,
+        ),
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+        ) as mock_grounded,
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": "195950797817"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == "Apple iPad Air 13-inch (M4) Wi-Fi 128GB"
+    assert data["source"] == "gemini_upc"
+    mock_grounded.assert_not_called(), (
+        "Grounded Gemini must not fire when Serper synthesis succeeds — "
+        "the whole point of the E-then-B wire-up is to skip grounded on the happy path"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_falls_back_to_grounded_when_serper_returns_none(
+    client, db_session, fake_redis, gemini_fixture
+):
+    """When Serper returns None (missing key, no coverage, etc.), the
+    grounded path IS called — coverage-gap UPCs still resolve.
+
+    The bench measured Serper hits ~85-100 % of real-world UPCs but
+    leaves a non-trivial tail of obscure SKUs and non-US-retail products
+    where its index has nothing useful. The grounded fallback is the
+    safety net for those.
+    """
+    with (
+        patch(
+            "modules.m1_product.service.resolve_via_serper",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_fixture,
+        ) as mock_grounded,
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": VALID_UPC})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == gemini_fixture["device_name"]
+    mock_grounded.assert_called_once(), (
+        "Grounded Gemini must fire when Serper returns None — otherwise "
+        "we regress on every Serper-coverage gap"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_falls_back_to_grounded_when_serper_raises(
+    client, db_session, fake_redis, gemini_fixture
+):
+    """When ``resolve_via_serper`` raises an unexpected exception, the
+    request must NOT crash — grounded fallback runs as if Serper returned
+    None. Defensive: web_search.py already swallows known errors but a
+    future bug there must not propagate to the user."""
+    with (
+        patch(
+            "modules.m1_product.service.resolve_via_serper",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("unexpected serper failure"),
+        ),
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_fixture,
+        ) as mock_grounded,
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": VALID_UPC})
+
+    assert response.status_code == 200
+    mock_grounded.assert_called_once()
