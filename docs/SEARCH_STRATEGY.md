@@ -251,6 +251,10 @@ Diagnostic head-to-head comparing 6 configurations for the AI leg of UPC resolut
 
 **Production baseline note:** the bench's config A (`grounded_dynamic`) is the **Gemini leg of `asyncio.gather(Gemini, UPCitemdb)` from PR #61, not the full production p50.** Production p50 is `min(A_p50, UPCitemdb_p50)`. Any MIGRATE recommendation must address how the alternative integrates into the parallel gather (likely: replace A leg, keep UPCitemdb leg, gather on the new pair).
 
+### `feat/grounded-low-thinking` (2026-04-27) — production already on B
+
+After vendor-compare-1 published the DEFER recommendation, a focused `scripts/bench_mini_a_vs_b.py` mini-bench (5 UPCitemdb-validated UPCs × A vs B × 3 runs = 30 calls) confirmed B (`thinking_level=ThinkingLevel.LOW`) matches A (`thinking_budget=-1` dynamic) on recall (8/10 vs 8/10) and ties on p50 latency (2867 vs 2850 ms). On clean inputs the dramatic vendor-compare-1 latency edge compresses (likely vendor-compare-1's contaminated catalog forced A to burn extra reasoning tokens "trying harder" on unresolvable UPCs); the cost win (~37% per call) holds independent of latency at the Gemini billing layer. Production `backend/ai/abstraction.py:gemini_generate` switched to `ThinkingLevel.LOW` with +2 regression tests. The wider migration question (E vs A) is unaffected — vendor-compare-2 still needs a clean UPCitemdb+Gemini-validated catalog to land MIGRATE/STAY/PARTIAL on E. Side-finding from the mini-bench: UPCitemdb-validated ≠ Gemini-resolvable. Galaxy Buds R170N (`732554340133`) is in UPCitemdb's trial DB with the correct Samsung label, but Gemini's grounded search picks Goodcook 20434 Can Opener (a real product sharing the UPC). Cross-brand UPC reuse is real; vendor-compare-2's catalog needs both filters.
+
 ---
 
 ```

@@ -12,7 +12,7 @@ import re
 import anthropic
 from google import genai
 from google.genai import types
-from google.genai.types import GoogleSearch, ThinkingConfig, Tool
+from google.genai.types import GoogleSearch, ThinkingConfig, ThinkingLevel, Tool
 
 from app.config import settings
 
@@ -110,7 +110,7 @@ async def gemini_generate(
         temperature=1.0,
         max_output_tokens=max_output_tokens,
         system_instruction=system_instruction,
-        thinking_config=ThinkingConfig(thinking_budget=-1),
+        thinking_config=ThinkingConfig(thinking_level=ThinkingLevel.LOW),
         tools=[Tool(google_search=GoogleSearch())],
     )
 
