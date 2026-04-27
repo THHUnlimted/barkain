@@ -235,6 +235,22 @@ The 2-leg flow above (3a) was rebuilt as a 3-tier cascade in 3c and hardened twi
 
 **3d-noise-filter (2026-04-20).** Live testing showed Tier 2 returning ONLY accessories / AppleCare / gift cards / monitors named "Pixel" / games-for-Switch for many flagship queries — yet the original gate `if not bestbuy_rows and not upcitemdb_rows` only fired Gemini on TOTAL Tier 2 emptiness. Result: searching "samsung flip 7" returned 5 cases instead of the Galaxy Z Flip 7. New `_is_tier2_noise(row)` classifier (in `backend/modules/m1_product/search_service.py`) flags rows whose `category` contains denylist tokens (`case`, `warrant`, `applecare`, `subscription`, `gift card`, `specialty gift`, `protection`, `monitor`, `physical video game`, `service`, `digital signage`, `charger`, `screen protector`) OR whose `device_name` contains denylist tokens (`applecare`, `protection plan`, `best buy protection`, `gift card`, `warranty`, `subscription`, `membership card`, `belt clip`, `skin case`). The cascade now escalates to Tier 3 when `relevant_tier2 == []` (filtered count is 0). On escalation, noise rows are dropped from the merge so Gemini's flagship hits aren't crowded out at `max_results`. Two carve-outs: `force_gemini` keeps Tier 2 rows visible (user explicitly asked for both sources), and an empty-Gemini guard keeps the noisy rows on screen if Gemini also returned nothing (half-relevant beats nothing). Cost guard: real Tier 2 product rows (e.g. ASUS RTX 5090 cards under category `GPUs / Video Graphics Cards`) keep Gemini quiet — no escalation, no API spend. 9/9 probe queries fixed; 4 regression tests in `test_product_search.py`.
 
+### Vendor Latency Benchmarks (`bench/vendor-compare-1`, 2026-04-27)
+
+Diagnostic head-to-head comparing 6 configurations for the AI leg of UPC resolution: A/B/C/D Gemini variants (grounded × thinking-level) vs E (Serper SERP → constrained Gemini synthesis) vs F (Serper Knowledge Graph extraction, no LLM). 20-UPC edge-case-weighted catalog × 5 runs/config = 600 calls (run 1 cold, excluded from p50/p90/p99). Output: `scripts/bench_results/bench_2026-04-27T01-53-45.895984_00-00.json` artifact + `docs/BENCH_VENDOR_COMPARE.md` analysis.
+
+**Recommendation: DEFER** pending `bench/vendor-compare-2` clean-catalog re-run. The bench `validate()` mirrors production gates (L4 brand+spec gate from cat-rel-1-followups + Apple Rule 2c chip equality + Rule 2d display-size equality from apple-variant-disambiguation), so the framework is sound and ready for re-use; the catalog had a data-quality issue (16 of 18 non-invalid UPCs did not resolve to their labeled products) that contaminated the recall comparison.
+
+**Conclusive findings from this run (independent of catalog issue, since all 6 configs saw the same input):**
+
+- **Latency win for `E_serper_then_D` over `A_grounded_dynamic` is conclusive.** p50 4976 ms → 2036 ms (−59 %), p90 8152 ms → 2379 ms (−71 %), p99 18332 ms → 2654 ms (−85 %). Cost $0.064/call → $0.0014/call (−98 %, 46× cheaper).
+- **Non-grounded configs (`C_no_ground_dynamic`, `D_no_ground_low`) hallucinate confidently.** D returned "Apple MacBook Air 13.6-inch (M2, 2022)" for the AirPods Pro 2 USB-C UPC across all 5 runs. Not viable as primaries regardless of latency wins.
+- **`F_serper_kg_only` (no-LLM fast-path) returned null on 100 % of non-invalid UPCs.** Smoke test was correct: most consumer-electronics UPCs don't trigger a Serper Knowledge Graph block. F is dead.
+- **`E_serper_then_D` never lost a UPC `A_grounded_dynamic` resolved** on the verifiable subset (3/3 ties + 1 mid E uniquely got).
+- **Apple Rule 2c rejection counts** (A=10, B=6, C=14, D=16, E=8 across 16 chip-pair attempts) prove the disagreement-only chip gate fires correctly when models return a chip the catalog disagrees with — exactly the design intent from `apple-variant-disambiguation`.
+
+**Production baseline note:** the bench's config A (`grounded_dynamic`) is the **Gemini leg of `asyncio.gather(Gemini, UPCitemdb)` from PR #61, not the full production p50.** Production p50 is `min(A_p50, UPCitemdb_p50)`. Any MIGRATE recommendation must address how the alternative integrates into the parallel gather (likely: replace A leg, keep UPCitemdb leg, gather on the new pair).
+
 ---
 
 ```
