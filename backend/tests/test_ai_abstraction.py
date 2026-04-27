@@ -89,6 +89,70 @@ async def test_claude_generate_json_with_usage_returns_tokens():
         assert tokens == 150
 
 
+# MARK: - gemini_generate (config-shape regression tests)
+
+
+@pytest.mark.asyncio
+async def test_gemini_generate_uses_thinking_level_low():
+    """Pin: gemini_generate uses ThinkingLevel.LOW, not dynamic budget.
+
+    Tied to the bench/mini-a-vs-b → feat/grounded-low-thinking change. Ground-
+    truth recall verified equivalent on UPCitemdb-validated UPCs (4 Apple
+    AirPods + 1 Samsung Galaxy Buds, A vs B identical 8/10), cost per call
+    drops ~37 % at the Gemini billing layer. If this assertion fails the
+    next time someone touches abstraction.py, re-read the bench artifact
+    before flipping back.
+    """
+    from google.genai.types import ThinkingLevel
+
+    mock_response = MagicMock()
+    mock_response.candidates = []
+    mock_response.text = "stub"
+
+    mock_client = MagicMock()
+    mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+    with patch("ai.abstraction._get_gemini_client", return_value=mock_client):
+        from ai.abstraction import gemini_generate
+
+        await gemini_generate("test prompt", max_retries=0)
+
+    mock_client.aio.models.generate_content.assert_called_once()
+    config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
+    assert config.thinking_config.thinking_level == ThinkingLevel.LOW
+    assert config.thinking_config.thinking_budget is None, (
+        "thinking_budget must be unset when thinking_level is in use — "
+        "passing both at once is undefined behavior in the SDK"
+    )
+
+
+@pytest.mark.asyncio
+async def test_gemini_generate_keeps_grounding_enabled():
+    """Pin: gemini_generate keeps the google_search Tool wired up.
+
+    The bench established equivalent recall under LOW thinking *only when
+    grounding stays on*. Stripping the tool would silently regress the UPC
+    lookup leg to non-grounded synthesis (config C/D in the bench, which
+    hallucinated MacBooks for AirPods UPCs).
+    """
+    mock_response = MagicMock()
+    mock_response.candidates = []
+    mock_response.text = "stub"
+
+    mock_client = MagicMock()
+    mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+    with patch("ai.abstraction._get_gemini_client", return_value=mock_client):
+        from ai.abstraction import gemini_generate
+
+        await gemini_generate("test prompt", max_retries=0)
+
+    config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
+    assert config.tools is not None and len(config.tools) == 1
+    tool = config.tools[0]
+    assert tool.google_search is not None
+
+
 # MARK: - Helpers
 
 
