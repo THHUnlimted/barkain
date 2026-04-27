@@ -1,0 +1,407 @@
+{
+  "kept": [
+    {
+      "upc": "194253397168",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "AirPods Pro"
+      ],
+      "label": "AirPods Pro 2nd Gen",
+      "category": "audio",
+      "difficulty": "flagship",
+      "upcitemdb_brand": "Apple",
+      "upcitemdb_name": "Apple - AirPods Pro (2nd generation) - White",
+      "upcitemdb_category": ""
+    },
+    {
+      "upc": "190199246850",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "AirPods Pro"
+      ],
+      "label": "AirPods Pro 1st Gen",
+      "category": "audio",
+      "difficulty": "flagship",
+      "upcitemdb_brand": "Apple",
+      "upcitemdb_name": "Apple AirPods Pro (1st Generation)",
+      "upcitemdb_category": "Electronics > Audio > Audio Components > Headphones & Headsets > Headphones"
+    },
+    {
+      "upc": "190199098428",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "AirPods"
+      ],
+      "label": "AirPods 2nd Gen",
+      "category": "audio",
+      "difficulty": "flagship",
+      "upcitemdb_brand": "Apple",
+      "upcitemdb_name": "Apple AirPods (2nd Generation) with Charging Case",
+      "upcitemdb_category": "Electronics > Audio > Audio Components > Headphones & Headsets"
+    },
+    {
+      "upc": "195949052484",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "AirPods Pro"
+      ],
+      "label": "AirPods Pro 2 USB-C",
+      "category": "audio",
+      "difficulty": "flagship",
+      "upcitemdb_brand": "Apple",
+      "upcitemdb_name": "Apple - AirPods Pro (2nd generation) with MagSafe Case (USB\u2011C) - White",
+      "upcitemdb_category": ""
+    },
+    {
+      "upc": "194252721247",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "AirPods Pro"
+      ],
+      "label": "AirPods Pro 1st Gen MagSafe",
+      "category": "audio",
+      "difficulty": "flagship",
+      "upcitemdb_brand": "Apple",
+      "upcitemdb_name": "Apple AirPods Pro with MagSafe Charging Case (1st Generation)",
+      "upcitemdb_category": "Electronics > Audio > Audio Components > Headphones & Headsets"
+    },
+    {
+      "upc": "195949257308",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "iPad Air"
+      ],
+      "expected_chip": "M2",
+      "expected_display_size_in": 13,
+      "label": "iPad Air 13-inch M2 (2024)",
+      "category": "tablet",
+      "difficulty": "flagship",
+      "upcitemdb_brand": "Apple",
+      "upcitemdb_name": "Apple iPad Air 13-inch (M2) (2024, 1st generation) Wi-Fi 1TB - Purple",
+      "upcitemdb_category": ""
+    },
+    {
+      "upc": "732554340133",
+      "expected_brand": "Samsung",
+      "expected_name_contains": [
+        "Galaxy Buds"
+      ],
+      "label": "Galaxy Buds R170N (canary \u2014 Gemini collision expected)",
+      "category": "audio",
+      "difficulty": "flagship",
+      "upcitemdb_brand": "SAMSUNG",
+      "upcitemdb_name": "Samsung Galaxy Buds R170N True Wireless Earbuds White",
+      "upcitemdb_category": "Electronics > Audio > Audio Components > Headphones & Headsets > Headphones"
+    },
+    {
+      "upc": "885609020013",
+      "expected_brand": "Dyson",
+      "expected_name_contains": [
+        "V11"
+      ],
+      "label": "Dyson V11 Torque Drive",
+      "category": "appliance",
+      "difficulty": "mid",
+      "upcitemdb_brand": "Dyson",
+      "upcitemdb_name": "Dyson V11 Torque Drive (Red)",
+      "upcitemdb_category": ""
+    },
+    {
+      "upc": "889842640816",
+      "expected_brand": "Microsoft",
+      "expected_name_contains": [
+        "Xbox Series X"
+      ],
+      "label": "Xbox Series X console",
+      "category": "console",
+      "difficulty": "flagship",
+      "upcitemdb_brand": "Xbox",
+      "upcitemdb_name": "Microsoft Xbox Series X 1TB | Xbox Series X Console - Black",
+      "upcitemdb_category": ""
+    },
+    {
+      "upc": "097855170095",
+      "expected_brand": "Logitech",
+      "expected_name_contains": [
+        "G502"
+      ],
+      "label": "Logitech G502 X Plus",
+      "category": "peripherals",
+      "difficulty": "flagship",
+      "upcitemdb_brand": "Logitech",
+      "upcitemdb_name": "TAP SCHEDULER MOUNTING KIT GRAPHITE",
+      "upcitemdb_category": ""
+    },
+    {
+      "upc": "111111111111",
+      "expected_brand": "(invalid)",
+      "expected_name_contains": [],
+      "label": "pattern UPC 111\u2026",
+      "category": "invalid",
+      "difficulty": "invalid"
+    },
+    {
+      "upc": "222222222222",
+      "expected_brand": "(invalid)",
+      "expected_name_contains": [],
+      "label": "pattern UPC 222\u2026",
+      "category": "invalid",
+      "difficulty": "invalid"
+    }
+  ],
+  "dropped": [
+    {
+      "upc": "848061073966",
+      "expected_brand": "JBL",
+      "expected_name_contains": [
+        "Flip 6"
+      ],
+      "label": "JBL Flip 6 speaker",
+      "category": "audio",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "brand_mismatch",
+      "upcitemdb_brand": "Anker",
+      "upcitemdb_name": "Anker [2-Pack] Premium Micro USB 3.0 Cables (3ft + 6ft) High Speed Sync and Charge Cables for Samsung Galaxy S5, Note 3, External Hard Drives and More (White)"
+    },
+    {
+      "upc": "017817841634",
+      "expected_brand": "Bose",
+      "expected_name_contains": [
+        "QuietComfort",
+        "QC45"
+      ],
+      "label": "Bose QuietComfort 45",
+      "category": "audio",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "097855171191",
+      "expected_brand": "Nintendo",
+      "expected_name_contains": [
+        "Pro Controller"
+      ],
+      "label": "Switch Pro Controller",
+      "category": "console",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "711719577331",
+      "expected_brand": "Sony",
+      "expected_name_contains": [
+        "PS5",
+        "PlayStation 5"
+      ],
+      "label": "PS5 Slim",
+      "category": "console",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "887276752815",
+      "expected_brand": "Samsung",
+      "expected_name_contains": [
+        "Galaxy S24"
+      ],
+      "label": "Galaxy S24 Ultra",
+      "category": "phone",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "883049010113",
+      "expected_brand": "KitchenAid",
+      "expected_name_contains": [
+        "Artisan",
+        "Stand Mixer"
+      ],
+      "label": "KitchenAid Artisan stand mixer",
+      "category": "kitchen",
+      "difficulty": "mid",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "885911685320",
+      "expected_brand": "DEWALT",
+      "expected_name_contains": [
+        "DCD800",
+        "20V"
+      ],
+      "label": "DeWalt DCD800B 20V drill",
+      "category": "tools",
+      "difficulty": "mid",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "878269009993",
+      "expected_brand": "Sonos",
+      "expected_name_contains": [
+        "Era 100"
+      ],
+      "label": "Sonos Era 100",
+      "category": "audio",
+      "difficulty": "mid",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "195174037102",
+      "expected_brand": "LG",
+      "expected_name_contains": [
+        "27GR95QE",
+        "UltraGear"
+      ],
+      "label": "LG 27GR95QE UltraGear monitor",
+      "category": "monitor",
+      "difficulty": "mid",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "840148735408",
+      "expected_brand": "Keychron",
+      "expected_name_contains": [
+        "Q1"
+      ],
+      "label": "Keychron Q1 keyboard",
+      "category": "peripherals",
+      "difficulty": "mid",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "190199706101",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "AirPods Max"
+      ],
+      "label": "AirPods Max Silver",
+      "category": "audio",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "194253829430",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "Apple Watch Ultra"
+      ],
+      "label": "Apple Watch Ultra 2 49mm",
+      "category": "wearable",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "190199233492",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "Pencil"
+      ],
+      "label": "Apple Pencil 2nd gen",
+      "category": "accessory",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "194252582510",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "AirTag"
+      ],
+      "label": "AirTag 4-pack",
+      "category": "accessory",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "889842611564",
+      "expected_brand": "Microsoft",
+      "expected_name_contains": [
+        "Xbox Wireless Controller"
+      ],
+      "label": "Xbox Wireless Controller Carbon Black",
+      "category": "console",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "brand_mismatch",
+      "upcitemdb_brand": "Xbox",
+      "upcitemdb_name": "Xbox Wireless Controller Robot White"
+    },
+    {
+      "upc": "097855179807",
+      "expected_brand": "Logitech",
+      "expected_name_contains": [
+        "MX Master"
+      ],
+      "label": "Logitech MX Master 3S",
+      "category": "peripherals",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "045496883843",
+      "expected_brand": "Nintendo",
+      "expected_name_contains": [
+        "Switch",
+        "OLED"
+      ],
+      "label": "Nintendo Switch OLED White",
+      "category": "console",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "711719541073",
+      "expected_brand": "Sony",
+      "expected_name_contains": [
+        "DualSense"
+      ],
+      "label": "DualSense PS5 Controller",
+      "category": "console",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "197223999166",
+      "expected_brand": "Beats",
+      "expected_name_contains": [
+        "Studio Buds"
+      ],
+      "label": "Beats Studio Buds Plus Black",
+      "category": "audio",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "190199233614",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "Magic Keyboard"
+      ],
+      "label": "Apple Magic Keyboard",
+      "category": "peripherals",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "195949013690",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "Apple Watch"
+      ],
+      "label": "Apple Watch Series 9 41mm",
+      "category": "wearable",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "194253437970",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "MagSafe"
+      ],
+      "label": "Apple MagSafe Charger",
+      "category": "accessory",
+      "difficulty": "mid",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    }
+  ],
+  "rate_limited": []
+}

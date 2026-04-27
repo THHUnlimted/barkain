@@ -57,7 +57,15 @@ from google.genai.types import (  # noqa: E402
 )
 
 # ── Configuration ───────────────────────────────────────────────────────────
-CATALOG_PATH = ROOT / "scripts" / "bench_data" / "test_upcs.json"
+# Catalog path can be overridden via CLI: `python3 bench_vendor_compare.py
+# --catalog scripts/bench_data/test_upcs_v2.json`. Default keeps the v1
+# catalog so prior runs reproduce.
+_DEFAULT_CATALOG = ROOT / "scripts" / "bench_data" / "test_upcs.json"
+if "--catalog" in sys.argv:
+    _idx = sys.argv.index("--catalog")
+    CATALOG_PATH = Path(sys.argv[_idx + 1]).resolve()
+else:
+    CATALOG_PATH = _DEFAULT_CATALOG
 RESULTS_DIR = ROOT / "scripts" / "bench_results"
 GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 RUNS_PER_CONFIG = 5
