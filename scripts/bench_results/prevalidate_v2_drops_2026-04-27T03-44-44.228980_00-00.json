@@ -1,0 +1,313 @@
+{
+  "completed_at": "2026-04-27T03:44:44.228980+00:00",
+  "filter1_upcitemdb_drops": [
+    {
+      "upc": "848061073966",
+      "expected_brand": "JBL",
+      "expected_name_contains": [
+        "Flip 6"
+      ],
+      "label": "JBL Flip 6 speaker",
+      "category": "audio",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "brand_mismatch",
+      "upcitemdb_brand": "Anker",
+      "upcitemdb_name": "Anker [2-Pack] Premium Micro USB 3.0 Cables (3ft + 6ft) High Speed Sync and Charge Cables for Samsung Galaxy S5, Note 3, External Hard Drives and More (White)"
+    },
+    {
+      "upc": "017817841634",
+      "expected_brand": "Bose",
+      "expected_name_contains": [
+        "QuietComfort",
+        "QC45"
+      ],
+      "label": "Bose QuietComfort 45",
+      "category": "audio",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "097855171191",
+      "expected_brand": "Nintendo",
+      "expected_name_contains": [
+        "Pro Controller"
+      ],
+      "label": "Switch Pro Controller",
+      "category": "console",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "711719577331",
+      "expected_brand": "Sony",
+      "expected_name_contains": [
+        "PS5",
+        "PlayStation 5"
+      ],
+      "label": "PS5 Slim",
+      "category": "console",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "887276752815",
+      "expected_brand": "Samsung",
+      "expected_name_contains": [
+        "Galaxy S24"
+      ],
+      "label": "Galaxy S24 Ultra",
+      "category": "phone",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "883049010113",
+      "expected_brand": "KitchenAid",
+      "expected_name_contains": [
+        "Artisan",
+        "Stand Mixer"
+      ],
+      "label": "KitchenAid Artisan stand mixer",
+      "category": "kitchen",
+      "difficulty": "mid",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "885911685320",
+      "expected_brand": "DEWALT",
+      "expected_name_contains": [
+        "DCD800",
+        "20V"
+      ],
+      "label": "DeWalt DCD800B 20V drill",
+      "category": "tools",
+      "difficulty": "mid",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "878269009993",
+      "expected_brand": "Sonos",
+      "expected_name_contains": [
+        "Era 100"
+      ],
+      "label": "Sonos Era 100",
+      "category": "audio",
+      "difficulty": "mid",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "195174037102",
+      "expected_brand": "LG",
+      "expected_name_contains": [
+        "27GR95QE",
+        "UltraGear"
+      ],
+      "label": "LG 27GR95QE UltraGear monitor",
+      "category": "monitor",
+      "difficulty": "mid",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "840148735408",
+      "expected_brand": "Keychron",
+      "expected_name_contains": [
+        "Q1"
+      ],
+      "label": "Keychron Q1 keyboard",
+      "category": "peripherals",
+      "difficulty": "mid",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "190199706101",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "AirPods Max"
+      ],
+      "label": "AirPods Max Silver",
+      "category": "audio",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "194253829430",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "Apple Watch Ultra"
+      ],
+      "label": "Apple Watch Ultra 2 49mm",
+      "category": "wearable",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "190199233492",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "Pencil"
+      ],
+      "label": "Apple Pencil 2nd gen",
+      "category": "accessory",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "194252582510",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "AirTag"
+      ],
+      "label": "AirTag 4-pack",
+      "category": "accessory",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "889842611564",
+      "expected_brand": "Microsoft",
+      "expected_name_contains": [
+        "Xbox Wireless Controller"
+      ],
+      "label": "Xbox Wireless Controller Carbon Black",
+      "category": "console",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "brand_mismatch",
+      "upcitemdb_brand": "Xbox",
+      "upcitemdb_name": "Xbox Wireless Controller Robot White"
+    },
+    {
+      "upc": "097855179807",
+      "expected_brand": "Logitech",
+      "expected_name_contains": [
+        "MX Master"
+      ],
+      "label": "Logitech MX Master 3S",
+      "category": "peripherals",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "045496883843",
+      "expected_brand": "Nintendo",
+      "expected_name_contains": [
+        "Switch",
+        "OLED"
+      ],
+      "label": "Nintendo Switch OLED White",
+      "category": "console",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "711719541073",
+      "expected_brand": "Sony",
+      "expected_name_contains": [
+        "DualSense"
+      ],
+      "label": "DualSense PS5 Controller",
+      "category": "console",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "197223999166",
+      "expected_brand": "Beats",
+      "expected_name_contains": [
+        "Studio Buds"
+      ],
+      "label": "Beats Studio Buds Plus Black",
+      "category": "audio",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "190199233614",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "Magic Keyboard"
+      ],
+      "label": "Apple Magic Keyboard",
+      "category": "peripherals",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "195949013690",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "Apple Watch"
+      ],
+      "label": "Apple Watch Series 9 41mm",
+      "category": "wearable",
+      "difficulty": "flagship",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    },
+    {
+      "upc": "194253437970",
+      "expected_brand": "Apple",
+      "expected_name_contains": [
+        "MagSafe"
+      ],
+      "label": "Apple MagSafe Charger",
+      "category": "accessory",
+      "difficulty": "mid",
+      "filter1_drop_reason": "no_upcitemdb_item"
+    }
+  ],
+  "filter2_gemini_drops": [
+    {
+      "upc": "732554340133",
+      "expected_brand": "Samsung",
+      "expected_name_contains": [
+        "Galaxy Buds"
+      ],
+      "label": "Galaxy Buds R170N (canary \u2014 Gemini collision expected)",
+      "category": "audio",
+      "difficulty": "flagship",
+      "upcitemdb_brand": "SAMSUNG",
+      "upcitemdb_name": "Samsung Galaxy Buds R170N True Wireless Earbuds White",
+      "upcitemdb_category": "Electronics > Audio > Audio Components > Headphones & Headsets > Headphones",
+      "filter2_drop_reason": "brand 'Samsung' missing from 'goodcook 20434 can opener'",
+      "gemini_device_name": "Goodcook 20434 Can Opener",
+      "gemini_model": "20434",
+      "gemini_chip": null,
+      "gemini_display_size_in": null
+    },
+    {
+      "upc": "885609020013",
+      "expected_brand": "Dyson",
+      "expected_name_contains": [
+        "V11"
+      ],
+      "label": "Dyson V11 Torque Drive",
+      "category": "appliance",
+      "difficulty": "mid",
+      "upcitemdb_brand": "Dyson",
+      "upcitemdb_name": "Dyson V11 Torque Drive (Red)",
+      "upcitemdb_category": "",
+      "filter2_drop_reason": "device_name=null",
+      "gemini_device_name": null,
+      "gemini_model": null,
+      "gemini_chip": null,
+      "gemini_display_size_in": null
+    },
+    {
+      "upc": "097855170095",
+      "expected_brand": "Logitech",
+      "expected_name_contains": [
+        "G502"
+      ],
+      "label": "Logitech G502 X Plus",
+      "category": "peripherals",
+      "difficulty": "flagship",
+      "upcitemdb_brand": "Logitech",
+      "upcitemdb_name": "TAP SCHEDULER MOUNTING KIT GRAPHITE",
+      "upcitemdb_category": "",
+      "filter2_drop_reason": "device_name=null",
+      "gemini_device_name": null,
+      "gemini_model": null,
+      "gemini_chip": null,
+      "gemini_display_size_in": null
+    }
+  ]
+}

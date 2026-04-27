@@ -1,0 +1,81 @@
+[
+  {
+    "upc": "194253397168",
+    "expected_brand": "Apple",
+    "expected_name_contains": [
+      "AirPods Pro"
+    ],
+    "category": "audio",
+    "difficulty": "flagship"
+  },
+  {
+    "upc": "190199246850",
+    "expected_brand": "Apple",
+    "expected_name_contains": [
+      "AirPods Pro"
+    ],
+    "category": "audio",
+    "difficulty": "flagship"
+  },
+  {
+    "upc": "190199098428",
+    "expected_brand": "Apple",
+    "expected_name_contains": [
+      "AirPods"
+    ],
+    "category": "audio",
+    "difficulty": "flagship"
+  },
+  {
+    "upc": "195949052484",
+    "expected_brand": "Apple",
+    "expected_name_contains": [
+      "AirPods Pro"
+    ],
+    "category": "audio",
+    "difficulty": "flagship"
+  },
+  {
+    "upc": "194252721247",
+    "expected_brand": "Apple",
+    "expected_name_contains": [
+      "AirPods Pro"
+    ],
+    "category": "audio",
+    "difficulty": "flagship"
+  },
+  {
+    "upc": "195949257308",
+    "expected_brand": "Apple",
+    "expected_name_contains": [
+      "iPad Air"
+    ],
+    "category": "tablet",
+    "difficulty": "flagship",
+    "expected_chip": "M2",
+    "expected_display_size_in": 13
+  },
+  {
+    "upc": "889842640816",
+    "expected_brand": "Microsoft",
+    "expected_name_contains": [
+      "Xbox Series X"
+    ],
+    "category": "console",
+    "difficulty": "flagship"
+  },
+  {
+    "upc": "111111111111",
+    "expected_brand": "(invalid)",
+    "expected_name_contains": [],
+    "category": "invalid",
+    "difficulty": "invalid"
+  },
+  {
+    "upc": "222222222222",
+    "expected_brand": "(invalid)",
+    "expected_name_contains": [],
+    "category": "invalid",
+    "difficulty": "invalid"
+  }
+]
