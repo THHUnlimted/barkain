@@ -99,7 +99,9 @@ auto-debounce-search.
 
 ### Module System
 
-10 modules currently shipped (`m1_product`, `m2_prices`, `m3_secondary`, `m4_coupons`, `m5_identity`, `m6_recommend`, `m9_notify`, `m10_savings`, `m11_billing`, `m12_affiliate`). Each is self-contained with `router.py` (FastAPI endpoints), `service.py` (business logic), `schemas.py` (Pydantic request/response). ORM models live in the shared `backend/app/models.py` so every module can reference the same SQLAlchemy declarative base.
+12 modules currently shipped (`m1_product`, `m2_prices`, `m3_secondary`, `m4_coupons`, `m5_identity`, `m6_recommend`, `m9_notify`, `m10_savings`, `m11_billing`, `m12_affiliate`, `m13_portal`, `m14_misc_retailer`). Each is self-contained with `router.py` (FastAPI endpoints), `service.py` (business logic), `schemas.py` (Pydantic request/response). ORM models live in the shared `backend/app/models.py` so every module can reference the same SQLAlchemy declarative base.
+
+`m13_portal/` is flat (no `cache.py`/`filters.py`); `m14_misc_retailer/` is also flat plus an `adapters/` subdir for the `MISC_RETAILER_ADAPTER` swap (mirrors `m2_prices/adapters/` for `WALMART_ADAPTER`). The misc-retailer slot is the 10th data source — it covers retailers Barkain doesn't directly scrape (Chewy, Petco, Petflow, niche specialty stores) by consuming Serper's `/shopping` endpoint, filtering against `KNOWN_RETAILER_DOMAINS`, capping to 3 rows, and caching 6 h in Redis. Redis-only; no PG persistence.
 
 Modules communicate via direct Python imports (modular monolith). No message bus between modules at MVP scale. Background workers (`backend/workers/`) reuse module services directly — `price_ingestion.process_queue` calls `PriceAggregationService.get_prices(force_refresh=True)` without duplication. `m6_recommend.service.RecommendationService` gathers inputs from `PriceAggregationService`, `IdentityService`, `CardService`, and the `portal_bonuses` table in one `asyncio.gather`.
 

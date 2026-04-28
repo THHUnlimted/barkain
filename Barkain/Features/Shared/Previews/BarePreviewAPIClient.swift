@@ -165,6 +165,12 @@ class BarePreviewAPIClient: APIClientProtocol, @unchecked Sendable {
         .insufficientData(reason: "Preview default — override in preview subclass")
     }
 
+    // MARK: - Misc retailer (Step 3n)
+
+    func getMiscRetailers(productId: UUID, query: String?) async throws -> [MiscMerchantRow] {
+        []
+    }
+
     // MARK: - Helpers
 
     private func previewUnimplemented(

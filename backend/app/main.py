@@ -22,6 +22,7 @@ from modules.m6_recommend.router import router as m6_recommend_router
 from modules.m11_billing.router import router as m11_billing_router
 from modules.m12_affiliate.router import router as m12_affiliate_router
 from modules.m13_portal.router import router as m13_portal_router
+from modules.m14_misc_retailer.router import router as m14_misc_retailer_router
 
 app = FastAPI(
     title="Barkain API",
@@ -75,6 +76,7 @@ app.include_router(m6_recommend_router)
 app.include_router(m11_billing_router)
 app.include_router(m12_affiliate_router)
 app.include_router(m13_portal_router)
+app.include_router(m14_misc_retailer_router)
 app.include_router(ebay_webhook_router)
 
 

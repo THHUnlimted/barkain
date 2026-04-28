@@ -44,6 +44,8 @@ nonisolated enum Endpoint {
     case getAffiliateStats
     // Step 3e — Recommendation Engine
     case getRecommendation(RecommendationRequest)
+    // Step 3n — M14 misc-retailer slot
+    case getMiscRetailers(productId: UUID, query: String? = nil)
 
     // MARK: - Properties
 
@@ -89,6 +91,8 @@ nonisolated enum Endpoint {
             return "/api/v1/affiliate/stats"
         case .getRecommendation:
             return "/api/v1/recommend"
+        case .getMiscRetailers(let productId, _):
+            return "/api/v1/misc/\(productId.uuidString)"
         }
     }
 
@@ -105,7 +109,8 @@ nonisolated enum Endpoint {
             return .delete
         case .getPrices, .streamPrices, .health, .getIdentityProfile,
              .getEligibleDiscounts, .getCardCatalog, .getUserCards,
-             .getCardRecommendations, .getBillingStatus, .getAffiliateStats:
+             .getCardRecommendations, .getBillingStatus, .getAffiliateStats,
+             .getMiscRetailers:
             return .get
         }
     }
@@ -134,6 +139,11 @@ nonisolated enum Endpoint {
             return nil
         case .getCardRecommendations(let productId):
             return [URLQueryItem(name: "product_id", value: productId.uuidString)]
+        case .getMiscRetailers(_, let query):
+            if let query, !query.isEmpty {
+                return [URLQueryItem(name: "query", value: query)]
+            }
+            return nil
         default:
             return nil
         }

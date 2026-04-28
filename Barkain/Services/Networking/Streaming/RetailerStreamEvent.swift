@@ -57,6 +57,31 @@ nonisolated struct StreamSummary: Decodable, Equatable, Sendable {
         self.cached = try c.decode(Bool.self, forKey: .cached)
         self.fetchedAt = try c.decode(Date.self, forKey: .fetchedAt)
     }
+
+    // The custom Decodable init above suppressed Swift's synthesized
+    // memberwise initializer. Tests construct StreamSummary directly
+    // (`ScannerViewModelTests.makeDoneSummary`), so retain a memberwise
+    // form. `productImageUrl` defaults to nil for the legacy call sites
+    // that pre-date the thumbnail-coverage field.
+    init(
+        productId: UUID,
+        productName: String,
+        productImageUrl: String? = nil,
+        totalRetailers: Int,
+        retailersSucceeded: Int,
+        retailersFailed: Int,
+        cached: Bool,
+        fetchedAt: Date
+    ) {
+        self.productId = productId
+        self.productName = productName
+        self.productImageUrl = productImageUrl
+        self.totalRetailers = totalRetailers
+        self.retailersSucceeded = retailersSucceeded
+        self.retailersFailed = retailersFailed
+        self.cached = cached
+        self.fetchedAt = fetchedAt
+    }
 }
 
 // MARK: - StreamError
