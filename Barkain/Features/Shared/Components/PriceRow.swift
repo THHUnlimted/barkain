@@ -141,11 +141,31 @@ struct PriceRow: View {
         ZStack {
             Circle()
                 .fill(Color.barkainSurfaceContainer)
-            Image(systemName: "bag.fill")
-                .font(.body)
-                .foregroundStyle(Color.barkainOnSurfaceVariant)
+            if let raw = retailerPrice.imageUrl, let url = URL(string: raw) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    case .empty, .failure:
+                        bagPlaceholder
+                    @unknown default:
+                        bagPlaceholder
+                    }
+                }
+                .clipShape(Circle())
+            } else {
+                bagPlaceholder
+            }
         }
         .frame(width: 48, height: 48)
+    }
+
+    private var bagPlaceholder: some View {
+        Image(systemName: "bag.fill")
+            .font(.body)
+            .foregroundStyle(Color.barkainOnSurfaceVariant)
     }
 
     private var retailerInfo: some View {

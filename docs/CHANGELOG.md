@@ -5075,3 +5075,70 @@ B's failures were dramatic: confidently wrong "Damerin furniture" 5/5 on DeWalt,
 - 11 in new `tests/test_ai_web_search.py`: Serper happy path / API-key-missing / httpx-error / non-200 / zero-organic / synthesis-null / Gemini-raises soft-fail paths + bench-winning config pinning + `_parse_synthesis_json` markdown-strip + parse-failure-empty-dict + `_format_snippets` top-N truncation
 - 3 in `tests/test_ai_abstraction.py`: `grounded=False` omits Tool, `thinking_budget=0` wires `ThinkingConfig(thinking_budget=0)` with `thinking_level=None`, temperature parameter now propagates
 - 3 in `tests/modules/test_m1_product.py` for the wire-up: Serper-success-skips-grounded, Serper-None-falls-back-to-grounded, Serper-raises-falls-back-to-grounded
+
+---
+
+## feat/thumbnail-coverage (2026-04-28) — End-to-end product image plumbing
+
+**Branch.** `bench/vendor-migrate-1` (PR pending) — bundled into the vendor-migrate-1 branch since it depends on the new `resolve_via_serper` shape and was discovered during live testing of that change. PR will end up docs+thumbnail-coverage only since the vendor-migrate-1 commits already shipped via #77.
+
+**Why.** During Mike's first manual sim run after vendor-migrate-1, every Recently-Sniffed card and every per-retailer row showed a generic placeholder (paw / shopping-bag) instead of a product image — even on products like Makita XFD10Z where the price stream returned listings carrying real CDN URLs. The Serper migration made it worse: Gemini-only resolves (`gemini_upc` source) consistently produced products with `image_url=NULL` because Serper synthesis didn't extract an image.
+
+The user articulated the fix as "three layers, cheapest first" — UPCitemdb `images[]` already in API responses, Best Buy + eBay `image_url` already on per-row payloads, and a backfill onto `Product.image_url` from those. Investigation revealed the gap was *bigger* than that: image data wasn't on the SSE wire at all, so iOS could never see what the backend already had.
+
+**The 3-layer chain we ended up shipping.**
+
+1. **Resolve-time image** (cheapest, `Product.image_url`): set when M1 resolves. Sources in priority order:
+   - `_cross_validate(gemini_validated)` branch — UPCitemdb's `images[0]`, with Serper's `image_url` as a same-tier fallback when UPCitemdb has none
+   - `_cross_validate(upcitemdb_override / upcitemdb)` — UPCitemdb's `images[0]`
+   - `_cross_validate(gemini_upc)` — whatever Serper extracted from organic results (new this step)
+
+2. **Stream backfill** (no extra cost, fires only on `Product.image_url IS NULL`): inside the `as_completed` loop in `stream_prices` and the matching loop in `get_prices`, the first scraper that returns `best_listing.image_url` writes it onto the in-memory `Product`. Idempotent across iterations, soft-fails on flush.
+
+3. **iOS fallback chain** (renders even when stored URL is broken): `ProductCard.fallbackImageUrl` is tried after `product.imageUrl` either is nil OR fails to load (403/404/CORS). The fallback URL itself is computed in `PriceComparisonView.heroFallbackImageUrl` as the first `priceComparison.prices[*].imageUrl` that's *different* from `product.imageUrl` — that distinct-URL guard is what rescues hotlink-blocked CDNs like `production-web-cpo.demandware.net`. Final fallback: `priceComparison.productImageUrl`.
+
+**Real-world breakage that motivated layer 3.** UPCitemdb's `images[0]` for the Makita XFD10Z is `https://production-web-cpo.demandware.net/on/demandware.static/-/Sites-cpo-master-catalog/default/product_media/mkt/mktrxfd10z-r/images/xlarge/mktrxfd10z-r.jpg`. CPO Outlets blocks third-party hotlinking — every iOS request returns HTTP 403. The product had `image_url` set, so the stream backfill skipped it, so `productImageUrl` in the `done` event was the same broken URL. Layer 3's "first prices[].imageUrl that differs from primary" handles this without backend changes — though see `thumbnail-coverage-L3`.
+
+**Wire format additions.** Both pure-additive (legacy clients/old caches still decode):
+
+- `PriceResponse.image_url: str | None` (Pydantic schema for batch endpoint + per-retailer SSE event payload). Sourced from `best_listing.image_url`.
+- `PriceComparisonResponse.product_image_url: str | None` (Pydantic schema). Mirrored on the SSE `done` event payload.
+- iOS `RetailerPrice.imageUrl: String?`, `PriceComparison.productImageUrl: String?`, `StreamSummary.productImageUrl: String?` — all `decodeIfPresent`, all default-nil.
+
+**Files touched.**
+
+Backend (+5 sites):
+- `backend/ai/web_search.py` — new `_first_image_url()` helper (deterministic pass-through, no LLM); `resolve_via_serper` returns `{"image_url": …}`. ~15 LOC.
+- `backend/modules/m1_product/upcitemdb.py` — `lookup_upc` keeps the full `images[]` array on the result dict (deduped, non-empty). Filters non-string entries. Persists into `source_raw.upcitemdb_raw.image_urls` for future iOS fallback chains. ~3 LOC.
+- `backend/modules/m1_product/service.py` — `_cross_validate(gemini_validated)` branch adds `gemini_data.get("image_url")` as a fallback when UPCitemdb has none. ~2 LOC.
+- `backend/modules/m2_prices/service.py` — `_classify_retailer_result` adds `image_url: best_listing.image_url` to `price_payload`. `get_prices` final dict + `stream_prices` cached/done events + `_check_db_prices` callers + `_check_inflight` callers all carry `product_image_url` (read AFTER the backfill loop completes). Two new in-loop assignments backfill `product.image_url` (stream + batch paths). ~14 LOC across 6 sites.
+- `backend/modules/m2_prices/schemas.py` — `PriceResponse.image_url`, `PriceComparisonResponse.product_image_url`. ~2 LOC.
+
+iOS (+5 files):
+- `Barkain/Features/Shared/Models/PriceComparison.swift` — `PriceComparison.productImageUrl`, `RetailerPrice.imageUrl`. Both decoded via `decodeIfPresent`. ~10 LOC.
+- `Barkain/Services/Networking/Streaming/RetailerStreamEvent.swift` — `StreamSummary.productImageUrl`. Custom `init(from:)` for `decodeIfPresent`. ~12 LOC.
+- `Barkain/Features/Scanner/ScannerViewModel.swift` — `apply(_ summary:)` promotes `summary.productImageUrl` onto the in-memory `priceComparison` (won't overwrite a non-nil resolve-time URL with a nil-on-legacy-cache value). ~6 LOC.
+- `Barkain/Features/Shared/Components/ProductCard.swift` — adds `fallbackImageUrl: String?` parameter, `@State primaryFailed`, `effectiveImageUrl` selector, AsyncImage `.id(raw)` to remount on URL change, `.failure` block flips `primaryFailed`. ~25 LOC.
+- `Barkain/Features/Shared/Components/PriceRow.swift` — `retailerIcon` becomes an AsyncImage on `retailerPrice.imageUrl` with the bag-icon as `.failure`/`.empty` placeholder. ~20 LOC.
+- `Barkain/Features/Recommendation/PriceComparisonView.swift` — passes `heroFallbackImageUrl` to `ProductCard`; new computed property prefers a *distinct* scraper URL over `productImageUrl` to defeat the same-URL trap (CPO/demandware case). ~14 LOC.
+
+**Test posture.** Backend 711 (unchanged — one existing assertion in `test_ai_web_search.py::test_resolve_via_serper_returns_name_and_model_on_success` was widened to include the new `image_url: None` key when the fixture has no `imageUrl`). No new tests added intentionally — this is a wire-and-render change with no new business logic; live-validated in sim against Makita XFD10Z (gemini_validated, demandware 403 → eBay fallback succeeds), Makita 18V LXT XFD10Z (gemini_upc, eBay primary works), and InfantLY Bright Kitchen Gadgets (gemini_upc, eBay primary works). Pytest + ruff clean.
+
+**Live validation (sim, iPhone 17 / iOS 26.4).**
+
+| Scenario | Outcome |
+|---|---|
+| Makita 18V LXT (`gemini_upc`, eBay `i.ebayimg.com` primary) | Hero ✓, eBay rows show drill thumbs |
+| Makita XFD10Z (`gemini_validated`, demandware 403 primary) | Hero falls back to eBay scraper image ✓ |
+| Search results "XFD10Z" | 3/5 rows show real images (Tier 1/2), 2/5 box-icon (Tier 3 Gemini-only — see L1) |
+| Recently-Sniffed (Home tab) | New entries render real images; old entries still show paw (`thumbnail-coverage-L2`) |
+
+**Decisions worth remembering.**
+
+- **Pass-through, not LLM, for Serper images.** `_first_image_url` walks `organic[:5]` and picks the first non-empty `imageUrl` field. Doing this through the synthesis prompt would risk hallucinated URLs and add tokens we're paying for. The deterministic pass-through is one regex away from being copy-pasteable into any future SERP source.
+- **Backfill is in-memory only.** SQLAlchemy's identity map carries `product.image_url = …` to the existing end-of-stream flush. No explicit UPDATE needed. If the flush fails the price stream itself fails — that's already the right behavior, no separate try/except.
+- **iOS `.id(raw)` on AsyncImage is load-bearing.** Without it, swapping `effectiveImageUrl` from primary to fallback doesn't actually fetch the new URL — SwiftUI sees the same view and reuses the cached failure state.
+- **Don't overwrite a known URL during backfill.** Tempting to add a "if existing URL is from `BAD_HOSTS` set, replace it" rule. Decided against: that's a host blocklist nobody will maintain. iOS papers over this case via the distinct-URL fallback. Long-term we can either (a) HEAD-check URLs at resolve time, (b) maintain a host blocklist, or (c) trust the scraper backfill to do the right thing once we change the condition. None of those are blocking demo.
+- **Per-retailer thumbnails are a free win.** Adapters were already extracting `image_url`; they just got dropped at `_classify_retailer_result`. One-line addition. Render side in `PriceRow` is ~20 LOC. Doesn't require any infrastructure beyond AsyncImage.
+
+**Opens.** `thumbnail-coverage-L1` (Tier 3 Gemini search rows have no image — defer until production miss-rate measured). `thumbnail-coverage-L2` (`RecentlyScannedStore` shows stale nil-URL entries until next interaction — self-heals, no action). `thumbnail-coverage-L3` (host-blocklist or HEAD-check on broken-URL backfill — defer, iOS fallback handles it).

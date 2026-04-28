@@ -146,6 +146,7 @@ class PriceResponse(BaseModel):
     original_price: float | None = None
     currency: str = "USD"
     url: str | None = None
+    image_url: str | None = None
     condition: str = "new"
     is_available: bool = True
     is_on_sale: bool = False
@@ -187,6 +188,7 @@ class PriceComparisonResponse(BaseModel):
 
     product_id: uuid.UUID
     product_name: str
+    product_image_url: str | None = None
     prices: list[PriceResponse]
     retailer_results: list[RetailerResult] = []
     total_retailers: int

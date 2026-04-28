@@ -8,6 +8,10 @@ nonisolated struct PriceComparison: Codable, Equatable, Sendable {
     // the whole struct on the parent model.
     var productId: UUID
     var productName: String
+    /// Hero thumbnail. Backend backfills this from the first scraper that
+    /// returns an image URL, so it can be nil at resolve-time but populated
+    /// by the time `done` arrives — refresh the hero when it transitions.
+    var productImageUrl: String?
     var prices: [RetailerPrice]
     var retailerResults: [RetailerResult]
     var totalRetailers: Int
@@ -17,13 +21,14 @@ nonisolated struct PriceComparison: Codable, Equatable, Sendable {
     var fetchedAt: Date
 
     private enum CodingKeys: String, CodingKey {
-        case productId, productName, prices, retailerResults
+        case productId, productName, productImageUrl, prices, retailerResults
         case totalRetailers, retailersSucceeded, retailersFailed, cached, fetchedAt
     }
 
     init(
         productId: UUID,
         productName: String,
+        productImageUrl: String? = nil,
         prices: [RetailerPrice],
         retailerResults: [RetailerResult] = [],
         totalRetailers: Int,
@@ -34,6 +39,7 @@ nonisolated struct PriceComparison: Codable, Equatable, Sendable {
     ) {
         self.productId = productId
         self.productName = productName
+        self.productImageUrl = productImageUrl
         self.prices = prices
         self.retailerResults = retailerResults
         self.totalRetailers = totalRetailers
@@ -47,6 +53,7 @@ nonisolated struct PriceComparison: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.productId = try c.decode(UUID.self, forKey: .productId)
         self.productName = try c.decode(String.self, forKey: .productName)
+        self.productImageUrl = try c.decodeIfPresent(String.self, forKey: .productImageUrl)
         self.prices = try c.decode([RetailerPrice].self, forKey: .prices)
         // retailerResults is optional for graceful upgrade — old Redis cache entries
         // written before the schema change won't have it.
@@ -90,6 +97,7 @@ nonisolated struct RetailerPrice: Codable, Identifiable, Equatable, Sendable {
     let originalPrice: Double?
     let currency: String
     let url: String?
+    let imageUrl: String?
     let condition: String
     let isAvailable: Bool
     let isOnSale: Bool
@@ -104,7 +112,7 @@ nonisolated struct RetailerPrice: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case retailerId, retailerName, price, originalPrice, currency
-        case url, condition, isAvailable, isOnSale, lastChecked
+        case url, imageUrl, condition, isAvailable, isOnSale, lastChecked
         case locationDefaultUsed
     }
 
@@ -115,6 +123,7 @@ nonisolated struct RetailerPrice: Codable, Identifiable, Equatable, Sendable {
         originalPrice: Double? = nil,
         currency: String = "USD",
         url: String? = nil,
+        imageUrl: String? = nil,
         condition: String = "new",
         isAvailable: Bool = true,
         isOnSale: Bool = false,
@@ -127,6 +136,7 @@ nonisolated struct RetailerPrice: Codable, Identifiable, Equatable, Sendable {
         self.originalPrice = originalPrice
         self.currency = currency
         self.url = url
+        self.imageUrl = imageUrl
         self.condition = condition
         self.isAvailable = isAvailable
         self.isOnSale = isOnSale
@@ -142,6 +152,7 @@ nonisolated struct RetailerPrice: Codable, Identifiable, Equatable, Sendable {
         self.originalPrice = try c.decodeIfPresent(Double.self, forKey: .originalPrice)
         self.currency = try c.decode(String.self, forKey: .currency)
         self.url = try c.decodeIfPresent(String.self, forKey: .url)
+        self.imageUrl = try c.decodeIfPresent(String.self, forKey: .imageUrl)
         self.condition = try c.decode(String.self, forKey: .condition)
         self.isAvailable = try c.decode(Bool.self, forKey: .isAvailable)
         self.isOnSale = try c.decode(Bool.self, forKey: .isOnSale)

@@ -22,7 +22,11 @@ async def test_resolve_via_serper_returns_name_and_model_on_success():
     function returns ``{"name": ..., "gemini_model": ...}`` matching the
     shape ``_get_gemini_data`` callers expect."""
     organic_payload = [
-        {"title": "Sonos Era 100 - Best Buy", "snippet": "Sonos Era 100 wireless smart speaker..."},
+        {
+            "title": "Sonos Era 100 - Best Buy",
+            "snippet": "Sonos Era 100 wireless smart speaker...",
+            "imageUrl": "https://pisces.bbystatic.com/era100.jpg",
+        },
         {"title": "Sonos Era 100 - Walmart", "snippet": "Sonos Era 100 voice-controlled..."},
     ]
 
@@ -49,7 +53,11 @@ async def test_resolve_via_serper_returns_name_and_model_on_success():
 
         result = await resolve_via_serper("878269009993")
 
-    assert result == {"name": "Sonos Era 100", "gemini_model": "E10G1US1BLK"}
+    assert result == {
+        "name": "Sonos Era 100",
+        "gemini_model": "E10G1US1BLK",
+        "image_url": "https://pisces.bbystatic.com/era100.jpg",
+    }
 
 
 # MARK: - resolve_via_serper soft-fail paths

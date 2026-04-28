@@ -57,6 +57,21 @@ struct PriceComparisonView: View {
     /// scroll-to (Pre-Fix #5). Reset on a 400 ms delay.
     @State private var highlightedRetailerId: String?
 
+    /// Image URL to try when `product.imageUrl` either is nil OR fails to
+    /// load. Picks the first scraper image_url that's *different* from the
+    /// resolve-time URL — that distinct-URL guard is what rescues products
+    /// where the primary URL is from a hotlink-blocked CDN like
+    /// `demandware.net` (UPCitemdb hands those out for some SKUs and they
+    /// return 403 to anyone without the right Referer header).
+    private var heroFallbackImageUrl: String? {
+        let prices = viewModel.priceComparison?.prices ?? []
+        let primary = product.imageUrl
+        let scraperImage = prices
+            .compactMap { $0.imageUrl }
+            .first { $0 != primary }
+        return scraperImage ?? viewModel.priceComparison?.productImageUrl
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -104,7 +119,10 @@ struct PriceComparisonView: View {
                         }
                     )
 
-                ProductCard(product: product)
+                ProductCard(
+                    product: product,
+                    fallbackImageUrl: heroFallbackImageUrl
+                )
 
                 // While streaming: the hero replaces savings + identity
                 // discounts so the focus stays on the dog working. Rows

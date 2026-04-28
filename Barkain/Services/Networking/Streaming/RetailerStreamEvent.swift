@@ -31,6 +31,10 @@ nonisolated struct RetailerResultUpdate: Decodable, Equatable, Sendable {
 nonisolated struct StreamSummary: Decodable, Equatable, Sendable {
     let productId: UUID
     let productName: String
+    /// Populated by the backend's price-stream backfill. Null when the stream
+    /// found no listings carrying an image URL — fall back to whatever
+    /// `Product.image_url` was at resolve-time (which may also be nil).
+    let productImageUrl: String?
     let totalRetailers: Int
     let retailersSucceeded: Int
     let retailersFailed: Int
@@ -38,8 +42,20 @@ nonisolated struct StreamSummary: Decodable, Equatable, Sendable {
     let fetchedAt: Date
 
     private enum CodingKeys: String, CodingKey {
-        case productId, productName, totalRetailers, retailersSucceeded
+        case productId, productName, productImageUrl, totalRetailers, retailersSucceeded
         case retailersFailed, cached, fetchedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.productId = try c.decode(UUID.self, forKey: .productId)
+        self.productName = try c.decode(String.self, forKey: .productName)
+        self.productImageUrl = try c.decodeIfPresent(String.self, forKey: .productImageUrl)
+        self.totalRetailers = try c.decode(Int.self, forKey: .totalRetailers)
+        self.retailersSucceeded = try c.decode(Int.self, forKey: .retailersSucceeded)
+        self.retailersFailed = try c.decode(Int.self, forKey: .retailersFailed)
+        self.cached = try c.decode(Bool.self, forKey: .cached)
+        self.fetchedAt = try c.decode(Date.self, forKey: .fetchedAt)
     }
 }
 
