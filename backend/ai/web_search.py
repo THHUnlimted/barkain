@@ -129,6 +129,21 @@ async def _serper_fetch(upc: str) -> list[dict] | None:
     return organic
 
 
+def _first_image_url(organic: list[dict], *, top: int = SERPER_TOP_N_FOR_PROMPT) -> str | None:
+    """Pick the first non-empty ``imageUrl`` from the top-N organic results.
+
+    Deterministic — does not go through the LLM, so there's no hallucination
+    risk. Serper's organic items sometimes carry an ``imageUrl`` extracted
+    from the page's preview/og:image; when present it's a direct CDN URL
+    (manufacturer or retailer), not a Google image-search redirect.
+    """
+    for hit in organic[:top]:
+        url = hit.get("imageUrl")
+        if isinstance(url, str) and url.startswith(("http://", "https://")):
+            return url
+    return None
+
+
 def _format_snippets(organic: list[dict], *, top: int = SERPER_TOP_N_FOR_PROMPT) -> str:
     """Render the top-N organic results as a compact text block for the
     synthesis prompt. Title + snippet only — link is dropped to keep the
@@ -200,4 +215,5 @@ async def resolve_via_serper(upc: str) -> dict | None:
     return {
         "name": device_name,
         "gemini_model": parsed.get("model"),
+        "image_url": _first_image_url(organic),
     }

@@ -744,6 +744,7 @@ class PriceAggregationService:
                 fb_radius_miles=fb_radius_miles,
             )
             if inflight is not None:
+                inflight.setdefault("product_image_url", product.image_url)
                 logger.info(
                     "Price cache hit (inflight, %d succeeded) for product %s",
                     inflight["retailers_succeeded"],
@@ -759,6 +760,7 @@ class PriceAggregationService:
         if not force_refresh and not query_override:
             db_result = await self._check_db_prices(product_id, product.name)
             if db_result is not None:
+                db_result.setdefault("product_image_url", product.image_url)
                 logger.info("Price cache hit (DB) for product %s", product_id)
                 await self._cache_to_redis(
                     product_id,
@@ -808,6 +810,14 @@ class PriceAggregationService:
             if result["status"] == "success":
                 succeeded += 1
                 await self._upsert_price(product_id, retailer_id, best_listing, now)
+                # Mirrors stream_prices' hero-thumbnail backfill — see
+                # comment there. Idempotent across iterations.
+                if product.image_url is None and best_listing.image_url:
+                    product.image_url = best_listing.image_url
+                    logger.info(
+                        "Backfilled Product.image_url for %s from %s",
+                        product_id, retailer_id,
+                    )
                 # Append all listings to price_history (unique timestamp per record)
                 for listing in response.listings:
                     history_time = now + timedelta(microseconds=history_offset)
@@ -835,6 +845,7 @@ class PriceAggregationService:
         result = {
             "product_id": str(product_id),
             "product_name": product.name,
+            "product_image_url": product.image_url,
             "prices": prices_data,
             "retailer_results": retailer_results,
             "total_retailers": len(responses),
@@ -912,6 +923,7 @@ class PriceAggregationService:
                 # would serve stale or wrong data. Safer to dispatch fresh.
                 cached = await self._check_db_prices(product_id, product.name)
                 if cached is not None:
+                    cached.setdefault("product_image_url", product.image_url)
                     await self._cache_to_redis(
                         product_id,
                         cached,
@@ -942,6 +954,9 @@ class PriceAggregationService:
                     {
                         "product_id": str(product_id),
                         "product_name": cached.get("product_name", product.name),
+                        # Falls back to live `product.image_url` when the
+                        # cached payload predates this field (legacy keys).
+                        "product_image_url": cached.get("product_image_url", product.image_url),
                         "total_retailers": cached.get("total_retailers", 0),
                         "retailers_succeeded": cached.get("retailers_succeeded", 0),
                         "retailers_failed": cached.get("retailers_failed", 0),
@@ -1004,6 +1019,22 @@ class PriceAggregationService:
                     await self._upsert_price(
                         product_id, retailer_id, best_listing, now
                     )
+                    # Hero-thumbnail backfill: when M1 resolved the product
+                    # via a name-only AI path (Serper/Gemini without an image
+                    # in the response, UPCitemdb miss) Product.image_url is
+                    # NULL even though scrapers carry image URLs per row.
+                    # First scraper to produce one wins; the assignment is
+                    # idempotent because subsequent iterations see image_url
+                    # truthy and short-circuit. Soft-fails: if image_url is
+                    # an oversized blob, the flush at end-of-stream will
+                    # raise — we'd rather crash visibly than silently store
+                    # garbage, so no try/except here.
+                    if product.image_url is None and best_listing.image_url:
+                        product.image_url = best_listing.image_url
+                        logger.info(
+                            "Backfilled Product.image_url for %s from %s",
+                            product_id, retailer_id,
+                        )
                     for listing in response.listings:
                         history_time = now + timedelta(microseconds=history_offset)
                         history_offset += 1
@@ -1056,6 +1087,7 @@ class PriceAggregationService:
         final = {
             "product_id": str(product_id),
             "product_name": product.name,
+            "product_image_url": product.image_url,
             "prices": prices_data,
             "retailer_results": retailer_results,
             "total_retailers": len(ids),
@@ -1092,6 +1124,7 @@ class PriceAggregationService:
             {
                 "product_id": str(product_id),
                 "product_name": product.name,
+                "product_image_url": product.image_url,
                 "total_retailers": len(ids),
                 "retailers_succeeded": succeeded,
                 "retailers_failed": failed,
@@ -1390,6 +1423,7 @@ class PriceAggregationService:
             "original_price": best_listing.original_price,
             "currency": best_listing.currency or "USD",
             "url": best_listing.url or None,
+            "image_url": best_listing.image_url,
             "condition": best_listing.condition or "new",
             "is_available": (
                 best_listing.is_available

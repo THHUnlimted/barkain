@@ -441,6 +441,12 @@ final class ScannerViewModel {
         comparison.retailersFailed = summary.retailersFailed
         comparison.cached = summary.cached
         comparison.fetchedAt = summary.fetchedAt
+        // Backend backfilled Product.image_url mid-stream; surface it on the
+        // hero. Won't overwrite a non-nil resolve-time URL with nil from a
+        // legacy cache entry.
+        if let backfilled = summary.productImageUrl, !backfilled.isEmpty {
+            comparison.productImageUrl = backfilled
+        }
         priceComparison = comparison
     }
 

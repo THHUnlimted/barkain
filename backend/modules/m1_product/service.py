@@ -653,7 +653,9 @@ class ProductResolutionService:
             gemini_name = gemini_data.get("name", "")
 
             if upcitemdb_brand and upcitemdb_brand.lower() in gemini_name.lower():
-                # Brands agree — trust Gemini name, enrich with UPCitemdb fields
+                # Brands agree — trust Gemini name, enrich with UPCitemdb fields.
+                # Prefer UPCitemdb image (consistently a manufacturer CDN), but
+                # fall back to whatever Serper extracted when UPCitemdb has none.
                 return (
                     {
                         "name": gemini_name,
@@ -661,7 +663,10 @@ class ProductResolutionService:
                         "brand": upcitemdb_data.get("brand"),
                         "category": upcitemdb_data.get("category"),
                         "description": upcitemdb_data.get("description"),
-                        "image_url": upcitemdb_data.get("image_url"),
+                        "image_url": (
+                            upcitemdb_data.get("image_url")
+                            or gemini_data.get("image_url")
+                        ),
                         "asin": upcitemdb_data.get("asin"),
                     },
                     1.0,

@@ -7,6 +7,18 @@ struct ProductCard: View {
     // MARK: - Properties
 
     let product: Product
+    /// Tried after `product.imageUrl` either is nil OR fails to load. The
+    /// fallback is typically the price-stream backfill URL
+    /// (`PriceComparison.productImageUrl`), which originates from a
+    /// scraper hit and is more permissive than third-party CDNs like
+    /// `demandware.net` that UPCitemdb sometimes hands us — those return
+    /// HTTP 403 to anyone without a hotlink-allowed referrer, so the
+    /// primary URL silently fails on-device.
+    var fallbackImageUrl: String?
+
+    // Tracks whether the primary URL failed so we can promote the
+    // fallback in-place without remounting.
+    @State private var primaryFailed: Bool = false
 
     // MARK: - Body
 
@@ -32,7 +44,7 @@ struct ProductCard: View {
 
     private var productImage: some View {
         Group {
-            if let imageUrl = product.imageUrl, let url = URL(string: imageUrl) {
+            if let raw = effectiveImageUrl, let url = URL(string: raw) {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
@@ -41,6 +53,15 @@ struct ProductCard: View {
                             .aspectRatio(contentMode: .fill)
                     case .failure:
                         imagePlaceholder
+                            .onAppear {
+                                // Primary URL was non-nil but unreachable
+                                // (403/404/CORS) — promote fallback if any.
+                                if !primaryFailed,
+                                   product.imageUrl != nil,
+                                   fallbackImageUrl != nil {
+                                    primaryFailed = true
+                                }
+                            }
                     case .empty:
                         ProgressView()
                             .tint(.barkainPrimary)
@@ -48,6 +69,9 @@ struct ProductCard: View {
                         imagePlaceholder
                     }
                 }
+                // Re-mount AsyncImage when we swap to the fallback so
+                // the new URL is fetched.
+                .id(raw)
             } else {
                 imagePlaceholder
             }
@@ -55,6 +79,11 @@ struct ProductCard: View {
         .frame(width: 88, height: 88)
         .background(Color.barkainSurfaceContainerLow)
         .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadiusSmall, style: .continuous))
+    }
+
+    private var effectiveImageUrl: String? {
+        if primaryFailed { return fallbackImageUrl }
+        return product.imageUrl ?? fallbackImageUrl
     }
 
     private var imagePlaceholder: some View {

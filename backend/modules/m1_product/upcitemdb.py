@@ -52,7 +52,7 @@ async def lookup_upc(upc: str) -> dict[str, Any] | None:
             return None
 
         item = items[0]
-        images = item.get("images", [])
+        images = [u for u in (item.get("images") or []) if isinstance(u, str) and u]
 
         return {
             "name": item.get("title", ""),
@@ -61,6 +61,9 @@ async def lookup_upc(upc: str) -> dict[str, Any] | None:
             "description": item.get("description", ""),
             "asin": item.get("asin"),
             "image_url": images[0] if images else None,
+            # Full list (deduped, non-empty) so callers can fall back when
+            # images[0] 404s. Persisted into source_raw, not Product.image_url.
+            "image_urls": images,
             "model": (item.get("model") or "").strip() or None,
         }
     except httpx.HTTPStatusError as e:
