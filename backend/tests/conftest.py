@@ -146,6 +146,32 @@ def _serper_synthesis_disabled(monkeypatch):
     yield
 
 
+# MARK: - Serper Shopping bypass (Step 3n / M14 misc-retailer)
+
+@pytest.fixture(autouse=True)
+def _serper_shopping_disabled(monkeypatch):
+    """Force ``_serper_shopping_fetch`` → None for every test by default.
+
+    Mirrors `_serper_synthesis_disabled` for the misc-retailer slot. The
+    SerperShoppingAdapter calls `ai.web_search._serper_shopping_fetch`
+    directly; we patch at the adapter import site so tests that exercise
+    the adapter directly can override this.
+
+    Tests that want real Serper Shopping coverage should monkeypatch
+    `modules.m14_misc_retailer.adapters.serper_shopping._serper_shopping_fetch`
+    themselves; this autouse fixture short-circuits the path so missing
+    SERPER_API_KEY in CI doesn't spam warning logs and a hot .env doesn't
+    leak real network calls into the test suite.
+    """
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(
+        "modules.m14_misc_retailer.adapters.serper_shopping._serper_shopping_fetch",
+        AsyncMock(return_value=None),
+    )
+    yield
+
+
 # MARK: - Demo mode toggle (Step 3f Pre-Fix #4)
 
 @pytest.fixture

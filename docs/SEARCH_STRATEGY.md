@@ -285,6 +285,16 @@ B's failures included confidently wrong "Damerin furniture" 5/5 on DeWalt, "Zint
 
 **`SERPER_API_KEY` empty default = back-compat skip**: when not set in production env, `resolve_via_serper` short-circuits to None on the first line and the request runs grounded-only as it did pre-vendor-migrate-1. Rollback safety. Closes `bench-cat-2` in spirit (the Mike-verified catalog gave us the answer; broader-category bench would refine but not change the migration call). Opens `vendor-migrate-1-L1` LOW (production monitoring): watch the `Serper synthesis returned null device_name for UPC %s` log frequency in `barkain.ai.web_search` — if >15% of cold-path resolves hit grounded fallback, options are multi-query Serper, top-N expansion, or alternate SERP source.
 
+### Step 3n — Serper Shopping for the M14 misc-retailer slot
+
+`backend/ai/web_search.py` now hosts a second Serper code path: `_serper_shopping_fetch(query)` POSTs `google.serper.dev/shopping`, strips `imageUrl` from each item server-side, and soft-fails to None on missing key / non-200 / network error / malformed JSON. Same `SERPER_API_KEY` env var as `resolve_via_serper`; same warn-once posture (a separate `_SERPER_SHOPPING_KEY_WARNED` flag so a missing key doesn't double-warn).
+
+The helper is consumed by `backend/modules/m14_misc_retailer/` as the primary adapter for the misc-retailer slot — the 10th data source covering retailers Barkain doesn't directly scrape (Chewy, Petco, Petflow, Tractor Supply, niche specialty stores). `KNOWN_RETAILER_DOMAINS` filter drops the 9 already-scraped retailers + their `*_direct` mirrors before rows reach the Redis cache or iOS. Cap top-3 by position. Inflight TTL 30 s, NOT 120 s — sized for Serper's 1.4–2.5 s p50 single-call API, not the 9-scraper SSE fan-out.
+
+**Vendor concentration risk**: Serper now serves both UPC resolution (`vendor-migrate-1`) and the misc-retailer slot (Step 3n). A Serper outage degrades both legs simultaneously. The structural hedge is the Z-standby adapter stub (`google_shopping_container`) — DIY Chrome container that the v2 misc-retailer investigation proved feasible against Decodo. Build trigger is bench-driven: `make bench-misc-retailer` weekly; `panel_below_alert` (<75 % SKU pass × 2 consecutive runs) emits a Slack/email alert for Mike to approve the Z-build kickoff. The trigger is the bench, not a separate decision.
+
+**`web_search.py` is now a multi-path Serper file** (~316 LOC post-3n): `_serper_fetch` (UPC `/search`) + `resolve_via_serper` (orchestrator that combines `_serper_fetch` + Gemini synthesis) + `_first_image_url` (image extraction added in `feat/thumbnail-coverage`) + `_serper_shopping_fetch` (`/shopping`). **Splitting trigger**: if the file grows past ~300 LOC AND a fifth Serper code path is added, split into `serper_resolve.py` + `serper_shopping.py` + a shared `serper_client.py` for the httpx posture. Today (~316 LOC, 4 paths) the single file is fine — the split would just churn the test imports.
+
 ---
 
 ```

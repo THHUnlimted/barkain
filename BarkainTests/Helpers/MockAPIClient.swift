@@ -122,6 +122,13 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
     /// settle flags have flipped.
     var fetchRecommendationDelay: TimeInterval = 0
 
+    // MARK: - Misc retailer slot (Step 3n)
+
+    var getMiscRetailersResult: Result<[MiscMerchantRow], APIError> = .success([])
+    var getMiscRetailersCallCount = 0
+    var getMiscRetailersLastProductId: UUID?
+    var getMiscRetailersLastQuery: String?
+
     // MARK: - Delay simulation
 
     var resolveProductDelay: TimeInterval = 0
@@ -309,6 +316,15 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
             try? await Task.sleep(for: .seconds(fetchRecommendationDelay))
         }
         return try fetchRecommendationResult.get()
+    }
+
+    // MARK: - Misc retailer slot (Step 3n)
+
+    func getMiscRetailers(productId: UUID, query: String?) async throws -> [MiscMerchantRow] {
+        getMiscRetailersCallCount += 1
+        getMiscRetailersLastProductId = productId
+        getMiscRetailersLastQuery = query
+        return try getMiscRetailersResult.get()
     }
 
     var streamPricesLastQueryOverride: String?

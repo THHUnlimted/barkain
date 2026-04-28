@@ -50,8 +50,11 @@ from app.config import settings
 logger = logging.getLogger("barkain.ai.web_search")
 
 SERPER_URL = "https://google.serper.dev/search"
+SERPER_SHOPPING_URL = "https://google.serper.dev/shopping"
 SERPER_TIMEOUT_SEC = 10.0
+SERPER_SHOPPING_TIMEOUT_SEC = 10.0
 SERPER_NUM_RESULTS = 10
+SERPER_SHOPPING_NUM_RESULTS = 20  # Hint to Google; actual returned count varies 19–40 (3n bench-validated 2026-04-27).
 SERPER_TOP_N_FOR_PROMPT = 5
 SYNTHESIS_MAX_TOKENS = 1024
 SYNTHESIS_THINKING_BUDGET = 0
@@ -217,3 +220,99 @@ async def resolve_via_serper(upc: str) -> dict | None:
         "gemini_model": parsed.get("model"),
         "image_url": _first_image_url(organic),
     }
+
+
+# 3n: M14 misc-retailer slot. Serper Shopping (`/shopping`) is a separate code
+# path from the `/search` UPC-resolve helpers above. Mirrors `_serper_fetch`'s
+# posture (httpx async, soft-fail to None, warn-once on missing key) but does
+# NOT feed Gemini synthesis — the response is structured enough to consume
+# directly. `imageUrl` thumbnails are stripped server-side both to shrink the
+# Redis payload (~800 KB → ~18 KB observed in v3 bench) and to sidestep the
+# SerpApi-DMCA copyrighted-image angle.
+_SERPER_SHOPPING_KEY_WARNED = False
+
+
+async def _serper_shopping_fetch(
+    query: str,
+    *,
+    gl: str = "us",
+    hl: str = "en",
+) -> list[dict] | None:
+    """POST ``google.serper.dev/shopping``. Returns a list of items with
+    ``imageUrl`` stripped, or None on failure.
+
+    Each returned item carries: title, source, link, price, rating,
+    ratingCount, productId, position. The caller is responsible for
+    normalization, filtering against ``KNOWN_RETAILER_DOMAINS``, and
+    capping. Soft-fails (logs + returns None) on missing
+    ``SERPER_API_KEY``, 4xx/5xx, network error, or malformed JSON.
+
+    No retries — the caller decides whether to fall back.
+    """
+    api_key = settings.SERPER_API_KEY
+    if not api_key:
+        global _SERPER_SHOPPING_KEY_WARNED
+        if not _SERPER_SHOPPING_KEY_WARNED:
+            logger.warning(
+                "SERPER_API_KEY not configured — Serper Shopping disabled"
+            )
+            _SERPER_SHOPPING_KEY_WARNED = True
+        return None
+
+    body = {
+        "q": query,
+        "gl": gl,
+        "hl": hl,
+        "num": SERPER_SHOPPING_NUM_RESULTS,
+    }
+    headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
+    t0 = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=SERPER_SHOPPING_TIMEOUT_SEC) as client:
+            resp = await client.post(SERPER_SHOPPING_URL, json=body, headers=headers)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+    except (httpx.HTTPError, httpx.TimeoutException) as exc:
+        logger.warning(
+            "Serper Shopping fetch failed for query %r: %s: %r",
+            query, type(exc).__name__, exc,
+        )
+        return None
+
+    if resp.status_code != 200:
+        logger.warning(
+            "Serper Shopping non-200 for query %r: status=%s elapsed=%.0fms",
+            query, resp.status_code, elapsed_ms,
+        )
+        return None
+
+    try:
+        data = resp.json()
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("Serper Shopping JSON parse failed for query %r: %r", query, exc)
+        return None
+
+    shopping = data.get("shopping")
+    if shopping is None:
+        logger.info(
+            "Serper Shopping query %r: no 'shopping' field elapsed=%.0fms",
+            query, elapsed_ms,
+        )
+        return []
+    if not isinstance(shopping, list):
+        logger.warning(
+            "Serper Shopping query %r: unexpected 'shopping' type %s",
+            query, type(shopping).__name__,
+        )
+        return None
+
+    stripped: list[dict] = []
+    for item in shopping:
+        if not isinstance(item, dict):
+            continue
+        cleaned = {k: v for k, v in item.items() if k != "imageUrl"}
+        stripped.append(cleaned)
+    logger.info(
+        "Serper Shopping query %r: items=%d elapsed=%.0fms",
+        query, len(stripped), elapsed_ms,
+    )
+    return stripped

@@ -192,6 +192,15 @@ struct PriceComparisonView: View {
                 retailerList
 
                 if !viewModel.isPriceLoading {
+                    // 3n: misc-retailer slot. Self-contained — fetches its own
+                    // data when `featureGate.isMiscRetailerEnabled`. Hidden
+                    // when flag OFF or zero rows after server-side filter.
+                    MiscRetailerCard(
+                        productId: product.id,
+                        queryOverride: nil,
+                        browserURL: $browserURL
+                    )
+                    .transition(.opacity)
                     addCardsCTA
                         .transition(.opacity)
                     statusBar

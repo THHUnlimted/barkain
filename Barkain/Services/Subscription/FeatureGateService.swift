@@ -68,6 +68,17 @@ final class FeatureGateService {
     /// gesture or remote config when ready.
     static let optimisticSearchTapKey = "experiment.optimisticSearchTap"
 
+    /// 3n: M14 misc-retailer slot. When ON, `PriceComparisonView` queries
+    /// `/api/v1/misc/{product_id}` and renders a `MiscRetailerCard` with
+    /// up to 3 merchants Barkain doesn't directly scrape (Chewy, Petco,
+    /// Petflow, Tractor Supply, niche specialty stores). Default OFF on
+    /// launch — flip via canary rollout (5 % → 50 % → 100 %) once the
+    /// 50-SKU pet-vertical bench passes ≥80 %. Backend gate
+    /// `MISC_RETAILER_ADAPTER` must also be set to `serper_shopping`
+    /// for rows to actually appear; this iOS flag controls visibility
+    /// independently so we can dark-launch the backend.
+    static let miscRetailerEnabledKey = "experiment.miscRetailerEnabled"
+
     // MARK: - Observable state
 
     private(set) var dailyScanCount: Int = 0
@@ -113,6 +124,11 @@ final class FeatureGateService {
     /// PR-2 default-OFF: see `optimisticSearchTapKey` documentation.
     var isOptimisticSearchTapEnabled: Bool {
         defaults.bool(forKey: Self.optimisticSearchTapKey)
+    }
+
+    /// 3n default-OFF: see `miscRetailerEnabledKey` documentation.
+    var isMiscRetailerEnabled: Bool {
+        defaults.bool(forKey: Self.miscRetailerEnabledKey)
     }
 
     // MARK: - Feature access

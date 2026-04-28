@@ -198,5 +198,16 @@ class Settings(BaseSettings):
     RESEND_ALERT_FROM: str = ""
     RESEND_ALERT_TO: str = ""
 
+    # M14 misc-retailer slot (Step 3n). Adapter swap mirrors WALMART_ADAPTER:
+    #   "disabled"                 — default at launch; service returns []
+    #   "serper_shopping"          — primary; calls Serper /shopping API
+    #   "google_shopping_container"— Z-standby stub (raises NotImplementedError)
+    #   "decodo_serp_api"          — X-fallback stub
+    #   "oxylabs_serp_api"         — X-fallback stub
+    #   "brightdata_serp_api"      — X-fallback stub
+    # Stays "disabled" until the 50-SKU pet-vertical bench passes (≥80%
+    # of SKUs return ≥3 misc retailers); flag-flip happens post-merge.
+    MISC_RETAILER_ADAPTER: str = "disabled"
+
 
 settings = Settings()

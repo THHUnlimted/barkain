@@ -71,6 +71,11 @@ protocol APIClientProtocol: Sendable {
         forceRefresh: Bool,
         userMemberships: [String: Bool]?
     ) async throws -> RecommendationFetchOutcome
+    // Step 3n — M14 misc-retailer slot. Returns up to 3 `MiscMerchantRow`
+    // entries for retailers Barkain doesn't directly scrape (Chewy, Petco,
+    // Petflow, …). Server-side capped + filtered. Soft-fails to [] when
+    // `MISC_RETAILER_ADAPTER=disabled` on the backend.
+    func getMiscRetailers(productId: UUID, query: String?) async throws -> [MiscMerchantRow]
 }
 
 // Default `activationSkipped=false` for callers that don't care about the
@@ -375,6 +380,20 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
             }
             throw apiError
         }
+    }
+
+    // MARK: - Misc retailer slot (Step 3n)
+
+    /// Returns up to 3 misc-retailer rows. Soft-fails to `[]` if the
+    /// backend has `MISC_RETAILER_ADAPTER=disabled` (default at launch)
+    /// or the Serper call returns no rows after `KNOWN_RETAILER_DOMAINS`
+    /// filtering. Errors propagate so the caller can decide whether to
+    /// surface them (typical UX is to swallow and render zero rows).
+    func getMiscRetailers(
+        productId: UUID,
+        query: String? = nil
+    ) async throws -> [MiscMerchantRow] {
+        try await request(endpoint: .getMiscRetailers(productId: productId, query: query))
     }
 
     // MARK: - Streaming (Step 2c)
