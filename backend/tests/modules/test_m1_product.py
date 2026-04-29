@@ -844,3 +844,135 @@ async def test_resolve_falls_back_to_grounded_when_serper_raises(
 
     assert response.status_code == 200
     mock_grounded.assert_called_once()
+
+
+# MARK: - thumbnail-coverage-L3 known-bad image host blocklist
+
+
+def test_filter_known_bad_image_url_drops_demandware_subdomains():
+    """Apex demandware host + subdomains both drop. Suffix match means
+    `images.salsify.com.demandware.net` also returns None, since the
+    blocklist is keyed on whether the URL ultimately routes through
+    a hotlink-blocked CDN. Returning None forces the persist path to
+    write `image_url=NULL`, which keeps the scraper-backfill eligible
+    AND lets the iOS fallback chain take over.
+    """
+    from modules.m1_product.service import _filter_known_bad_image_url
+
+    assert _filter_known_bad_image_url(
+        "https://images.salsify.com.demandware.net/image/upload/foo.png"
+    ) is None
+    assert _filter_known_bad_image_url(
+        "https://demandware.net/img.jpg"
+    ) is None
+    # Apex with port should still drop.
+    assert _filter_known_bad_image_url(
+        "https://demandware.net:443/img.jpg"
+    ) is None
+
+
+def test_filter_known_bad_image_url_passes_through_safe_urls():
+    """Anything outside the blocklist returns unchanged, including
+    falsy inputs (None / empty string) which the persist path treats
+    as "no image"."""
+    from modules.m1_product.service import _filter_known_bad_image_url
+
+    assert _filter_known_bad_image_url(None) is None
+    assert _filter_known_bad_image_url("") == ""
+    assert (
+        _filter_known_bad_image_url("https://m.media-amazon.com/images/I/abc.jpg")
+        == "https://m.media-amazon.com/images/I/abc.jpg"
+    )
+    # Substring of "demandware" that isn't the host doesn't match — the
+    # filter compares parsed netloc, not the full URL string.
+    assert (
+        _filter_known_bad_image_url("https://example.com/path/demandware.png")
+        == "https://example.com/path/demandware.png"
+    )
+
+
+def test_filter_known_bad_image_url_returns_input_on_parse_error():
+    """A malformed URL that crashes urlparse falls back to the input
+    unchanged — telemetry must never sabotage the persist path on a
+    typo in upstream data.
+    """
+    from modules.m1_product.service import _filter_known_bad_image_url
+
+    # urlparse is forgiving — most "bad" strings parse to empty hostname
+    # and pass through. Verify the empty-hostname path returns input.
+    assert _filter_known_bad_image_url("not a url") == "not a url"
+
+
+@pytest.mark.asyncio
+async def test_persist_product_drops_demandware_image_url_at_persist_time(
+    client, db_session, fake_redis
+):
+    """End-to-end: when both upstreams hand back a demandware image URL,
+    the persisted Product row has `image_url=NULL`. Pre-fix: that URL was
+    cached in PG forever and iOS's `fallbackImageUrl` chain papered over
+    the 403, but the row stayed poisoned across re-resolves.
+    """
+    serper_result = {
+        "name": "Acme Demandware Test Product",
+        "gemini_model": None,
+        "image_url": "https://images.salsify.com.demandware.net/test.jpg",
+    }
+    with (
+        patch(
+            "modules.m1_product.service.resolve_via_serper",
+            new_callable=AsyncMock,
+            return_value=serper_result,
+        ),
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": VALID_UPC})
+
+    assert response.status_code == 200
+    body = response.json()
+    # The user-facing field must be the persisted (filtered) value, not
+    # the upstream URL.
+    assert body.get("image_url") in (None, "")
+
+
+@pytest.mark.asyncio
+async def test_persist_product_keeps_safe_image_url(
+    client, db_session, fake_redis
+):
+    """Sanity counter-test: a non-blocklisted image URL is persisted
+    verbatim. Without this check we'd never notice if the filter
+    accidentally dropped *all* image URLs.
+    """
+    serper_result = {
+        "name": "Acme Safe-Image Test Product",
+        "gemini_model": None,
+        "image_url": "https://m.media-amazon.com/images/I/keep-me.jpg",
+    }
+    with (
+        patch(
+            "modules.m1_product.service.resolve_via_serper",
+            new_callable=AsyncMock,
+            return_value=serper_result,
+        ),
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(RESOLVE_URL, json={"upc": VALID_UPC})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["image_url"] == "https://m.media-amazon.com/images/I/keep-me.jpg"

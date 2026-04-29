@@ -43,11 +43,54 @@ import re
 import time
 
 import httpx
+import redis.asyncio as aioredis
 
 from ai.abstraction import gemini_generate
 from app.config import settings
 
 logger = logging.getLogger("barkain.ai.web_search")
+
+# vendor-migrate-1-L1: outcome counters for the Serper resolve leg. Each
+# tap on `/products/resolve` increments exactly one bucket so ops can
+# answer "what % of resolves fall back to grounded?" with `HGETALL` in
+# under a second instead of grepping uvicorn logs. Buckets:
+#   - success           : Serper + synthesis both succeeded; iOS hit hot path
+#   - synthesis_null    : Serper returned snippets but Gemini synthesis
+#                         returned null device_name (snippets weren't
+#                         informative enough — usually obscure SKU)
+#   - serper_miss       : Serper returned zero organic results
+#   - synthesis_error   : Gemini synthesis call raised (network / quota)
+# Caller (`m1_product/service.py`) soft-falls to grounded Gemini for
+# every non-`success` outcome, so `(synthesis_null + serper_miss +
+# synthesis_error) / total` = the cold-path-fallback ratio.
+_SERPER_OUTCOME_KEY = "metrics:serper_resolve:outcomes"
+
+
+async def _record_serper_outcome(outcome: str) -> None:
+    """HINCRBY one outcome bucket on the shared Redis. Soft-fails on any
+    error — telemetry must never block the resolve hot path. Each call
+    creates and tears down its own client; Redis connection overhead is
+    in the same order as the metric write so a long-lived connection
+    isn't worth the lifecycle complexity for now.
+    """
+    try:
+        client = aioredis.from_url(settings.REDIS_URL)
+    except Exception:  # malformed URL, etc.
+        return
+    try:
+        await client.hincrby(_SERPER_OUTCOME_KEY, outcome, 1)
+    except Exception:
+        # Connection refused, timeout, anything — don't touch the
+        # request path. The log line below is enough to diagnose.
+        logger.debug(
+            "serper outcome counter write failed (outcome=%s)",
+            outcome, exc_info=True,
+        )
+    finally:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
 
 SERPER_URL = "https://google.serper.dev/search"
 SERPER_SHOPPING_URL = "https://google.serper.dev/shopping"
@@ -190,6 +233,7 @@ async def resolve_via_serper(upc: str) -> dict | None:
     """
     organic = await _serper_fetch(upc)
     if not organic:
+        await _record_serper_outcome("serper_miss")
         return None
 
     snippets = _format_snippets(organic)
@@ -207,14 +251,17 @@ async def resolve_via_serper(upc: str) -> dict | None:
             "Gemini synthesis call failed for UPC %s",
             upc, exc_info=True,
         )
+        await _record_serper_outcome("synthesis_error")
         return None
 
     parsed = _parse_synthesis_json(raw)
     device_name = parsed.get("device_name")
     if not device_name:
         logger.info("Serper synthesis returned null device_name for UPC %s", upc)
+        await _record_serper_outcome("synthesis_null")
         return None
 
+    await _record_serper_outcome("success")
     return {
         "name": device_name,
         "gemini_model": parsed.get("model"),
