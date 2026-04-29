@@ -194,6 +194,18 @@ final class SearchViewModel {
     /// Direct (non-debounced) entry point — used by suggestion taps and
     /// manual submits. Sets `isLoading` for the duration of the API call.
     func performSearch(_ text: String, forceGemini: Bool = false) async {
+        // 3o-C-rustoleum-ux-L1: dismiss any prior PriceComparisonView on a
+        // fresh submit. Without this, a user who navigates to a product
+        // (e.g. via a recent-search → resolves to product X) and then
+        // searches for an unrelated query Y sees Y's results layered behind
+        // X's still-presented comparison view, creating "I searched X but
+        // got Y" misattribution. The dismiss-on-real-edit hook in
+        // `onQueryChange` only fires on text-change events; explicit submit
+        // paths (Return key, suggestion-row tap, deep-search) flow through
+        // here, which is where the dismiss must happen.
+        if presentedProductViewModel != nil {
+            presentedProductViewModel = nil
+        }
         isLoading = true
         defer { isLoading = false }
         do {

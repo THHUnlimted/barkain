@@ -1145,6 +1145,18 @@ class ProductSearchService:
             except (TypeError, ValueError):
                 confidence = 0.0
 
+            # 3o-C-L1: Tier 3 Gemini rows ship a fabricated `primary_upc`
+            # (Gemini imagines a 12-digit string that often shares only the
+            # brand prefix with real catalog UPCs — see e.g. Rust-Oleum
+            # Painter's Touch row whose primary_upc=020066249091 is an
+            # invented suffix on the real `020066` Rust-Oleum prefix).
+            # Returning that UPC to iOS makes `SearchViewModel` call
+            # `/products/resolve` on it, which falls into grounded-Gemini
+            # under no UPCitemdb cross-val and hallucinates an unrelated
+            # product (rustoleum tap → Tide Pods Laundry Detergent).
+            # Stripping it forces iOS into `/resolve-from-search` by name,
+            # which is gated by the `LOW_CONFIDENCE_THRESHOLD=0.70`
+            # confirmation flow.
             merged.append(
                 ProductSearchResult(
                     device_name=name,
@@ -1152,7 +1164,7 @@ class ProductSearchService:
                     brand=brand,
                     category=row.get("category"),
                     confidence=confidence,
-                    primary_upc=row.get("primary_upc"),
+                    primary_upc=None,
                     source="gemini",
                     product_id=None,
                     image_url=None,

@@ -53,9 +53,15 @@ actor AutocompleteService: AutocompleteServiceProtocol {
     func suggestions(for prefix: String, limit: Int) async -> [String] {
         await ensureLoaded()
         guard loaded, limit > 0 else { return [] }
+        // 3o-C-rustoleum-ux-L2: strip hyphens so canonical brand spellings
+        // like "rustoleum" match vocab entries stored as "Rust-oleum-...".
+        // Symmetric — same normalization on both sides keeps the binary
+        // search invariant; "rust-oleum" typed with the hyphen still
+        // matches because both sides reduce to "rustoleum".
         let needle = prefix
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+            .replacingOccurrences(of: "-", with: "")
         guard !needle.isEmpty else { return [] }
 
         let startIndex = lowerBound(forPrefix: needle)
@@ -63,7 +69,7 @@ actor AutocompleteService: AutocompleteServiceProtocol {
 
         var matches: [Entry] = []
         var index = startIndex
-        while index < entries.count, entries[index].termLower.hasPrefix(needle) {
+        while index < entries.count, entries[index].termSearchKey.hasPrefix(needle) {
             matches.append(entries[index])
             index += 1
         }
@@ -106,8 +112,20 @@ actor AutocompleteService: AutocompleteServiceProtocol {
             let data = try Data(contentsOf: url)
             let payload = try JSONDecoder().decode(Payload.self, from: data)
             self.entries = payload.terms
-                .map { Entry(term: $0.t, termLower: $0.t.lowercased(), score: $0.s) }
-                .sorted { $0.termLower < $1.termLower }
+                .map { term -> Entry in
+                    let lower = term.t.lowercased()
+                    return Entry(
+                        term: term.t,
+                        termLower: lower,
+                        // 3o-C-rustoleum-ux-L2: hyphen-stripped key drives
+                        // binary search + prefix scan so "rustoleum" matches
+                        // vocab entries stored as "Rust-oleum-...". Display
+                        // ordering tie-break still uses termLower below.
+                        termSearchKey: lower.replacingOccurrences(of: "-", with: ""),
+                        score: term.s
+                    )
+                }
+                .sorted { $0.termSearchKey < $1.termSearchKey }
             loaded = true
             autocompleteLog.debug("Loaded \(self.entries.count, privacy: .public) autocomplete terms")
         } catch {
@@ -118,15 +136,17 @@ actor AutocompleteService: AutocompleteServiceProtocol {
 
     // MARK: - Binary search
 
-    /// Returns the first index whose `termLower` is ≥ `needle` — the
+    /// Returns the first index whose `termSearchKey` is ≥ `needle` — the
     /// canonical lower-bound search. From there a linear forward scan
-    /// collects every entry that still has the prefix.
+    /// collects every entry that still has the prefix. The search key is
+    /// hyphen-stripped (3o-C-rustoleum-ux-L2) so the sort order also uses
+    /// the stripped key.
     private func lowerBound(forPrefix needle: String) -> Int {
         var low = 0
         var high = entries.count
         while low < high {
             let mid = (low + high) / 2
-            if entries[mid].termLower < needle {
+            if entries[mid].termSearchKey < needle {
                 low = mid + 1
             } else {
                 high = mid
@@ -150,5 +170,9 @@ nonisolated private struct Payload: Decodable, Sendable {
 private struct Entry: Sendable {
     let term: String
     let termLower: String
+    /// Hyphen-stripped lowercased key used for binary-search prefix
+    /// matching (3o-C-rustoleum-ux-L2) so canonical brand spellings like
+    /// "rustoleum" match vocab entries stored as "Rust-oleum-...".
+    let termSearchKey: String
     let score: Int
 }

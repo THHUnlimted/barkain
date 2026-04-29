@@ -222,7 +222,12 @@ async def test_search_gemini_fallback(client, db_session):
     sources = [r["source"] for r in data["results"]]
     assert sources == ["gemini", "gemini", "gemini"]
     assert data["results"][0]["device_name"] == "Obscure Gadget Pro"
-    assert data["results"][0]["primary_upc"] == "012345678901"
+    # 3o-C-L1: Tier 3 Gemini rows ship `primary_upc=None` server-side so
+    # iOS routes via /resolve-from-search by name (which has UPCitemdb
+    # cross-val + 409 confirmation gate) rather than /resolve on a
+    # potentially-fabricated UPC. The Gemini response itself still
+    # carries the UPC string — it's stripped at merge time.
+    assert data["results"][0]["primary_upc"] is None
     # First call — cache miss — Gemini invoked exactly once.
     assert mock_gemini.call_count == 1
 
@@ -1581,3 +1586,71 @@ def test_classify_returns_none_for_legitimate_row():
         "category": "All Headphones",
     }
     assert _classify_tier2_noise(row, query="sony wh-1000xm5") is None
+
+
+# MARK: - 3o-C-L1 fabricated-UPC strip (Tier 3 Gemini search rows)
+
+
+@pytest.mark.asyncio
+async def test_search_strips_fabricated_primary_upc_from_gemini_rows(client):
+    """3o-C-L1 regression: even when Gemini returns a `primary_upc` for a
+    Tier 3 search result, the merged response sets `primary_upc=None` so
+    iOS routes via `/resolve-from-search` by name (gated by UPCitemdb
+    cross-val + 0.70 confirmation threshold) instead of `/resolve` on a
+    fabricated UPC that can resolve to an unrelated product under the
+    grounded-Gemini fallback (rustoleum tap → Tide Pods).
+    """
+    gemini_return = [
+        {
+            "device_name": "Rust-Oleum Painter's Touch 2X Ultra Cover Spray Paint",
+            "model": "249092",
+            "brand": "Rust-Oleum",
+            "category": "home",
+            "confidence": 0.85,
+            # Fabricated UPC: real `020066` Rust-Oleum prefix + invented
+            # suffix. Pre-3o-C-L1 this would propagate to iOS and trigger
+            # the misresolve.
+            "primary_upc": "020066249091",
+        }
+    ]
+    with patch(
+        "modules.m1_product.search_service.gemini_generate_json",
+        new_callable=AsyncMock,
+        return_value=gemini_return,
+    ):
+        response = await client.post(
+            SEARCH_URL, json={"query": "rustoleum paint", "max_results": 5}
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_results"] == 1
+    row = data["results"][0]
+    assert row["source"] == "gemini"
+    assert row["device_name"].startswith("Rust-Oleum")
+    # The fix: primary_upc is None even though Gemini returned a string.
+    assert row["primary_upc"] is None
+
+
+@pytest.mark.asyncio
+async def test_search_keeps_primary_upc_for_non_gemini_sources(client, db_session):
+    """Sibling regression: the strip is gemini-source-only — DB rows
+    keep their real UPC (which carries a real product_id and is trusted)."""
+    db_session.add(
+        Product(
+            upc="027242872349",
+            name="Sony WH-1000XM5",
+            brand="Sony",
+            source="seed",
+        )
+    )
+    await db_session.flush()
+
+    response = await client.post(
+        SEARCH_URL, json={"query": "sony wh-1000xm5", "max_results": 5}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    db_rows = [r for r in data["results"] if r["source"] == "db"]
+    assert db_rows, "expected at least one DB row"
+    assert db_rows[0]["primary_upc"] == "027242872349"
