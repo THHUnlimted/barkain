@@ -1,0 +1,149 @@
+{
+  "started_at": "2026-04-29T05:07:45.197700+00:00",
+  "completed_at": "2026-04-29T05:08:04.555097+00:00",
+  "panel_size": 5,
+  "panel": [
+    {
+      "label": "ipad_air_m4_13",
+      "upc": "195950797817",
+      "category": "electronics"
+    },
+    {
+      "label": "pedigree_wet_dog",
+      "upc": "023100010069",
+      "category": "pet"
+    },
+    {
+      "label": "makita_xfd10z",
+      "upc": "087547002001",
+      "category": "tool"
+    },
+    {
+      "label": "hamilton_beach_scoop",
+      "upc": "040094920938",
+      "category": "household"
+    },
+    {
+      "label": "weber_q_1200",
+      "upc": "077924034695",
+      "category": "lawn_outdoor"
+    }
+  ],
+  "results": [
+    {
+      "prompt": "old_prompt",
+      "case": "ipad_air_m4_13",
+      "upc": "195950797817",
+      "category": "electronics",
+      "device_name": "Apple iPhone 15 Pro 128GB Natural Titanium (MTU63LL/A)",
+      "model": "iPhone 15 Pro 128GB Natural Titanium",
+      "matches_expected": false,
+      "latency_ms": 1691.3164159996086,
+      "error": null
+    },
+    {
+      "prompt": "old_prompt",
+      "case": "pedigree_wet_dog",
+      "upc": "023100010069",
+      "category": "pet",
+      "device_name": null,
+      "model": null,
+      "matches_expected": false,
+      "latency_ms": 2611.630792001961,
+      "error": null
+    },
+    {
+      "prompt": "old_prompt",
+      "case": "makita_xfd10z",
+      "upc": "087547002001",
+      "category": "tool",
+      "device_name": "Logitech Cordless Desktop EX 110 Keyboard and Mouse Combo (967561-0403)",
+      "model": "Logitech Cordless Desktop EX 110",
+      "matches_expected": false,
+      "latency_ms": 1431.7132090000086,
+      "error": null
+    },
+    {
+      "prompt": "old_prompt",
+      "case": "hamilton_beach_scoop",
+      "upc": "040094920938",
+      "category": "household",
+      "device_name": "Hamilton Beach The Scoop Single-Serve Coffee Maker (Model 49981A)",
+      "model": "Hamilton Beach The Scoop 49981A",
+      "matches_expected": true,
+      "latency_ms": 3486.4591660007136,
+      "error": null
+    },
+    {
+      "prompt": "old_prompt",
+      "case": "weber_q_1200",
+      "upc": "077924034695",
+      "category": "lawn_outdoor",
+      "device_name": "Logitech G502 Proteus Spectrum Tunable Gaming Mouse (910-004615)",
+      "model": "G502 Proteus Spectrum",
+      "matches_expected": false,
+      "latency_ms": 1329.793291995884,
+      "error": null
+    },
+    {
+      "prompt": "new_prompt",
+      "case": "ipad_air_m4_13",
+      "upc": "195950797817",
+      "category": "electronics",
+      "device_name": "Apple iPhone 15 Pro Max 256GB Natural Titanium (MU793LL/A)",
+      "model": "iPhone 15 Pro Max 256GB Natural Titanium",
+      "matches_expected": false,
+      "latency_ms": 2354.5189579963335,
+      "error": null
+    },
+    {
+      "prompt": "new_prompt",
+      "case": "pedigree_wet_dog",
+      "upc": "023100010069",
+      "category": "pet",
+      "device_name": "Purina Friskies Shreds With Chicken in Sauce Wet Cat Food (5.5 oz)",
+      "model": "5.5 oz",
+      "matches_expected": false,
+      "latency_ms": 1479.4998750003288,
+      "error": null
+    },
+    {
+      "prompt": "new_prompt",
+      "case": "makita_xfd10z",
+      "upc": "087547002001",
+      "category": "tool",
+      "device_name": "Kikkoman Soy Sauce 10-Fluid Ounce Bottle",
+      "model": "10 fl oz",
+      "matches_expected": false,
+      "latency_ms": 1386.6694160024053,
+      "error": null
+    },
+    {
+      "prompt": "new_prompt",
+      "case": "hamilton_beach_scoop",
+      "upc": "040094920938",
+      "category": "household",
+      "device_name": "Gillette Fusion5 Men's Razor Blade Refills (12 Count)",
+      "model": "Fusion5 12ct",
+      "matches_expected": false,
+      "latency_ms": 1846.54700000101,
+      "error": null
+    },
+    {
+      "prompt": "new_prompt",
+      "case": "weber_q_1200",
+      "upc": "077924034695",
+      "category": "lawn_outdoor",
+      "device_name": "L'Oreal Paris Excellence Creme Permanent Hair Color 6G Light Golden Brown",
+      "model": "6G Light Golden Brown",
+      "matches_expected": false,
+      "latency_ms": 1738.710916004493,
+      "error": null
+    }
+  ],
+  "aggregate": {
+    "recall_old": "1/5",
+    "recall_new": "0/5",
+    "no_electronics_regression": true
+  }
+}

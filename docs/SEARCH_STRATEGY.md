@@ -1,7 +1,7 @@
 # Barkain — Search & Data Acquisition Strategy
 
 > Source: Planning sessions, March–April 2026
-> Last updated: April 28, 2026 (v6.3 — Step 3o-B: Tier-2 noise filter narrowed from a single 14-entry category denylist into three behavior pools — hard / soft (query-opt-out) / accessor-context — resolving the cat-litter false-negative and 3o-A's predictable `case` / `charger` false-negatives)
+> Last updated: April 29, 2026 (v6.4 — Step 3o-C: Gemini UPC `system_instruction` rewritten category-agnostic. Closes the 3o-A vocab + 3o-B noise filter + 3o-C prompt category-expansion trilogy)
 > Companion docs: SCRAPING_AGENT_ARCHITECTURE.md, agent-browser-scraping-guide.md, IDENTITY_DISCOUNTS.md
 
 ---
@@ -317,6 +317,14 @@ The helper is consumed by `backend/modules/m14_misc_retailer/` as the primary ad
 **Vendor concentration risk**: Serper now serves both UPC resolution (`vendor-migrate-1`) and the misc-retailer slot (Step 3n). A Serper outage degrades both legs simultaneously. The structural hedge is the Z-standby adapter stub (`google_shopping_container`) — DIY Chrome container that the v2 misc-retailer investigation proved feasible against Decodo. Build trigger is bench-driven: `make bench-misc-retailer` weekly; `panel_below_alert` (<75 % SKU pass × 2 consecutive runs) emits a Slack/email alert for Mike to approve the Z-build kickoff. The trigger is the bench, not a separate decision.
 
 **`web_search.py` is now a multi-path Serper file** (~316 LOC post-3n): `_serper_fetch` (UPC `/search`) + `resolve_via_serper` (orchestrator that combines `_serper_fetch` + Gemini synthesis) + `_first_image_url` (image extraction added in `feat/thumbnail-coverage`) + `_serper_shopping_fetch` (`/shopping`). **Splitting trigger**: if the file grows past ~300 LOC AND a fifth Serper code path is added, split into `serper_resolve.py` + `serper_shopping.py` + a shared `serper_client.py` for the httpx posture. Today (~316 LOC, 4 paths) the single file is fine — the split would just churn the test imports.
+
+### Step 3o-C — Gemini UPC `system_instruction` rewritten category-agnostic (2026-04-29)
+
+The grounded-fallback leg of `_get_gemini_data` (`m1_product/service.py`) calls `gemini_generate_json` with `system_instruction=UPC_LOOKUP_SYSTEM_INSTRUCTION` (defined in `backend/ai/prompts/upc_lookup.py`). Pre-3o-C that prompt was 100% electronics-focused — every step header named "electronics device" / "electronics-only UPCs" / "electronics-focused"; all four examples were electronics (iPad / Galaxy Buds / RTX / iPhone). 3o-C rewrites it category-agnostic across "consumer electronics, kitchen and small appliances, pet supplies, hand and power tools, lawn and outdoor equipment, beauty and personal care, grocery, automotive, office and household goods, or any other category with a UPC barcode" while preserving the 9-step skeleton verbatim and the `device_name` / `model` / `reasoning` JSON contract. 6 mixed-vertical examples (iPad / KitchenAid mixer / Royal Canin / DeWalt drill / Greenworks mower / iPhone) replace the four electronics-only examples. `build_upc_retry_prompt` rewrites to "all retail categories" (drops `non-electronics sources (grocery, household, apparel, toys, automotive)` framing); `build_upc_lookup_prompt` is byte-unchanged. `SYNTHESIS_PROMPT` in `web_search.py` (the Serper hot path) was already category-agnostic and is untouched.
+
+`backend/tests/ai/test_upc_lookup_prompt.py` is a new anti-condensation regression suite (8 tests) that pins structural integrity: `# DO NOT CONDENSE OR SHORTEN` markers / length ≥3,000 chars (current 4,310) / all 9 step headers in order / all 6 example product strings present / JSON contract fields present / electronics-only-removal (negative regression for `electronics-only` / `electronics device` / `electronics-focused` / `electronics relevance`) / retry-prompt-category-agnostic / lookup-prompt-byte-unchanged. Phase 1 L13 — agent shortening Gemini system instructions during implementation — is the load-bearing failure mode this suite catches.
+
+3o-C closes the **3o-A vocab + 3o-B noise filter + 3o-C prompt** category-expansion trilogy — resolve, search, and autocomplete are now category-agnostic end-to-end. Cross-references: 3o-A retired the `is_electronics()` autocomplete vocab filter (PR #84), 3o-B narrowed the Tier-2 cascade noise filter into hard / soft / accessor-context pools (PR #85), 3o-C strips electronics framing from the grounded-fallback system instruction (this PR).
 
 ---
 
