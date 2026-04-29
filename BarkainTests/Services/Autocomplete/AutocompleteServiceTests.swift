@@ -104,4 +104,45 @@ final class AutocompleteServiceTests: XCTestCase {
         let results = await svc.suggestions(for: "zzqxqx", limit: 10)
         XCTAssertTrue(results.isEmpty)
     }
+
+    // MARK: - 3o-C-rustoleum-ux-L2: hyphen-stripped prefix match
+
+    /// Typing the canonical brand spelling "wh1000" (no hyphen) must match
+    /// the hyphenated vocab entry "Sony WH-1000XM5". Pre-fix this returned
+    /// zero results — the binary search compared against the raw lowercased
+    /// term (`sony wh-1000xm5`) and the needle (`wh1000`) never landed in a
+    /// prefix-equal range.
+    func test_suggestions_hyphenStrippedNeedleMatchesHyphenatedTerm() async {
+        let svc = AutocompleteService(bundleURL: fixtureURL())
+        let results = await svc.suggestions(for: "wh1000", limit: 10)
+        XCTAssertTrue(
+            results.contains("Sony WH-1000XM5"),
+            "Expected hyphenated term in results: \(results)"
+        )
+    }
+
+    /// Symmetric case: when the user types the hyphenated form ("wh-1000")
+    /// we still match. Both sides reduce to "wh1000" for comparison.
+    func test_suggestions_hyphenatedNeedleMatchesHyphenatedTerm() async {
+        let svc = AutocompleteService(bundleURL: fixtureURL())
+        let results = await svc.suggestions(for: "wh-1000", limit: 10)
+        XCTAssertTrue(
+            results.contains("Sony WH-1000XM5"),
+            "Expected hyphenated term in results: \(results)"
+        )
+    }
+
+    /// Hyphen normalization must not break unrelated prefix matches —
+    /// "iph" has no hyphen on either side and behaves identically.
+    func test_suggestions_iphPrefixUnaffectedByHyphenNormalization() async {
+        let svc = AutocompleteService(bundleURL: fixtureURL())
+        let results = await svc.suggestions(for: "iph", limit: 20)
+        XCTAssertFalse(results.isEmpty)
+        for term in results {
+            XCTAssertTrue(
+                term.lowercased().hasPrefix("iph"),
+                "Unexpected non-iphone term post-normalization: \(term)"
+            )
+        }
+    }
 }

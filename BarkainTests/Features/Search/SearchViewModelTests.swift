@@ -159,6 +159,51 @@ final class SearchViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isLoading)
     }
 
+    /// 3o-C-rustoleum-ux-L1 regression: a fresh `performSearch` submit
+    /// must dismiss any prior `presentedProductViewModel`. Without this,
+    /// a user who navigates to product X (via a recent-search resolve)
+    /// and then searches for unrelated query Y sees Y's results layered
+    /// behind X's still-presented PriceComparisonView, creating "I
+    /// searched X but got Y" misattribution.
+    func test_performSearch_dismissesStalePresentedProductViewModel() async {
+        // Step 1: navigate to a product so `presentedProductViewModel`
+        // is non-nil — mirrors the user tapping a DB-source recent.
+        let firstProductId = UUID()
+        let firstResult = ProductSearchResult(
+            deviceName: "L'Oreal Paris Excellence Creme",
+            model: nil, brand: "L'Oreal", category: "beauty",
+            confidence: 0.92, primaryUpc: "071249305423",
+            source: .db, productId: firstProductId, imageUrl: nil
+        )
+        await viewModel.handleResultTap(firstResult)
+        XCTAssertNotNil(viewModel.presentedProductViewModel,
+                        "precondition: tap must navigate so we have a stale view to dismiss")
+
+        // Step 2: submit a fresh search for an unrelated query.
+        let freshResults = [
+            ProductSearchResult(
+                deviceName: "Rust-Oleum Stops Rust Spray Paint",
+                model: nil, brand: "Rust-Oleum", category: "home",
+                confidence: 0.85, primaryUpc: nil,
+                source: .gemini, productId: nil, imageUrl: nil
+            )
+        ]
+        mockClient.searchProductsResult = .success(
+            ProductSearchResponse(query: "rustoleum paint",
+                                  results: freshResults,
+                                  totalResults: 1, cached: false)
+        )
+
+        await viewModel.performSearch("rustoleum paint")
+
+        // Step 3: stale L'Oreal view must be gone, fresh results populated.
+        XCTAssertNil(viewModel.presentedProductViewModel,
+                     "fresh performSearch must dismiss the prior product page")
+        XCTAssertEqual(viewModel.results.count, 1)
+        XCTAssertEqual(viewModel.results.first?.deviceName,
+                       "Rust-Oleum Stops Rust Spray Paint")
+    }
+
     // MARK: - Deep search hint + force_gemini
 
     func test_showDeepSearchHint_alwaysTrueWhen3PlusChars() async {
