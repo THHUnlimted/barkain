@@ -41,6 +41,15 @@ final class SearchViewModel {
     /// next-step (scan, or try a different search).
     var unresolvedAfterTap: Bool = false
 
+    /// cat-rel-1-L2-ux: optional Gemini reasoning surfaced under the
+    /// generic "couldn't find" copy in `UnresolvedProductView`. Populated
+    /// from the backend's 404 envelope (`details.reasoning`) when Gemini
+    /// explained *why* it couldn't pin a UPC (multi-variant SKU,
+    /// dealer-only stock, discontinued line). Nil when the 404 was a
+    /// hard miss (UPCitemdb empty AND Gemini transport failure) or when
+    /// the call site is `/resolve` (UPC scan, no reasoning available).
+    var unresolvedReason: String?
+
     /// demo-prep-1 Item 3: set when the backend returns 409
     /// RESOLUTION_NEEDS_CONFIRMATION on `/resolve-from-search`. Carries
     /// the in-memory candidate bundle the confirmation sheet renders
@@ -263,6 +272,7 @@ final class SearchViewModel {
         error = nil
         resolveFailureMessage = nil
         unresolvedAfterTap = false
+        unresolvedReason = nil
         pendingConfirmation = nil
 
         switch result.source {
@@ -318,12 +328,16 @@ final class SearchViewModel {
                         threshold: candidate.threshold
                     )
                 }
-            } catch APIError.notFound {
+            } catch APIError.notFound(let reason) {
                 // demo-prep-1 Item 2: both UPC path and the description
                 // fallback 404'd. Route to the inline unresolved-product
                 // view (dedicated copy + CTAs) instead of the legacy
                 // toast which dismissed back to the same search state.
-                searchLog.info("handleResultTap: unresolved after tap — surfacing inline view. query=\(self.query, privacy: .public) deviceName=\(result.deviceName, privacy: .public)")
+                // cat-rel-1-L2-ux: capture Gemini's stated reason (when
+                // present) so the inline view can surface it under the
+                // generic copy.
+                searchLog.info("handleResultTap: unresolved after tap — surfacing inline view. query=\(self.query, privacy: .public) deviceName=\(result.deviceName, privacy: .public) reason=\(reason ?? "(none)", privacy: .public)")
+                unresolvedReason = reason
                 unresolvedAfterTap = true
             } catch let apiError as APIError {
                 error = apiError
@@ -362,7 +376,10 @@ final class SearchViewModel {
                 // outright. Treat an empty product as an unresolved-after-tap.
                 unresolvedAfterTap = true
             }
-        } catch APIError.notFound {
+        } catch APIError.notFound(let reason) {
+            // cat-rel-1-L2-ux: capture Gemini reasoning on the confirm
+            // path too (the user said "yes" but the resolve still 404'd).
+            unresolvedReason = reason
             unresolvedAfterTap = true
         } catch let apiError as APIError {
             error = apiError
@@ -399,6 +416,7 @@ final class SearchViewModel {
     /// CTA. Clears the unresolved state so the search results re-render.
     func dismissUnresolvedAfterTap() {
         unresolvedAfterTap = false
+        unresolvedReason = nil
     }
 
     /// Resolve a tapped search result to either a loaded Product or a
@@ -475,8 +493,9 @@ final class SearchViewModel {
                 alternatives: Array(alternatives),
                 threshold: candidate.threshold
             )
-        case .unresolved:
+        case .unresolved(let reason):
             presentedProductViewModel = nil
+            unresolvedReason = reason
             unresolvedAfterTap = true
         case .failed(let apiError):
             presentedProductViewModel = nil

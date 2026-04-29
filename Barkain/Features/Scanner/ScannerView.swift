@@ -263,7 +263,11 @@ struct ScannerView: View {
                 .transition(.opacity)
         } else if viewModel.priceError != nil, let product = viewModel.product {
             priceErrorView(product: product, viewModel: viewModel)
-        } else if viewModel.error == .notFound {
+        } else if case .notFound = viewModel.error {
+            // Pattern match on the notFound case (any associated reason);
+            // cat-rel-1-L2-ux changed `.notFound` to carry an optional
+            // reason, so direct `==` no longer works for the "any 404"
+            // branch the Scanner UI wants.
             unresolvedProductView(viewModel: viewModel)
         } else if let error = viewModel.error {
             errorView(error, viewModel: viewModel)

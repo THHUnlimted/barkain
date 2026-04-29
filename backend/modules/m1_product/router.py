@@ -153,12 +153,18 @@ async def resolve_from_search(
             model=body.model,
         )
         return ProductResponse.model_validate(product)
-    except UPCNotFoundForDescriptionError:
+    except UPCNotFoundForDescriptionError as exc:
+        # cat-rel-1-L2-ux: include Gemini's stated reasoning in the
+        # envelope when present so iOS can show *why* (multi-variant SKU,
+        # dealer-only stock, etc.) under the generic "couldn't find" copy.
+        details: dict[str, str] = {"device_name": body.device_name}
+        if exc.reasoning:
+            details["reasoning"] = exc.reasoning
         raise_http_error(
             404,
             "UPC_NOT_FOUND_FOR_PRODUCT",
             "Couldn't find this product — try a different name or scan the barcode.",
-            {"device_name": body.device_name},
+            details,
         )
     except ProductNotFoundError as exc:
         raise_http_error(

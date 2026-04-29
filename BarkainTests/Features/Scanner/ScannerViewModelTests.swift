@@ -96,7 +96,7 @@ final class ScannerViewModelTests: XCTestCase {
         XCTAssertNotNil(viewModel.product)
 
         // When — second scan with different UPC (fails)
-        mockClient.resolveProductResult = .failure(.notFound)
+        mockClient.resolveProductResult = .failure(.notFound())
         await viewModel.handleBarcodeScan(upc: "999999999999")
 
         // Then — old product is cleared
@@ -221,7 +221,7 @@ final class ScannerViewModelTests: XCTestCase {
 
     func test_handleBarcodeScan_resolveFailure_doesNotFetchPrices() async {
         // Given
-        mockClient.resolveProductResult = .failure(.notFound)
+        mockClient.resolveProductResult = .failure(.notFound())
 
         // When
         await viewModel.handleBarcodeScan(upc: "000000000000")
@@ -238,11 +238,11 @@ final class ScannerViewModelTests: XCTestCase {
         // (previous silent-handback bug was generic .validation("...")
         // wrapping lossy envelope decoding, so this is the load-bearing
         // precondition for the graceful 404 UX).
-        mockClient.resolveProductResult = .failure(.notFound)
+        mockClient.resolveProductResult = .failure(.notFound())
 
         await viewModel.handleBarcodeScan(upc: "000000000000")
 
-        XCTAssertEqual(viewModel.error, .notFound,
+        XCTAssertEqual(viewModel.error, .notFound(),
                        "error must be exactly .notFound so ScannerView renders UnresolvedProductView")
         XCTAssertNil(viewModel.product,
                      "no product should be set when resolve fails")
@@ -464,7 +464,7 @@ final class ScannerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.identityDiscounts.count, 2)
 
         // When — second scan starts with a new resolveProduct failure path
-        mockClient.resolveProductResult = .failure(.notFound)
+        mockClient.resolveProductResult = .failure(.notFound())
         await viewModel.handleBarcodeScan(upc: "999999999999")
 
         // Then — discounts cleared at the start of the second scan
@@ -518,7 +518,7 @@ final class ScannerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.cardRecommendations.count, 1)
         XCTAssertTrue(viewModel.userHasCards)
 
-        mockClient.resolveProductResult = .failure(.notFound)
+        mockClient.resolveProductResult = .failure(.notFound())
         await viewModel.handleBarcodeScan(upc: "999999999999")
 
         XCTAssertTrue(viewModel.cardRecommendations.isEmpty)
@@ -568,7 +568,7 @@ final class ScannerViewModelTests: XCTestCase {
         let testViewModel = ScannerViewModel(apiClient: mockClient, featureGate: gate)
 
         // When resolveProduct fails (e.g. Gemini timeout, unknown UPC).
-        mockClient.resolveProductResult = .failure(.notFound)
+        mockClient.resolveProductResult = .failure(.notFound())
         await testViewModel.handleBarcodeScan(upc: "999999999999")
 
         // Then no quota was burned — the user can retry without losing a scan.

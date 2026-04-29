@@ -145,7 +145,12 @@ struct SearchView: View {
                     LoadingState(message: "Searching…")
                 } else if vm.unresolvedAfterTap {
                     // demo-prep-1 Item 2: dedicated 404-after-tap view.
+                    // cat-rel-1-L2-ux: forward Gemini's stated reason so
+                    // the user sees *why* (multi-variant SKU, dealer-only,
+                    // discontinued) under the generic copy instead of just
+                    // "we don't have it".
                     UnresolvedProductView(
+                        reasoning: vm.unresolvedReason,
                         primaryActionTitle: "Try a different search",
                         primaryAction: { vm.dismissUnresolvedAfterTap() },
                         secondaryActionTitle: "Scan the barcode instead",

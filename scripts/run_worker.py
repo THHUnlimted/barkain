@@ -113,10 +113,17 @@ async def _discount_verify() -> None:
 
 
 async def _setup_queues() -> None:
+    # 2h-ops: provision each main queue alongside a sibling DLQ
+    # (`<name>-dlq`) and attach a RedrivePolicy so failed messages stop
+    # circling the main queue forever and land somewhere visible. Both
+    # operations are idempotent — re-running rolls forward attribute
+    # changes (e.g. tweaking `DLQ_MAX_RECEIVE_COUNT`).
     client = SQSClient()
     for queue in ALL_QUEUES:
-        url = await client.create_queue(queue)
-        logger.info("queue ready: %s -> %s", queue, url)
+        main_url, dlq_url = await client.create_queue_with_dlq(queue)
+        logger.info(
+            "queue ready: %s -> %s (dlq: %s)", queue, main_url, dlq_url
+        )
 
 
 COMMANDS = {

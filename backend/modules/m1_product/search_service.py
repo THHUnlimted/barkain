@@ -133,6 +133,11 @@ _TIER2_HARD_NOISE_CATEGORY_TOKENS: tuple[str, ...] = (
                           # Pixels. Held in hard pool per 3o-B wait-and-see;
                           # revisit if `27gp950`-class queries hit production.
     "physical video game",  # switch 2 → games-for-switch
+    "game download",      # noise-filter-L1 → "switch oled" + similar console
+                          # queries promote digital game/DLC BBY rows w/ category
+                          # "Game Download" or "Game Downloads" — distinct from
+                          # `physical video game` (which doesn't substring-match
+                          # the digital category text).
     "service",
     "digital signage",    # samsung flip 7 → 75-inch interactive displays
     "screen protector",

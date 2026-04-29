@@ -121,6 +121,81 @@ async def test_resolve_from_search_404_when_gemini_cannot_find_upc(
     assert mock_gemini.call_count == 2
 
 
+# MARK: - cat-rel-1-L2-ux: Gemini reasoning surfaces in 404 envelope
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_404_includes_gemini_reasoning_in_details(
+    client, db_session, fake_redis
+):
+    """When Gemini refused with a stated reason, the 404 envelope's
+    ``details.reasoning`` carries that string so iOS can show *why* the
+    product couldn't be pinned (multi-variant SKU, dealer-only stock,
+    discontinued line) instead of the generic copy. cat-rel-1-L2-ux.
+    """
+    refusal_reason = (
+        "Multiple SKU variants exist for this Husqvarna model — please "
+        "scan the barcode for an exact match."
+    )
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value={"upc": None, "reasoning": refusal_reason},
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={"device_name": "Husqvarna 460 Rancher chainsaw"},
+        )
+
+    assert response.status_code == 404
+    error = response.json()["detail"]["error"]
+    assert error["code"] == "UPC_NOT_FOUND_FOR_PRODUCT"
+    # Reasoning is the load-bearing assertion — it must reach the client.
+    assert error["details"]["reasoning"] == refusal_reason
+    # Existing device_name details field is still preserved.
+    assert error["details"]["device_name"] == "Husqvarna 460 Rancher chainsaw"
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_404_omits_reasoning_when_gemini_silent(
+    client, db_session, fake_redis
+):
+    """When Gemini returned null UPC AND null reasoning (or transport
+    failure), the 404 envelope should NOT have a ``reasoning`` key. iOS
+    falls back to the generic 'couldn't find this one' copy in that case.
+    """
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            side_effect=Exception("transport flake"),
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={"device_name": "Untraceable Gadget 9000"},
+        )
+
+    assert response.status_code == 404
+    error = response.json()["detail"]["error"]
+    assert error["code"] == "UPC_NOT_FOUND_FOR_PRODUCT"
+    # Absence is the assertion: iOS branches on `details.reasoning` being
+    # nil to choose the generic copy.
+    assert "reasoning" not in error["details"]
+
+
 # MARK: - Malformed Gemini response → 404
 
 
