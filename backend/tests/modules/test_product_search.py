@@ -1357,3 +1357,227 @@ def test_query_strict_specs_extracts_voltage_and_pure_digits():
     assert _query_strict_specs("iPhone 16 Pro 256GB") == []
     # Mixed digit+letter (handled by _query_model_codes) is excluded here.
     assert _query_strict_specs("WH-1000XM5 Sony") == []
+
+
+# --- 3o-B: three-pool noise filter
+# Resolves cat-litter false-negative (Discovery v1 §B3 + §H3); proactively
+# addresses `case`/`charger` predictable false-negatives surfaced by 3o-A's
+# expanded autocomplete vocab.
+
+
+def test_case_soft_noise_drops_when_query_lacks_case_token():
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    row = {
+        "device_name": "Spigen - Tough Armor Case for Galaxy S24",
+        "brand": "Spigen",
+        "category": "Cell Phone Cases",
+    }
+    assert _is_tier2_noise(row, query="samsung galaxy s24") is True
+
+
+def test_case_soft_noise_keeps_when_query_mentions_case():
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    row = {
+        "device_name": "Spigen - Tough Armor Case for iPhone 17 Pro Max",
+        "brand": "Spigen",
+        "category": "Cell Phone Cases",
+    }
+    assert _is_tier2_noise(row, query="iphone 17 pro max case") is False
+
+
+def test_case_soft_noise_keeps_on_plural_cases_query():
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    # Row title carries the plural to also satisfy the soft-majority check
+    # downstream of the opt-out — singular/plural mismatch is a separate
+    # concern (out of scope for 3o-B).
+    row = {
+        "device_name": "OtterBox - Defender Series Cases for iPhone 17",
+        "brand": "OtterBox",
+        "category": "Cell Phone Cases",
+    }
+    assert _is_tier2_noise(row, query="iphone cases") is False
+
+
+def test_charger_soft_noise_drops_when_query_lacks_charger_token():
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    row = {
+        "device_name": "SaharaCase - 25W Wall Charger USB-C",
+        "brand": "SaharaCase",
+        "category": "Portable Chargers",
+    }
+    assert _is_tier2_noise(row, query="samsung z flip 7") is True
+
+
+def test_charger_soft_noise_keeps_when_query_mentions_charger():
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    row = {
+        "device_name": "Anker - PowerCore 10000 Portable Charger",
+        "brand": "Anker",
+        "category": "Portable Chargers",
+    }
+    assert _is_tier2_noise(row, query="anker portable charger") is False
+
+
+def test_charger_soft_noise_keeps_on_charging_token():
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    row = {
+        "device_name": "Belkin - 15W Wireless Charging Pad",
+        "brand": "Belkin",
+        "category": "Wireless Chargers",
+    }
+    assert _is_tier2_noise(row, query="wireless charging pad") is False
+
+
+def test_accessor_drops_gaming_controller_accessories():
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    row = {
+        "device_name": "KontrolFreek - Performance Grips for Gaming Controllers",
+        "brand": "KontrolFreek",
+        "category": "Gaming Controller Accessories",
+    }
+    assert _is_tier2_noise(row, query="ps5 controller grips") is True
+
+
+def test_accessor_drops_phone_accessories():
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    row = {
+        "device_name": "PopSockets - PopGrip Cell Phone Accessory",
+        "brand": "PopSockets",
+        "category": "Cell Phone Accessories",
+    }
+    assert _is_tier2_noise(row, query="phone grip") is True
+
+
+def test_accessor_keeps_litter_boxes_accessories():
+    """Discovery v1 §B3 false-negative: cat-litter row was dropped because
+    `accessor` substring fired on `Litter Boxes & Accessories` even though
+    no electronics-parent token appears in the category."""
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    row = {
+        "device_name": "Petkit - PuraMax 2 Self-Cleaning Cat Litter Box",
+        "brand": "Petkit",
+        "category": "Litter Boxes & Accessories",
+    }
+    assert _is_tier2_noise(row, query="petkit cat litter box") is False
+
+
+def test_accessor_keeps_mixer_accessories():
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    row = {
+        "device_name": "KitchenAid - Pasta Roller Mixer Attachment",
+        "brand": "KitchenAid",
+        "category": "Mixer Accessories",
+    }
+    assert _is_tier2_noise(row, query="kitchenaid mixer attachments") is False
+
+
+def test_accessor_keeps_vacuum_accessories():
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    row = {
+        "device_name": "Shark - Replacement Bags for Vacuum Cleaner",
+        "brand": "Shark",
+        "category": "Vacuum Cleaner Accessories",
+    }
+    assert _is_tier2_noise(row, query="shark vacuum bags") is False
+
+
+def test_existing_thumbstick_title_still_drops():
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    # Title "Performance Thumbsticks" hits the title denylist; even with
+    # the accessor pool relaxed, the thumbstick title gate is the safety
+    # net for PS5-controller queries.
+    row = {
+        "device_name": "KontrolFreek - Performance Thumbsticks for PS5",
+        "brand": "KontrolFreek",
+        "category": "Lawn Mowers",  # category irrelevant — title gate fires
+    }
+    assert _is_tier2_noise(row, query="ps5 controller") is True
+
+
+def test_existing_pixel_10_mobile_pixels_still_drops():
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    row = {
+        "device_name": "Mobile Pixels - Trio Max Portable Monitor 14\"",
+        "brand": "Mobile Pixels",
+        "category": "Portable Monitors",
+    }
+    assert _is_tier2_noise(row, query="pixel 10") is True
+
+
+def test_existing_warranty_still_drops_unconditionally():
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    row = {
+        "device_name": "AppleCare+ for iPhone 17",
+        "brand": "Apple",
+        "category": "AppleCare Warranties",
+    }
+    # Hard pool — query-agnostic.
+    assert _is_tier2_noise(row, query="iphone 17 applecare") is True
+    assert _is_tier2_noise(row) is True
+
+
+def test_existing_screen_protector_still_drops():
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    row = {
+        "device_name": "ZAGG - InvisibleShield Glass Elite Screen Protector",
+        "brand": "ZAGG",
+        "category": "Screen Protectors",
+    }
+    assert _is_tier2_noise(row, query="iphone screen protector") is True
+
+
+def test_classify_returns_hard_category_for_warranty():
+    from modules.m1_product.search_service import _classify_tier2_noise
+
+    row = {
+        "device_name": "AppleCare+ for iPhone",
+        "category": "AppleCare Warranties",
+    }
+    assert _classify_tier2_noise(row, query="iphone") == "hard_category"
+
+
+def test_classify_returns_soft_category_for_case_no_query_match():
+    from modules.m1_product.search_service import _classify_tier2_noise
+
+    row = {
+        "device_name": "Spigen Tough Armor Case",
+        "category": "Cell Phone Cases",
+    }
+    assert _classify_tier2_noise(row, query="samsung galaxy s24") == "soft_category"
+
+
+def test_classify_returns_accessor_context_for_gaming_accessories():
+    from modules.m1_product.search_service import _classify_tier2_noise
+
+    row = {
+        "device_name": "KontrolFreek Performance Grips",
+        "category": "Gaming Controller Accessories",
+    }
+    assert _classify_tier2_noise(row, query="ps5 controller") == "accessor_context"
+
+
+def test_classify_returns_none_for_legitimate_row():
+    from modules.m1_product.search_service import _classify_tier2_noise
+
+    row = {
+        "device_name": "Sony WH-1000XM5 Wireless Noise-Canceling Headphones",
+        "brand": "Sony",
+        "model": "WH-1000XM5",
+        "category": "All Headphones",
+    }
+    assert _classify_tier2_noise(row, query="sony wh-1000xm5") is None
