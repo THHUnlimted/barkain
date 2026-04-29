@@ -1,26 +1,40 @@
-"""Barkain autocomplete vocabulary generator (Step 3d).
+"""Barkain autocomplete vocabulary generator (Step 3d, expanded in Step 3o-A).
 
 Sweeps Amazon's public autocomplete endpoint across an alphabet of
-prefixes, dedupes, scores by frequency, filters for electronics, and
-writes a single JSON file consumed by the iOS ``AutocompleteService``.
+prefixes, dedupes, scores by frequency, and writes a single JSON file
+consumed by the iOS ``AutocompleteService``.
 
 The output ships in the app bundle. Regeneration is manual — re-run on
 flagship launches or when the term-mix feels stale.
+
+Step 3o-A removed the in-script electronics filter (``is_electronics``)
+in favour of source-scope diversity. Six default Amazon scopes
+(``aps``, ``electronics``, ``grocery``, ``pet-supplies``, ``tools``,
+``beauty``) plus three probe-gated extras (``automotive``,
+``health-personal-care``, ``office-products``) replace the
+single-vertical bias documented in Discovery_Category_Expansion_v1.
 
 Usage::
 
     python3 scripts/generate_autocomplete_vocab.py
     python3 scripts/generate_autocomplete_vocab.py --dry-run
     python3 scripts/generate_autocomplete_vocab.py \\
-        --sources amazon_aps,amazon_electronics \\
-        --prefix-depth 2 --throttle 1.0 --max-terms 5000 \\
+        --sources amazon_aps,amazon_electronics,amazon_grocery,amazon_pet-supplies,amazon_tools,amazon_beauty \\
+        --prefix-depth 2 --throttle 1.0 --max-terms 15000 \\
         --output Barkain/Resources/autocomplete_vocab.json --resume
 
 Sources:
-    amazon_aps          Amazon all departments      (default, required)
-    amazon_electronics  Amazon electronics-scoped   (default, required)
-    bestbuy             Best Buy autocomplete       (optional, skips on shape drift)
-    ebay                eBay autosug                (optional, skips on shape drift)
+    amazon_aps                   Amazon all departments     (default)
+    amazon_electronics           Amazon electronics scope   (default)
+    amazon_grocery               Amazon grocery scope       (default)
+    amazon_pet-supplies          Amazon pet-supplies scope  (default)
+    amazon_tools                 Amazon tools scope         (default)
+    amazon_beauty                Amazon beauty scope        (default)
+    amazon_automotive            Amazon automotive scope    (probe-gated)
+    amazon_health-personal-care  Amazon HPC scope           (probe-gated)
+    amazon_office-products       Amazon office scope        (probe-gated)
+    bestbuy                      Best Buy autocomplete      (optional, skips on shape drift)
+    ebay                         eBay autosug               (optional, skips on shape drift)
 
 Exit codes:
     0  full success
@@ -57,65 +71,28 @@ logging.basicConfig(
 logger = logging.getLogger("barkain.generate_autocomplete_vocab")
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15"
-ALL_SOURCES = ("amazon_aps", "amazon_electronics", "bestbuy", "ebay")
+DEFAULT_SOURCES = (
+    "amazon_aps",
+    "amazon_electronics",
+    "amazon_grocery",
+    "amazon_pet-supplies",
+    "amazon_tools",
+    "amazon_beauty",
+)
+PROBE_SCOPE_CANDIDATES = (
+    "amazon_automotive",
+    "amazon_health-personal-care",
+    "amazon_office-products",
+)
+PROBE_PREFIXES = ("ca", "pa", "tir")
+PROBE_THRESHOLD = 5.0
+ALL_SOURCES = (*DEFAULT_SOURCES, *PROBE_SCOPE_CANDIDATES, "bestbuy", "ebay")
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 MAX_ATTEMPTS = 3
 BACKOFF_BASE_S = 0.5
 
 # Test seam: monkeypatched in unit tests to avoid real sleeping.
 _async_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
-
-
-# MARK: - Filter rules (electronics)
-
-_BRAND_TOKENS = {
-    "apple", "samsung", "sony", "bose", "lg", "dell", "hp", "asus", "anker",
-    "lenovo", "microsoft", "google", "nintendo", "xbox", "playstation",
-    "roku", "fitbit", "garmin", "jbl", "beats", "nvidia", "amd", "intel",
-    "tcl", "hisense", "logitech", "razer", "corsair", "seagate",
-    "sandisk",
-}
-_BRAND_PHRASES = {"western digital"}
-_CATEGORY_TOKENS = {
-    "phone", "smartphone", "laptop", "tablet", "tv", "headphones", "earbuds",
-    "speaker", "monitor", "keyboard", "mouse", "camera", "drone", "console",
-    "controller", "watch", "smartwatch", "charger", "cable", "hub", "router",
-    "ssd", "modem",
-}
-_CATEGORY_PHRASES = {"hard drive"}
-_TOKEN_PREFIXES = (
-    "iphone", "ipad", "macbook", "airpods", "galaxy", "pixel",
-    "rtx", "gtx", "ryzen",
-)
-_MODEL_RE_LETTERS = re.compile(r"\b[A-Za-z]{2,}-?\d{2,}\b")
-_MODEL_RE_DIGITS = re.compile(
-    r"\b\d{3,5}\s*(pro|plus|max|ultra|mini|lite)?\b", re.IGNORECASE
-)
-
-
-def is_electronics(term: str, source: str) -> bool:
-    """Decide whether to keep ``term`` in the vocab.
-
-    Source-scoped sources (``amazon_electronics``, ``bestbuy``) always
-    pass; everything else must clear the brand / category / model gate.
-    """
-    if source in {"amazon_electronics", "bestbuy"}:
-        return True
-    lowered = term.lower()
-    tokens = lowered.split()
-    if any(t in _BRAND_TOKENS for t in tokens):
-        return True
-    if any(t in _CATEGORY_TOKENS for t in tokens):
-        return True
-    if any(p in lowered for p in _BRAND_PHRASES):
-        return True
-    if any(p in lowered for p in _CATEGORY_PHRASES):
-        return True
-    if any(t.startswith(_TOKEN_PREFIXES) for t in tokens):
-        return True
-    if _MODEL_RE_LETTERS.search(term) or _MODEL_RE_DIGITS.search(term):
-        return True
-    return False
 
 
 # MARK: - Normalization & display casing
@@ -210,7 +187,7 @@ def _parse_amazon(payload: dict) -> tuple[list[str], set[str]]:
 async def fetch_amazon(
     client: httpx.AsyncClient, source: str, prefix: str
 ) -> tuple[list[str], set[str]]:
-    alias = "aps" if source == "amazon_aps" else "electronics"
+    alias = source.removeprefix("amazon_")
     resp = await _http_get_with_retry(
         client,
         "https://completion.amazon.com/api/2017/suggestions",
@@ -275,8 +252,7 @@ async def fetch_ebay(
 SOURCE_FETCHERS: dict[
     str, Callable[[httpx.AsyncClient, str, str], Awaitable[tuple[list[str], set[str]]]]
 ] = {
-    "amazon_aps": fetch_amazon,
-    "amazon_electronics": fetch_amazon,
+    **{src: fetch_amazon for src in (*DEFAULT_SOURCES, *PROBE_SCOPE_CANDIDATES)},
     "bestbuy": fetch_bestbuy,
     "ebay": fetch_ebay,
 }
@@ -317,9 +293,10 @@ class SweepStats:
     total_prefixes_swept: int = 0
     raw_suggestions: int = 0
     after_dedup: int = 0
-    after_electronics_filter: int = 0
     sources_succeeded: list[str] = field(default_factory=list)
     sources_failed: list[str] = field(default_factory=list)
+    scope_probes: dict[str, float] = field(default_factory=dict)
+    scope_probes_admitted: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -401,6 +378,109 @@ async def sweep_source(
     return any_success
 
 
+# MARK: - Probe-gated scope extras
+
+async def probe_scope(
+    client: httpx.AsyncClient,
+    source: str,
+    *,
+    throttle: float,
+    cache_dir: Path,
+) -> float:
+    """Hit ``PROBE_PREFIXES`` against ``source`` and return average yield.
+
+    Caches each prefix so an admitted scope's main sweep starts warm.
+    SourceShapeError or transport errors count as 0 suggestions for that
+    prefix; the probe never raises.
+    """
+    fetcher = SOURCE_FETCHERS[source]
+    yields: list[int] = []
+    for prefix in PROBE_PREFIXES:
+        try:
+            values, _ = await fetcher(client, source, prefix)
+        except SourceShapeError as exc:
+            logger.warning("[probe %s] prefix=%s shape error: %s", source, prefix, exc)
+            yields.append(0)
+            await _async_sleep(throttle)
+            continue
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            logger.warning("[probe %s] prefix=%s network error: %s", source, prefix, exc)
+            yields.append(0)
+            await _async_sleep(throttle)
+            continue
+        yields.append(len(values))
+        write_cache(cache_dir, source, prefix, values)
+        await _async_sleep(throttle)
+    return sum(yields) / len(yields) if yields else 0.0
+
+
+async def probe_extra_scopes(
+    client: httpx.AsyncClient,
+    candidates: tuple[str, ...],
+    already_in_sweep: set[str],
+    stats: SweepStats,
+    *,
+    throttle: float,
+    cache_dir: Path,
+) -> list[str]:
+    """Probe each candidate not already in the sweep; return admitted scopes."""
+    admitted: list[str] = []
+    for candidate in candidates:
+        if candidate in already_in_sweep:
+            continue
+        avg = await probe_scope(
+            client, candidate, throttle=throttle, cache_dir=cache_dir
+        )
+        stats.scope_probes[candidate] = round(avg, 2)
+        if avg >= PROBE_THRESHOLD:
+            logger.info("scope=%s probe avg=%.1f admitted", candidate, avg)
+            admitted.append(candidate)
+        else:
+            logger.info(
+                "scope=%s probe avg=%.1f below threshold; skipping", candidate, avg
+            )
+    stats.scope_probes_admitted = list(admitted)
+    return admitted
+
+
+# MARK: - Parallel sweep orchestration
+
+async def sweep_all_sources(
+    client: httpx.AsyncClient,
+    sources: list[str],
+    prefixes: list[str],
+    accumulator: TermAccumulator,
+    stats: SweepStats,
+    *,
+    throttle: float,
+    cache_dir: Path,
+    resume: bool,
+) -> dict[str, bool]:
+    """Run every source's sweep concurrently.
+
+    Per-source per-prefix throttle stays at 1.0s; the wall-clock win is
+    cross-source. ``return_exceptions=True`` so a single source failing
+    (Amazon retiring a scope alias mid-run, transient transport blow-up)
+    doesn't kill the entire sweep — log + omit, continue.
+    """
+    tasks = [
+        sweep_source(
+            client, source, prefixes, accumulator, stats,
+            throttle=throttle, cache_dir=cache_dir, resume=resume,
+        )
+        for source in sources
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    out: dict[str, bool] = {}
+    for source, result in zip(sources, results):
+        if isinstance(result, BaseException):
+            logger.warning("sweep_source failed for %s: %s", source, result)
+            out[source] = False
+        else:
+            out[source] = bool(result)
+    return out
+
+
 # MARK: - Final assembly
 
 def assemble_terms(
@@ -410,13 +490,10 @@ def assemble_terms(
     max_terms: int,
 ) -> list[dict[str, object]]:
     stats.after_dedup = len(accumulator.occurrences)
-    kept: list[tuple[str, int]] = []
-    for normalized, occurrences in accumulator.occurrences.items():
-        sources_seen = {key.split("|", 1)[0] for key in occurrences}
-        if not any(is_electronics(normalized, src) for src in sources_seen):
-            continue
-        kept.append((normalized, len(occurrences)))
-    stats.after_electronics_filter = len(kept)
+    kept = [
+        (normalized, len(occurrences))
+        for normalized, occurrences in accumulator.occurrences.items()
+    ]
     kept.sort(key=lambda pair: (-pair[1], pair[0]))
     limited = kept[:max_terms]
     return [
@@ -442,7 +519,7 @@ def build_output_payload(
     sources: list[str],
 ) -> dict[str, object]:
     return {
-        "version": 1,
+        "version": 2,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "git_commit": _git_commit(),
         "sources": sources,
@@ -450,7 +527,8 @@ def build_output_payload(
             "total_prefixes_swept": stats.total_prefixes_swept,
             "raw_suggestions": stats.raw_suggestions,
             "after_dedup": stats.after_dedup,
-            "after_electronics_filter": stats.after_electronics_filter,
+            "scope_probes": dict(stats.scope_probes),
+            "scope_probes_admitted": list(stats.scope_probes_admitted),
         },
         "terms": terms,
     }
@@ -476,31 +554,42 @@ async def run(args: argparse.Namespace) -> int:
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json, text/plain, */*"}
 
     async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
-        for source in sources:
-            ok = await sweep_source(
+        if not args.skip_probes:
+            admitted = await probe_extra_scopes(
                 client,
-                source,
-                prefixes,
-                accumulator,
-                stats,
+                PROBE_SCOPE_CANDIDATES,
+                already_in_sweep=set(sources),
+                stats=stats,
                 throttle=args.throttle,
                 cache_dir=cache_dir,
-                resume=args.resume,
             )
-            if ok:
-                stats.sources_succeeded.append(source)
-            else:
-                stats.sources_failed.append(source)
-                logger.error("source=%s produced no usable data", source)
+            sources = sources + admitted
+
+        outcomes = await sweep_all_sources(
+            client,
+            sources,
+            prefixes,
+            accumulator,
+            stats,
+            throttle=args.throttle,
+            cache_dir=cache_dir,
+            resume=args.resume,
+        )
+
+    for source, ok in outcomes.items():
+        if ok:
+            stats.sources_succeeded.append(source)
+        else:
+            stats.sources_failed.append(source)
+            logger.error("source=%s produced no usable data", source)
 
     terms = assemble_terms(accumulator, stats, max_terms=args.max_terms)
     payload = build_output_payload(terms, stats, sources=sources)
 
     if args.dry_run:
         logger.info(
-            "[dry-run] would write %d terms (raw=%d, dedup=%d, kept=%d) to %s",
-            len(terms), stats.raw_suggestions, stats.after_dedup,
-            stats.after_electronics_filter, output_path,
+            "[dry-run] would write %d terms (raw=%d, dedup=%d) to %s",
+            len(terms), stats.raw_suggestions, stats.after_dedup, output_path,
         )
     else:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -526,8 +615,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--sources",
-        default="amazon_aps,amazon_electronics",
-        help="Comma-separated source ids (amazon_aps,amazon_electronics,bestbuy,ebay)",
+        default=",".join(DEFAULT_SOURCES),
+        help=(
+            "Comma-separated source ids. Defaults to the 6-scope mix from Step 3o-A. "
+            "Probe-gated extras (amazon_automotive, amazon_health-personal-care, "
+            "amazon_office-products) are admitted automatically when their probe "
+            "yield averages >= 5 suggestions/prefix."
+        ),
     )
     parser.add_argument(
         "--prefix-depth", type=int, default=2,
@@ -538,7 +632,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Seconds to sleep between requests within a single source (>=0).",
     )
     parser.add_argument(
-        "--max-terms", type=int, default=5000,
+        "--max-terms", type=int, default=15000,
         help="Cap on terms in the output JSON.",
     )
     parser.add_argument(
@@ -553,6 +647,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--resume", action="store_true",
         help="Skip prefixes already in the cache directory.",
+    )
+    parser.add_argument(
+        "--skip-probes", action="store_true",
+        help="Skip probe-gated scope extras (probes run by default).",
     )
     return parser.parse_args(argv)
 

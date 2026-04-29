@@ -1,12 +1,12 @@
 # Barkain — Search & Data Acquisition Strategy
 
 > Source: Planning sessions, March–April 2026
-> Last updated: April 20, 2026 (v6.1 — Step 3d-noise-filter: Tier 2 noise classifier escalates cascade to Gemini on accessory/service/peripheral-only Tier 2 results)
+> Last updated: April 28, 2026 (v6.3 — Step 3o-B: Tier-2 noise filter narrowed from a single 14-entry category denylist into three behavior pools — hard / soft (query-opt-out) / accessor-context — resolving the cat-litter false-negative and 3o-A's predictable `case` / `charger` false-negatives)
 > Companion docs: SCRAPING_AGENT_ARCHITECTURE.md, agent-browser-scraping-guide.md, IDENTITY_DISCOUNTS.md
 
 ---
 
-## Autocomplete (Step 3d)
+## Autocomplete (Step 3d, expanded in Step 3o-A)
 
 The Search tab opens a system-managed `.searchable` field whose suggestions
 are populated entirely on-device — there is no autocomplete endpoint and no
@@ -14,16 +14,29 @@ per-keystroke network call.
 
 **Vocabulary source.** A monthly (or on-flagship-launch) offline sweep at
 `scripts/generate_autocomplete_vocab.py` walks Amazon's public autocomplete
-API across ~702 prefixes (a–z + aa–zz) for two scopes: `aps` (all
-departments) and `electronics`. Best Buy and eBay autocomplete are optional
-extras that gracefully skip on shape drift. The script dedupes (case-insensitive),
-scores by distinct-prefix hit count, filters for electronics relevance
-(brand/category allowlist + model regex + token-prefix hit, plus blanket pass
-for source-scoped sources), and emits a single bundled JSON at
-`Barkain/Resources/autocomplete_vocab.json` (capped at 5 000 terms,
-≤ 250 KB). Re-runs of the script reuse a per-prefix cache directory under
-`scripts/.autocomplete_cache/` (gitignored) so a partial sweep can resume
-without re-hitting Amazon.
+API across ~702 prefixes (a–z + aa–zz) for **6 default scopes** (`aps`,
+`electronics`, `grocery`, `pet-supplies`, `tools`, `beauty`) plus **3
+probe-gated extras** (`automotive`, `health-personal-care`, `office-products`)
+that auto-admit when their `(ca, pa, tir)` probe averages ≥ 5 suggestions
+per prefix. Step 3o-A's discovery confirmed `health-personal-care` is empty
+on Amazon's autocomplete and the gate correctly rejects it. Best Buy and eBay
+autocomplete sources stay wired as optional extras that gracefully skip on
+shape drift; they are not in the production sweep.
+
+The pre-3o-A in-script `is_electronics()` term-content filter has been
+removed. Earlier discovery quantified that this filter rejected ~90% of
+`aps`-unique terms and contributed to a 97%-electronics top-200 — exactly
+the single-vertical UX gap M14 surfaced. The source-scope passlist
+(electronics + bestbuy historically) had been doing the load-bearing work
+of relevance, and source diversity is now load-bearing instead. The script
+dedupes (case-insensitive), scores by distinct-prefix hit count, and emits
+a single bundled JSON at `Barkain/Resources/autocomplete_vocab.json`
+(currently 15 000 terms / 470 KB, schema `version=2`). The
+per-source `sweep_source` calls run concurrently via
+`asyncio.gather(*tasks, return_exceptions=True)` so one source dying doesn't
+kill the run; per-source per-prefix throttle stays at 1.0 s. Re-runs reuse a
+per-prefix cache directory under `scripts/.autocomplete_cache/` (gitignored)
+so a partial sweep can resume without re-hitting Amazon.
 
 **Runtime lookup.** `actor AutocompleteService` lazy-loads the JSON on the
 first `suggestions(for:limit:)` call (one-shot ~20 ms cost on the first
@@ -44,11 +57,13 @@ search fires immediately via `POST /api/v1/products/search` (the existing 3a
 endpoint — Step 3d does not change the backend). A "Search for «query»"
 fallback row always appears so the user can submit any non-matching string.
 
-**Why this shape.** Static JSON + binary search beats a trie at this scale
-(~5 k entries) on cache locality and code complexity, and avoids per-keystroke
-latency entirely. Server autocomplete would need a similarly-sized vocab
-shipped via API anyway, plus a network round-trip per keystroke — a worse UX
-for the same payload.
+**Why this shape.** Static JSON + binary search scales linearly past 15 k
+entries (≈190 ms cold lazy-load on iPhone 15 Pro per static estimate from
+Discovery v1 §D3/§D4, <1 ms binary-search lookup, ≈1.2 MB live memory) and
+beats a trie at this scale on cache locality and code complexity. It also
+avoids per-keystroke latency entirely. Server autocomplete would need a
+similarly-sized vocab shipped via API anyway, plus a network round-trip per
+keystroke — a worse UX for the same payload.
 
 **Behavior change vs. 3a.** Step 3a auto-fired the API search after a 300 ms
 debounce once the user typed 3+ chars. Step 3d removes that path: typing only
@@ -233,7 +248,15 @@ The 2-leg flow above (3a) was rebuilt as a 3-tier cascade in 3c and hardened twi
 2. **Tier 2 — `gather(BBY Products API, UPCitemdb keyword search)` in parallel.** Brand-only queries (e.g. `apple`, `sony`, full list in `_BRAND_ONLY_TERMS`) skip Tier 2 and route straight to Tier 3 since Tier 2 floods with accessories for these.
 3. **Tier 3 — Gemini with Google Search grounding.** Fires when `force_gemini=true` (deep search, iOS Enter key) OR when no relevant Tier 2 row exists.
 
-**3d-noise-filter (2026-04-20).** Live testing showed Tier 2 returning ONLY accessories / AppleCare / gift cards / monitors named "Pixel" / games-for-Switch for many flagship queries — yet the original gate `if not bestbuy_rows and not upcitemdb_rows` only fired Gemini on TOTAL Tier 2 emptiness. Result: searching "samsung flip 7" returned 5 cases instead of the Galaxy Z Flip 7. New `_is_tier2_noise(row)` classifier (in `backend/modules/m1_product/search_service.py`) flags rows whose `category` contains denylist tokens (`case`, `warrant`, `applecare`, `subscription`, `gift card`, `specialty gift`, `protection`, `monitor`, `physical video game`, `service`, `digital signage`, `charger`, `screen protector`) OR whose `device_name` contains denylist tokens (`applecare`, `protection plan`, `best buy protection`, `gift card`, `warranty`, `subscription`, `membership card`, `belt clip`, `skin case`). The cascade now escalates to Tier 3 when `relevant_tier2 == []` (filtered count is 0). On escalation, noise rows are dropped from the merge so Gemini's flagship hits aren't crowded out at `max_results`. Two carve-outs: `force_gemini` keeps Tier 2 rows visible (user explicitly asked for both sources), and an empty-Gemini guard keeps the noisy rows on screen if Gemini also returned nothing (half-relevant beats nothing). Cost guard: real Tier 2 product rows (e.g. ASUS RTX 5090 cards under category `GPUs / Video Graphics Cards`) keep Gemini quiet — no escalation, no API spend. 9/9 probe queries fixed; 4 regression tests in `test_product_search.py`.
+**3d-noise-filter (2026-04-20).** Live testing showed Tier 2 returning ONLY accessories / AppleCare / gift cards / monitors named "Pixel" / games-for-Switch for many flagship queries — yet the original gate `if not bestbuy_rows and not upcitemdb_rows` only fired Gemini on TOTAL Tier 2 emptiness. Result: searching "samsung flip 7" returned 5 cases instead of the Galaxy Z Flip 7. New `_is_tier2_noise(row)` classifier (in `backend/modules/m1_product/search_service.py`) flags rows whose `category` or `device_name` matches a denylist. The cascade now escalates to Tier 3 when `relevant_tier2 == []` (filtered count is 0). On escalation, noise rows are dropped from the merge so Gemini's flagship hits aren't crowded out at `max_results`. Two carve-outs: `force_gemini` keeps Tier 2 rows visible (user explicitly asked for both sources), and an empty-Gemini guard keeps the noisy rows on screen if Gemini also returned nothing (half-relevant beats nothing).
+
+**3o-B noise-filter narrowing (2026-04-28).** The single 14-entry category-token denylist split into three behavior pools, motivated by a confirmed false-negative (Discovery v1 §B3) and two predictable false-negatives surfaced by 3o-A's expanded autocomplete vocab:
+
+- **Hard noise (`_TIER2_HARD_NOISE_CATEGORY_TOKENS`, 11 entries — unconditional drop):** `warrant`, `applecare`, `subscription`, `gift card`, `specialty gift`, `protection`, `monitor`, `physical video game`, `service`, `digital signage`, `screen protector`. `monitor` and `screen protector` held here per wait-and-see (revisit if telemetry surfaces real false-negatives).
+- **Soft noise (`_TIER2_SOFT_NOISE_CATEGORY_TOKENS`, 2 entries — drop unless query opts out):** `case` (opt-out tokens: `case`, `cases`), `charger` (opt-out tokens: `charger`, `chargers`, `charging`). Resolves: `iphone 17 pro max case` and `anker portable charger` queries — common shapes in 3o-A's 15K-term vocab — keep their category rows that pre-3o-B would have dropped unconditionally.
+- **Accessor + electronics context (`_ACCESSOR_CONTEXT_TOKENS`):** `accessor` substring fires only when the row category also contains a token from `{gaming, controller, console, phone, smartphone, tablet, laptop, computer, tv, video game, camera, drone, headphone, earbud, keyboard, mouse}`. Resolves Discovery §B3's cat-litter false-negative — `Litter Boxes & Accessories` no longer drops on the bare `accessor` substring. `Gaming Controller Accessories` (gaming+controller) still drops; `Mixer Accessories` and `Vacuum Accessories` survive.
+
+Sibling `_classify_tier2_noise` returns the reason label (`hard_category` / `soft_category` / `accessor_context` / `title` / `query_check`) — used only by the escalation log line for per-pool drop counts (`breakdown=`). Title denylist (`applecare`, `protection plan`, `best buy protection`, `gift card`, `warranty`, `subscription`, `membership card`, `belt clip`, `skin case`, `thumbstick`) and the brand-bleed / strict-spec / model-code gates stay untouched. Cost guard intact: real Tier 2 product rows (e.g. ASUS RTX 5090 under `GPUs / Video Graphics Cards`) keep Gemini quiet — no escalation, no API spend. iOS sim smoke (cat litter unscented / iphone 17 pro max case / anker portable charger / ps5 controller) passed end-to-end. 9/9 probe queries fixed (3d) + 19 new tests covering soft-pool opt-outs, accessor-context, regressions, telemetry.
 
 ### Vendor Latency Benchmarks (`bench/vendor-compare-1`, 2026-04-27)
 

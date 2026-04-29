@@ -8,10 +8,13 @@ gating convention from docs/TESTING.md §8).
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
+import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -103,26 +106,20 @@ def test_term_accumulator_scores_by_distinct_prefixes():
     assert len(occurrences) == 3
 
 
-# MARK: - 4. Electronics filter — positive / negative / brand / model
+# MARK: - 4. Non-electronics terms survive (filter dropped in 3o-A)
 
-@pytest.mark.parametrize(
-    "term,source,expected",
-    [
-        ("iphone 17 pro max", "amazon_aps", True),
-        ("apple watch series 10", "amazon_aps", True),
-        ("rtx 4090", "amazon_aps", True),
-        ("sony wh-1000xm5", "amazon_aps", True),
-        ("western digital ssd", "amazon_aps", True),
-        ("hard drive 2tb", "amazon_aps", True),
-        ("cat food", "amazon_aps", False),
-        ("baby diapers", "amazon_aps", False),
-        # Source-scoped pass: even non-electronics text passes when source
-        # is electronics-scoped (we trust Amazon's department filter).
-        ("phone charger lotion", "amazon_electronics", True),
-    ],
-)
-def test_electronics_filter(term: str, source: str, expected: bool):
-    assert gav.is_electronics(term, source) is expected
+def test_non_electronics_terms_pass_through():
+    """3o-A removed `is_electronics`; previously-rejected terms now pass."""
+    acc = gav.TermAccumulator()
+    acc.record("cat food", "amazon_pet-supplies", "ca")
+    acc.record("baby diapers", "amazon_aps", "ba")
+    acc.record("dog treats", "amazon_pet-supplies", "do")
+    stats = gav.SweepStats()
+    terms = gav.assemble_terms(acc, stats, max_terms=10)
+    surface = {t["t"].lower() for t in terms}
+    assert "cat food" in surface
+    assert "baby diapers" in surface
+    assert "dog treats" in surface
 
 
 # MARK: - 5. --max-terms cap
@@ -221,7 +218,7 @@ def test_build_output_payload_schema_and_sort():
     stats = gav.SweepStats(total_prefixes_swept=3, raw_suggestions=3)
     terms = gav.assemble_terms(acc, stats, max_terms=10)
     payload = gav.build_output_payload(terms, stats, sources=["amazon_aps"])
-    assert payload["version"] == 1
+    assert payload["version"] == 2
     assert set(payload).issuperset(
         {"version", "generated_at", "git_commit", "sources", "stats", "terms"}
     )
@@ -231,7 +228,9 @@ def test_build_output_payload_schema_and_sort():
     assert payload["terms"][1]["s"] == 1
     # Stats populated.
     assert payload["stats"]["after_dedup"] == 2
-    assert payload["stats"]["after_electronics_filter"] == 2
+    assert "after_electronics_filter" not in payload["stats"]
+    assert "scope_probes" in payload["stats"]
+    assert "scope_probes_admitted" in payload["stats"]
 
 
 # MARK: - 10. --dry-run writes nothing
@@ -253,6 +252,7 @@ async def test_dry_run_does_not_write_output(
             "--max-terms", "10",
             "--output", str(out),
             "--cache-dir", str(cache),
+            "--skip-probes",
             "--dry-run",
         ]
     )
@@ -302,6 +302,7 @@ async def test_run_end_to_end_writes_valid_json(
             "--max-terms", "100",
             "--output", str(out),
             "--cache-dir", str(cache),
+            "--skip-probes",
         ]
     )
     rc = await gav.run(args)
@@ -327,6 +328,149 @@ def test_display_case_preserves_short_uppercase():
     assert gav.display_case("iphone 17 pro", preserve_upper=set()) == "Iphone 17 Pro"
 
 
+# MARK: - 14. Step 3o-A — six default scopes parse from CLI default
+
+def test_default_sources_includes_six_categories():
+    """The default --sources should expand to the 6 Step 3o-A scopes."""
+    args = gav.parse_args([])
+    sources = [s for s in args.sources.split(",") if s]
+    assert sources == [
+        "amazon_aps",
+        "amazon_electronics",
+        "amazon_grocery",
+        "amazon_pet-supplies",
+        "amazon_tools",
+        "amazon_beauty",
+    ]
+    assert args.max_terms == 15000
+
+
+# MARK: - 15. Step 3o-A — probe-gated extras admit only when avg >= 5
+
+
+async def test_scope_probe_gates_extras(fresh_cache_dir: Path, monkeypatch):
+    """Yield-≥5 admits the scope; yield-<5 skips it. No network."""
+    yields = {
+        "amazon_automotive": [10, 10, 10],            # avg 10  → admit
+        "amazon_health-personal-care": [3, 4, 2],     # avg 3   → skip
+        "amazon_office-products": [6, 5, 4],          # avg 5   → admit (boundary)
+    }
+
+    async def fake_fetch(client, source, prefix):
+        seq = yields[source]
+        idx = gav.PROBE_PREFIXES.index(prefix)
+        return ["x"] * seq[idx], set()
+
+    monkeypatch.setattr(gav, "fetch_amazon", fake_fetch)
+    monkeypatch.setitem(gav.SOURCE_FETCHERS, "amazon_automotive", fake_fetch)
+    monkeypatch.setitem(gav.SOURCE_FETCHERS, "amazon_health-personal-care", fake_fetch)
+    monkeypatch.setitem(gav.SOURCE_FETCHERS, "amazon_office-products", fake_fetch)
+
+    stats = gav.SweepStats()
+    async with httpx.AsyncClient() as client:
+        admitted = await gav.probe_extra_scopes(
+            client,
+            gav.PROBE_SCOPE_CANDIDATES,
+            already_in_sweep=set(),
+            stats=stats,
+            throttle=0.0,
+            cache_dir=fresh_cache_dir,
+        )
+    assert admitted == ["amazon_automotive", "amazon_office-products"]
+    assert stats.scope_probes_admitted == admitted
+    assert stats.scope_probes["amazon_health-personal-care"] == 3.0
+    assert stats.scope_probes["amazon_automotive"] == 10.0
+
+
+# MARK: - 16. Step 3o-A — sweep_all_sources runs concurrently
+
+
+async def test_sweep_runs_sources_in_parallel(fresh_cache_dir: Path, monkeypatch):
+    """Per-source start times cluster within 100 ms (sequential would space them)."""
+    starts: dict[str, float] = {}
+
+    async def slow_sweep_source(client, source, prefixes, acc, stats, **kwargs):
+        starts[source] = time.monotonic()
+        await asyncio.sleep(0.5)
+        return True
+
+    monkeypatch.setattr(gav, "sweep_source", slow_sweep_source)
+
+    sources = ["amazon_aps", "amazon_electronics", "amazon_grocery"]
+    acc = gav.TermAccumulator()
+    stats = gav.SweepStats()
+    async with httpx.AsyncClient() as client:
+        outcomes = await gav.sweep_all_sources(
+            client, sources, ["a"], acc, stats,
+            throttle=0.0, cache_dir=fresh_cache_dir, resume=False,
+        )
+    assert outcomes == {s: True for s in sources}
+    spread = max(starts.values()) - min(starts.values())
+    assert spread < 0.1, f"sources started sequentially (spread={spread:.3f}s)"
+
+
+# MARK: - 17. Step 3o-A — one source error doesn't kill the sweep
+
+
+async def test_sweep_soft_fails_on_one_source_error(
+    fresh_cache_dir: Path, monkeypatch, caplog
+):
+    """If a source raises mid-gather the others still produce usable output."""
+
+    async def patched_sweep_source(client, source, prefixes, acc, stats, **kwargs):
+        if source == "amazon_grocery":
+            raise RuntimeError("simulated source failure")
+        acc.record(f"{source} term", source, prefixes[0])
+        return True
+
+    monkeypatch.setattr(gav, "sweep_source", patched_sweep_source)
+
+    sources = ["amazon_aps", "amazon_grocery", "amazon_electronics"]
+    acc = gav.TermAccumulator()
+    stats = gav.SweepStats()
+
+    caplog.set_level(logging.WARNING, logger="barkain.generate_autocomplete_vocab")
+    async with httpx.AsyncClient() as client:
+        outcomes = await gav.sweep_all_sources(
+            client, sources, ["a"], acc, stats,
+            throttle=0.0, cache_dir=fresh_cache_dir, resume=False,
+        )
+
+    assert outcomes["amazon_aps"] is True
+    assert outcomes["amazon_electronics"] is True
+    assert outcomes["amazon_grocery"] is False
+    assert "amazon_aps term" in acc.occurrences
+    assert "amazon_electronics term" in acc.occurrences
+    assert any(
+        "amazon_grocery" in r.message and "simulated source failure" in r.message
+        for r in caplog.records
+    )
+
+
+# MARK: - 18. Step 3o-A — output schema v2
+
+
+def test_output_schema_v2():
+    """Payload version is 2 and stats expose probe outcomes."""
+    acc = gav.TermAccumulator()
+    acc.record("cat food", "amazon_pet-supplies", "ca")
+    stats = gav.SweepStats(
+        scope_probes={
+            "amazon_automotive": 10.0,
+            "amazon_health-personal-care": 3.0,
+        },
+        scope_probes_admitted=["amazon_automotive"],
+    )
+    terms = gav.assemble_terms(acc, stats, max_terms=10)
+    payload = gav.build_output_payload(
+        terms, stats, sources=["amazon_pet-supplies", "amazon_automotive"],
+    )
+    assert payload["version"] == 2
+    assert payload["sources"] == ["amazon_pet-supplies", "amazon_automotive"]
+    assert payload["stats"]["scope_probes"]["amazon_automotive"] == 10.0
+    assert payload["stats"]["scope_probes_admitted"] == ["amazon_automotive"]
+
+
 # MARK: - Real-API smoke (opt-in)
 
 pytestmark_smoke = pytest.mark.skipif(
@@ -344,3 +488,14 @@ async def test_real_amazon_endpoint_returns_iphone_for_iph_prefix():
         values, _ = await gav.fetch_amazon(client, "amazon_aps", "iph")
     assert values, "Amazon returned no suggestions"
     assert any("iphone" in v.lower() for v in values), values[:5]
+
+
+@pytestmark_smoke
+async def test_real_amazon_endpoint_returns_results_for_pet_supplies_scope():
+    """Step 3o-A — confirms the new pet-supplies scope is queryable live."""
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(10.0),
+        headers={"User-Agent": gav.USER_AGENT},
+    ) as client:
+        values, _ = await gav.fetch_amazon(client, "amazon_pet-supplies", "ca")
+    assert values, "Amazon returned no pet-supplies suggestions for prefix 'ca'"

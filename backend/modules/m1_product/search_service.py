@@ -119,24 +119,66 @@ def _is_brand_only_query(normalized_query: str) -> bool:
 # Gemini. This filter classifies a Tier 2 row as noise so the cascade can
 # treat "Tier 2 returned only noise" the same as "Tier 2 returned nothing"
 # and escalate to Gemini. See probe data in CHANGELOG (Step 3d hardening).
-_TIER2_NOISE_CATEGORY_TOKENS: tuple[str, ...] = (
-    "case",  # "Cell Phone Cases", "Samsung Galaxy Cases"
-    "warrant",  # "AppleCare Warranties"
+# 3o-B: hard-noise category tokens — substring match in row category drops
+# the row unconditionally. These categories never represent legitimate
+# user-search intent (warranties, gift cards, gaming subscriptions, etc.).
+_TIER2_HARD_NOISE_CATEGORY_TOKENS: tuple[str, ...] = (
+    "warrant",            # AppleCare Warranties
     "applecare",
-    "subscription",  # "Gaming Subscriptions"
+    "subscription",       # Gaming Subscriptions
     "gift card",
-    "specialty gift",  # "All Specialty Gift Cards"
-    "protection",  # "Protection Plans", "Best Buy Protection"
-    "monitor",  # "Portable Monitors" — pixel 10 collision with Mobile Pixels
+    "specialty gift",     # All Specialty Gift Cards
+    "protection",         # Protection Plans, Best Buy Protection
+    "monitor",            # Portable Monitors — pixel 10 collision w/ Mobile
+                          # Pixels. Held in hard pool per 3o-B wait-and-see;
+                          # revisit if `27gp950`-class queries hit production.
     "physical video game",  # switch 2 → games-for-switch
     "service",
-    "digital signage",  # "samsung flip 7" → "Samsung 75in FLIP PRO Interactive"
-    "charger",  # "Portable Chargers" — samsung z flip 7 → SaharaCase chargers
+    "digital signage",    # samsung flip 7 → 75-inch interactive displays
     "screen protector",
-    "accessor",  # "Gaming Controller Accessories", "Video Game Accessories" —
-                 # Best Buy surfaces thumbsticks/grips above the actual
-                 # DualSense for "PS5 Controller" queries.
 )
+
+# 3o-B: soft-noise category tokens — drop unless the query itself mentions
+# the same token. Users searching "anker charger" or "iphone case" want
+# these category rows even though the category is noise for unrelated
+# queries (3o-A's expanded autocomplete vocab surfaces both shapes).
+_TIER2_SOFT_NOISE_CATEGORY_TOKENS: tuple[str, ...] = (
+    "case",
+    "charger",
+)
+
+# 3o-B: query-opt-out tokens. If the user's query contains any of these
+# strings, the soft-noise verdict for the matching category token is
+# skipped. Maps category-token → frozenset of query strings that opt out.
+_SOFT_NOISE_QUERY_OPT_OUT: dict[str, frozenset[str]] = {
+    "case": frozenset({"case", "cases"}),
+    "charger": frozenset({"charger", "chargers", "charging"}),
+}
+
+# 3o-B: electronics-parent-category tokens for the `accessor` rule. Fire
+# the `accessor` noise verdict only when the row category contains both
+# `accessor` AND one of these. Catches `Gaming Controller Accessories`,
+# `Phone Accessories`, etc., while letting `Litter Boxes & Accessories`,
+# `Mixer Accessories`, `Vacuum Accessories` through (cat-litter false-
+# negative cited in Discovery v1 §B3).
+_ACCESSOR_CONTEXT_TOKENS: frozenset[str] = frozenset({
+    "gaming",
+    "controller",
+    "console",
+    "phone",
+    "smartphone",
+    "tablet",
+    "laptop",
+    "computer",
+    "tv",
+    "video game",
+    "camera",
+    "drone",
+    "headphone",
+    "earbud",
+    "keyboard",
+    "mouse",
+})
 _TIER2_NOISE_TITLE_TOKENS: tuple[str, ...] = (
     "applecare",
     "protection plan",
@@ -272,6 +314,19 @@ def _query_strict_specs(normalized_query: str) -> list[str]:
     return out
 
 
+def _query_opts_out(category_token: str, query: str | None) -> bool:
+    """3o-B: True if `query` mentions a token that opts out of the soft-noise
+    verdict for this category token (e.g. "iphone case" opts out of `case`).
+    """
+    if query is None:
+        return False
+    opts = _SOFT_NOISE_QUERY_OPT_OUT.get(category_token, frozenset())
+    if not opts:
+        return False
+    normalized = query.lower()
+    return any(opt in normalized for opt in opts)
+
+
 def _is_tier2_noise(row: dict, *, query: str | None = None) -> bool:
     """Classify a Tier 2 row as accessory/service/peripheral noise.
 
@@ -282,18 +337,26 @@ def _is_tier2_noise(row: dict, *, query: str | None = None) -> bool:
     something) also drops it from the merged results so flagship hits
     aren't crowded out.
 
-    Two layers:
+    Three category pools (3o-B) + title denylist + query-aware checks:
 
-    1. Category + title denylists (unchanged) — catches explicit accessory
-       / service / warranty / monitor / gift-card patterns.
-    2. Relevance check against the user's query — catches Best Buy's
-       famous off-topic fuzzy matches (e.g. `focal utopia 2022` → Panasonic
-       lens, `lg 27gp950` → LG Q6 phone, `leica q3` → KEF Q3 speakers).
-       Runs only when `query` is passed — existing unit tests that call
-       `_is_tier2_noise(row)` keep working.
+    1. Hard category — unconditional drop (warranties, gift cards, …).
+    2. Soft category — drop unless query opts out (`case`, `charger`).
+    3. Accessor — drop only when category names an electronics parent
+       (Gaming/Controller/Phone/etc.); preserves `Litter Boxes &
+       Accessories` and similar non-electronics rows.
+    4. Title denylist — unchanged.
+    5. Query-aware checks — model code, strict spec, brand-bleed, soft
+       majority. Run only when `query` is passed.
     """
     category = (row.get("category") or "").lower()
-    if any(token in category for token in _TIER2_NOISE_CATEGORY_TOKENS):
+    if any(token in category for token in _TIER2_HARD_NOISE_CATEGORY_TOKENS):
+        return True
+    for token in _TIER2_SOFT_NOISE_CATEGORY_TOKENS:
+        if token in category and not _query_opts_out(token, query):
+            return True
+    if "accessor" in category and any(
+        ctx in category for ctx in _ACCESSOR_CONTEXT_TOKENS
+    ):
         return True
     title = (row.get("device_name") or row.get("name") or "").lower()
     if any(token in title for token in _TIER2_NOISE_TITLE_TOKENS):
@@ -354,6 +417,42 @@ def _is_tier2_noise(row: dict, *, query: str | None = None) -> bool:
         return True
 
     return False
+
+
+def _classify_tier2_noise(row: dict, *, query: str | None = None) -> str | None:
+    """3o-B telemetry sibling of `_is_tier2_noise`. Returns the reason a row
+    is classified noise, or None when not noise. Reasons:
+
+    - `hard_category` — hard-noise category-token match
+    - `soft_category` — soft-noise category-token match (no query opt-out)
+    - `accessor_context` — `accessor` + electronics-parent token match
+    - `title` — title-denylist match
+    - `query_check` — rolled-up query-aware checks (model code, strict spec,
+      brand-bleed, soft majority)
+    - None — not noise
+
+    Used only by the escalation-log line; production filtering still uses
+    the boolean `_is_tier2_noise`.
+    """
+    category = (row.get("category") or "").lower()
+    if any(token in category for token in _TIER2_HARD_NOISE_CATEGORY_TOKENS):
+        return "hard_category"
+    for token in _TIER2_SOFT_NOISE_CATEGORY_TOKENS:
+        if token in category and not _query_opts_out(token, query):
+            return "soft_category"
+    if "accessor" in category and any(
+        ctx in category for ctx in _ACCESSOR_CONTEXT_TOKENS
+    ):
+        return "accessor_context"
+    title = (row.get("device_name") or row.get("name") or "").lower()
+    if any(token in title for token in _TIER2_NOISE_TITLE_TOKENS):
+        return "title"
+    if query is None:
+        return None
+    if _is_tier2_noise(row, query=query):
+        return "query_check"
+    return None
+
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _STRIP_PUNCT_RE = re.compile(r"^[\W_]+|[\W_]+$", re.UNICODE)
@@ -562,10 +661,33 @@ class ProductSearchService:
                 ]
                 if (len(noise_dropped_bb) != len(bestbuy_rows)
                         or len(noise_dropped_upc) != len(upcitemdb_rows)):
+                    # 3o-B: per-pool drop counts for observability — lets us
+                    # validate the wait-and-see disposition for `monitor` /
+                    # `screen protector` and detect over-permissive opt-outs.
+                    breakdown: dict[str, int] = {
+                        "hard_category": 0,
+                        "soft_category": 0,
+                        "accessor_context": 0,
+                        "title": 0,
+                        "query_check": 0,
+                    }
+                    for source_rows, kept_rows in (
+                        (bestbuy_rows, noise_dropped_bb),
+                        (upcitemdb_rows, noise_dropped_upc),
+                    ):
+                        kept_ids = {id(r) for r in kept_rows}
+                        for r in source_rows:
+                            if id(r) in kept_ids:
+                                continue
+                            reason = _classify_tier2_noise(r, query=normalized)
+                            if reason is not None:
+                                breakdown[reason] = breakdown.get(reason, 0) + 1
                     logger.info(
-                        "tier2 noise filter dropped bb=%d→%d upc=%d→%d for query=%r",
+                        "tier2 noise filter dropped bb=%d→%d upc=%d→%d "
+                        "query=%r breakdown=%s",
                         len(bestbuy_rows), len(noise_dropped_bb),
-                        len(upcitemdb_rows), len(noise_dropped_upc), normalized,
+                        len(upcitemdb_rows), len(noise_dropped_upc),
+                        normalized, breakdown,
                     )
                 bestbuy_rows = noise_dropped_bb
                 upcitemdb_rows = noise_dropped_upc
