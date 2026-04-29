@@ -62,7 +62,7 @@ final class APIClientTests: XCTestCase {
             _ = try await client.resolveProduct(upc: "000000000000")
             XCTFail("Expected notFound error")
         } catch let error as APIError {
-            XCTAssertEqual(error, .notFound)
+            XCTAssertEqual(error, .notFound())
         } catch {
             XCTFail("Unexpected error type: \(error)")
         }

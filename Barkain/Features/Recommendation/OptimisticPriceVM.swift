@@ -11,7 +11,11 @@ private let optimisticLog = Logger(subsystem: "com.barkain.app", category: "Opti
 enum OptimisticResolveOutcome: Sendable {
     case success(Product)
     case needsConfirmation(LowConfidenceCandidate)
-    case unresolved
+    /// 404 from `/resolve-from-search`. ``reason`` carries Gemini's stated
+    /// explanation when the backend included it in the error envelope
+    /// (cat-rel-1-L2-ux). Nil when the 404 was a hard miss or came from
+    /// the UPC path.
+    case unresolved(reason: String? = nil)
     case failed(APIError)
 }
 
@@ -197,10 +201,10 @@ final class OptimisticPriceVM: PriceComparisonProviding {
         } catch is CancellationError {
             optimisticLog.info("resolve cancelled by parent")
             return .failed(.unknown(0, "cancelled"))
-        } catch APIError.notFound {
-            optimisticLog.info("resolve 404 — surfacing unresolved")
+        } catch APIError.notFound(let reason) {
+            optimisticLog.info("resolve 404 — surfacing unresolved reason=\(reason ?? "(none)", privacy: .public)")
             inner.isPriceLoading = false
-            return .unresolved
+            return .unresolved(reason: reason)
         } catch let apiError as APIError {
             optimisticLog.warning(
                 "resolve failed with APIError — \(apiError.localizedDescription, privacy: .public)"

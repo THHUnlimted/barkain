@@ -5,7 +5,13 @@ import Foundation
 enum APIError: Error, Equatable, LocalizedError, Sendable {
     case network(URLError)
     case unauthorized
-    case notFound
+    /// 404 — product/UPC not found. Carries the backend's optional
+    /// ``details["reasoning"]`` (cat-rel-1-L2-ux) when Gemini explained
+    /// *why* it refused (multi-variant SKU, dealer-only stock, etc.) so
+    /// iOS can surface it under the generic "couldn't find" copy.
+    /// Existing `case .notFound:` patterns continue to match without
+    /// changes since Swift allows ignoring associated values.
+    case notFound(reason: String? = nil)
     case rateLimited
     case validation(String)
     case server(String)
@@ -26,7 +32,13 @@ enum APIError: Error, Equatable, LocalizedError, Sendable {
             return "Couldn't reach the server. Check your connection and try again."
         case .unauthorized:
             return "Please sign in again to continue."
-        case .notFound:
+        case .notFound(let reason):
+            // cat-rel-1-L2-ux: when Gemini gave a reason, prefer it over
+            // the generic copy. The reasoning is already user-readable
+            // (Gemini phrases its "I refused because…" as a sentence).
+            if let reason, !reason.isEmpty {
+                return reason
+            }
             return "Couldn't find this one."
         case .rateLimited:
             return "Too many requests in a row. Try again in a moment."

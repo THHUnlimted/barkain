@@ -528,7 +528,12 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
         case 401:
             return .unauthorized
         case 404:
-            return .notFound
+            // cat-rel-1-L2-ux: hoist Gemini's stated reasoning out of
+            // `details["reasoning"]` (only present on
+            // `/resolve-from-search` 404s when the backend captured it).
+            // For any other 404 the reason stays nil and the existing
+            // generic copy ("Couldn't find this one.") wins.
+            return .notFound(reason: detail?.details?["reasoning"])
         case 422:
             return .validation(detail?.message ?? "Validation failed")
         case 429:
@@ -579,7 +584,11 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
             throw APIError.unauthorized
 
         case 404:
-            throw APIError.notFound
+            // cat-rel-1-L2-ux: lift Gemini's stated reasoning out of
+            // `details.reasoning` when present so iOS can show *why* we
+            // came back empty in `UnresolvedProductView`.
+            let detail = Self.decodeErrorDetail(body: data, decoder: decoder)
+            throw APIError.notFound(reason: detail?.details?["reasoning"])
 
         case 422:
             let detail = Self.decodeErrorDetail(body: data, decoder: decoder)
@@ -627,7 +636,11 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
         case 401:
             throw APIError.unauthorized
         case 404:
-            throw APIError.notFound
+            // cat-rel-1-L2-ux: lift Gemini's stated reasoning out of
+            // `details.reasoning` when present so iOS can show *why* we
+            // came back empty in `UnresolvedProductView`.
+            let detail = Self.decodeErrorDetail(body: data, decoder: decoder)
+            throw APIError.notFound(reason: detail?.details?["reasoning"])
         case 422:
             let detail = Self.decodeErrorDetail(body: data, decoder: decoder)
             throw APIError.validation(detail?.message ?? "Validation failed")

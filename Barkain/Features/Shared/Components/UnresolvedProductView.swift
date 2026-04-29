@@ -22,6 +22,14 @@ struct UnresolvedProductView: View {
     /// readable label (e.g. bare UPC in Scanner).
     var searchHint: String?
 
+    /// cat-rel-1-L2-ux: optional Gemini-stated reason surfaced under the
+    /// generic copy. Set by `SearchViewModel.unresolvedReason` when the
+    /// `/resolve-from-search` 404 envelope carried `details.reasoning`
+    /// (multi-variant SKUs, dealer-only stock, discontinued lines).
+    /// Nil for the plain "we just don't have it" case — the original
+    /// generic copy is still shown alone.
+    var reasoning: String?
+
     /// Primary CTA — typically "Scan another item" from Search or
     /// "Try again" from Scanner.
     let primaryActionTitle: String
@@ -53,6 +61,23 @@ struct UnresolvedProductView: View {
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, Spacing.md)
+
+                    // cat-rel-1-L2-ux: when the backend handed up a
+                    // Gemini-authored reason, show it as a subtle
+                    // explanation below the generic copy. Not styled as
+                    // an error — just italic to mark it as a quoted
+                    // explanation rather than app-authored copy.
+                    if let reasoning, !reasoning.isEmpty {
+                        Text(reasoning)
+                            .font(.barkainCaption)
+                            .italic()
+                            .foregroundStyle(Color.barkainOnSurfaceVariant.opacity(0.85))
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, Spacing.md)
+                            .padding(.top, Spacing.xs)
+                            .accessibilityIdentifier("unresolvedReasoning")
+                    }
                 }
 
                 VStack(spacing: Spacing.sm) {
@@ -142,6 +167,18 @@ struct UnresolvedProductView: View {
 #Preview("Long-name context") {
     UnresolvedProductView(
         searchHint: "Sony WH-1000XM5 Wireless Noise-Cancelling Over-Ear Headphones",
+        primaryActionTitle: "Try a different search",
+        primaryAction: {},
+        secondaryActionTitle: "Scan the barcode instead",
+        secondaryAction: {}
+    )
+    .background(Color.barkainSurface)
+}
+
+#Preview("With Gemini reasoning (cat-rel-1-L2-ux)") {
+    UnresolvedProductView(
+        searchHint: "Husqvarna 460 Rancher chainsaw",
+        reasoning: "Multiple SKU variants exist for this model — barcode scanning will pin the right one.",
         primaryActionTitle: "Try a different search",
         primaryAction: {},
         secondaryActionTitle: "Scan the barcode instead",

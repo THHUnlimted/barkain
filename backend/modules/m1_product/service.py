@@ -141,10 +141,17 @@ class UPCNotFoundForDescriptionError(Exception):
     derived from the description. The router maps this to HTTP 404 with a
     specific error code so the iOS client can surface a clearer message
     than the generic "product not found".
+
+    cat-rel-1-L2-ux: ``reasoning`` carries Gemini's stated explanation for
+    refusing to commit to a UPC (multi-variant SKU, dealer-only stock,
+    etc.) when present. The router includes it in the error envelope's
+    ``details`` so iOS can show *why* we came back empty instead of the
+    generic "couldn't find this one" copy.
     """
 
-    def __init__(self, device_name: str):
+    def __init__(self, device_name: str, reasoning: str | None = None):
         self.device_name = device_name
+        self.reasoning = reasoning
         super().__init__(f"No UPC found for product description: {device_name!r}")
 
 
@@ -214,13 +221,18 @@ class ProductResolutionService:
             self._lookup_upc_from_upcitemdb(device_name, brand),
             return_exceptions=True,
         )
-        gemini_upc = gemini_result if isinstance(gemini_result, str) else None
-        upcitemdb_upc = upcitemdb_result if isinstance(upcitemdb_result, str) else None
-        if isinstance(gemini_result, BaseException):
+        # Gemini leg returns ``(upc, reasoning)`` — extract both. Treat any
+        # other shape (legacy tests, exception) as "no signal".
+        gemini_upc: str | None = None
+        gemini_reasoning: str | None = None
+        if isinstance(gemini_result, tuple) and len(gemini_result) == 2:
+            gemini_upc, gemini_reasoning = gemini_result
+        elif isinstance(gemini_result, BaseException):
             logger.warning(
                 "Gemini device→UPC raised for %r: %s",
                 device_name, gemini_result,
             )
+        upcitemdb_upc = upcitemdb_result if isinstance(upcitemdb_result, str) else None
         if isinstance(upcitemdb_result, BaseException):
             logger.warning(
                 "UPCitemdb fallback raised for %r: %s",
@@ -229,7 +241,13 @@ class ProductResolutionService:
 
         upc = gemini_upc or upcitemdb_upc
         if not upc:
-            raise UPCNotFoundForDescriptionError(device_name)
+            # cat-rel-1-L2-ux: pass Gemini's stated reason through so the
+            # router can include it in the 404 envelope and iOS can show
+            # *why* we came back empty (multi-variant SKU, dealer-only,
+            # discontinued, etc.) instead of the generic copy.
+            raise UPCNotFoundForDescriptionError(
+                device_name, reasoning=gemini_reasoning
+            )
 
         # Resolve the UPC to a canonical Product (may persist a new row).
         # We sanity-check the result against the user's query AFTER persistence
@@ -242,7 +260,9 @@ class ProductResolutionService:
                 "Resolved product %r (upc=%s, brand=%s) does not match query %r — rejecting",
                 product.name, upc, product.brand, device_name,
             )
-            raise UPCNotFoundForDescriptionError(device_name)
+            raise UPCNotFoundForDescriptionError(
+                device_name, reasoning=gemini_reasoning
+            )
 
         await self._cache_devupc(cache_key, upc)
         return product
@@ -346,11 +366,21 @@ class ProductResolutionService:
         device_name: str,
         brand: str | None,
         model: str | None,
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
         """Call Gemini to convert a device description into a canonical UPC.
 
         Retries once with a broader prompt if the first attempt returns
-        null. Returns a validated 12/13-digit string or None.
+        null. Returns ``(upc, reasoning)`` — both Optional. ``upc`` is a
+        validated 12/13-digit string when Gemini commits; ``reasoning`` is
+        Gemini's stated explanation when it refused (e.g. "Multiple SKU
+        variants — recommend scanning the barcode"), surfaced to iOS via
+        ``UPCNotFoundForDescriptionError.reasoning`` so the user sees why
+        we came back empty (cat-rel-1-L2-ux). Truncated to 200 chars.
+
+        Both fields are None on transport / parse failures — the caller
+        cannot distinguish a soft "Gemini refused" from a hard "Gemini
+        crashed", but the upstream UPCitemdb leg is identical in both
+        cases so the distinction doesn't change behavior.
         """
         try:
             prompt = build_device_to_upc_prompt(device_name, brand, model)
@@ -373,26 +403,21 @@ class ProductResolutionService:
 
             if upc:
                 logger.info("Gemini resolved device→UPC: %r → %s", device_name, upc)
-            else:
-                # Log the model's stated reason on the retry pass — for
-                # genuinely-unverifiable SKUs (Husqvarna dealer-stock,
-                # multi-variant product lines) Gemini explains *why* it
-                # refused, which is the only signal we have for diagnosing
-                # repeat failures (cat-rel-1-L2). Truncate to 200 chars to
-                # keep log lines readable.
-                reasoning = ""
-                if isinstance(raw, dict):
-                    reasoning = str(raw.get("reasoning") or "")[:200]
-                logger.info(
-                    "Gemini could not resolve device→UPC after retry: %r reason=%r",
-                    device_name, reasoning,
-                )
-            return upc
+                return upc, None
+
+            reasoning = ""
+            if isinstance(raw, dict):
+                reasoning = str(raw.get("reasoning") or "")[:200]
+            logger.info(
+                "Gemini could not resolve device→UPC after retry: %r reason=%r",
+                device_name, reasoning,
+            )
+            return None, (reasoning or None)
         except Exception:
             logger.warning(
                 "Gemini device→UPC lookup failed for %r", device_name, exc_info=True
             )
-            return None
+            return None, None
 
     async def resolve(self, upc: str) -> Product:
         """Resolve a UPC to a Product, checking all sources in order.

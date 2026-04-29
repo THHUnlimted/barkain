@@ -1546,6 +1546,27 @@ def test_existing_screen_protector_still_drops():
     assert _is_tier2_noise(row, query="iphone screen protector") is True
 
 
+def test_existing_game_download_still_drops():
+    """noise-filter-L1: Best Buy ships digital game/DLC rows under category
+    'Game Download' or 'Game Downloads' which the original `physical video
+    game` token doesn't substring-match. `switch oled` queries promote those
+    rows ahead of the real console SKU and the cascade then 422s. Hard pool
+    — drop unconditionally regardless of query.
+    """
+    from modules.m1_product.search_service import _is_tier2_noise
+
+    dlc_row = {
+        "device_name": "The Legend of Zelda: Tears of the Kingdom — Standard Edition",
+        "brand": "Nintendo",
+        "category": "Game Downloads",
+    }
+    assert _is_tier2_noise(dlc_row, query="switch oled") is True
+    assert _is_tier2_noise(dlc_row) is True
+    # Singular "Game Download" also matches.
+    dlc_row["category"] = "Nintendo Switch Game Download"
+    assert _is_tier2_noise(dlc_row, query="switch oled") is True
+
+
 def test_classify_returns_hard_category_for_warranty():
     from modules.m1_product.search_service import _classify_tier2_noise
 

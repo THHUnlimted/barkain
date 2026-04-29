@@ -316,7 +316,7 @@ final class SearchViewModelTests: XCTestCase {
         // the same search-results state with no next step). The alert
         // branch remains for structural failures (e.g. DB row missing
         // productId) — only clean backend 404s land here.
-        mockClient.resolveFromSearchResult = .failure(.notFound)
+        mockClient.resolveFromSearchResult = .failure(.notFound())
         let result = ProductSearchResult(
             deviceName: "Unknown Mystery Gadget", model: nil, brand: nil,
             category: nil, confidence: 0.3, primaryUpc: nil,
@@ -337,7 +337,7 @@ final class SearchViewModelTests: XCTestCase {
         // demo-prep-1 Item 2: the "Try a different search" CTA must clear
         // the unresolved state so the user can refine their query and
         // see search results again.
-        mockClient.resolveFromSearchResult = .failure(.notFound)
+        mockClient.resolveFromSearchResult = .failure(.notFound())
         let result = ProductSearchResult(
             deviceName: "Unknown Mystery Gadget", model: nil, brand: nil,
             category: nil, confidence: 0.3, primaryUpc: nil,
@@ -540,7 +540,7 @@ final class SearchViewModelTests: XCTestCase {
 
     func test_optimisticTap_nonDB_404_tearsDownVMAndSetsUnresolvedAfterTap() async {
         enableOptimisticSearchTap()
-        mockClient.resolveFromSearchResult = .failure(.notFound)
+        mockClient.resolveFromSearchResult = .failure(.notFound())
         let result = ProductSearchResult(
             deviceName: "Unknown Mystery Gadget", model: nil, brand: nil,
             category: nil, confidence: 0.3, primaryUpc: nil,

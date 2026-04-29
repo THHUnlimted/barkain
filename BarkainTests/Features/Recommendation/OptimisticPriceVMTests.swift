@@ -117,7 +117,7 @@ final class OptimisticPriceVMTests: XCTestCase {
     }
 
     func test_start_withUPC_404FallsThroughToDescriptionBasedResolve() async {
-        mockClient.resolveProductResult = .failure(.notFound)
+        mockClient.resolveProductResult = .failure(.notFound())
         mockClient.resolveFromSearchResult = .success(.loaded(TestFixtures.sampleProduct))
         mockClient.streamPricesEvents = TestFixtures.successfulStreamEvents
 
@@ -201,7 +201,7 @@ final class OptimisticPriceVMTests: XCTestCase {
     }
 
     func test_start_with404_reportsUnresolved_andClearsLoadingState() async {
-        mockClient.resolveFromSearchResult = .failure(.notFound)
+        mockClient.resolveFromSearchResult = .failure(.notFound())
 
         let vm = OptimisticPriceVM(
             result: sampleResultWithoutUPC,

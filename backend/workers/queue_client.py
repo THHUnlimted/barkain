@@ -37,6 +37,21 @@ ALL_QUEUES: tuple[str, ...] = (
     QUEUE_DISCOUNT_VERIFICATION,
 )
 
+# 2h-ops: SQS DLQ wiring. Each main queue gets a sibling `<name>-dlq` with a
+# RedrivePolicy. Default maxReceiveCount=3 means the message is processed up
+# to three times before SQS auto-redrives it to the DLQ — high enough to
+# tolerate transient adapter blips (rate limits, timeouts) but low enough
+# that a poison message can't lock a worker in an infinite redrive loop.
+# Tune via `DLQ_MAX_RECEIVE_COUNT` only if a specific queue exhibits a
+# different transient/poison ratio.
+DLQ_SUFFIX = "-dlq"
+DLQ_MAX_RECEIVE_COUNT = 3
+
+
+def dlq_name(queue_name: str) -> str:
+    """Map main queue name → sibling DLQ name."""
+    return f"{queue_name}{DLQ_SUFFIX}"
+
 
 _UNSET = object()
 
@@ -128,3 +143,69 @@ class SQSClient:
         url = await asyncio.to_thread(_create)
         self._url_cache[queue_name] = url
         return url
+
+    async def get_queue_arn(self, queue_name: str) -> str:
+        """Resolve the canonical ARN for an existing queue.
+
+        Used by DLQ wiring — RedrivePolicy.deadLetterTargetArn requires the
+        ARN of the target DLQ, not its URL or name.
+        """
+
+        def _get() -> str:
+            resp = self._client.get_queue_attributes(
+                QueueUrl=self.get_queue_url(queue_name),
+                AttributeNames=["QueueArn"],
+            )
+            return resp["Attributes"]["QueueArn"]
+
+        return await asyncio.to_thread(_get)
+
+    async def set_queue_attributes(
+        self, queue_name: str, attributes: dict[str, str]
+    ) -> None:
+        """Apply attributes to an existing queue (idempotent).
+
+        Used to attach a RedrivePolicy after both the main queue and its DLQ
+        exist. Splitting this from create_queue keeps creation simple and
+        sidesteps SQS's `QueueNameExists` semantics for create-with-attrs
+        retries.
+        """
+
+        def _set() -> None:
+            self._client.set_queue_attributes(
+                QueueUrl=self.get_queue_url(queue_name),
+                Attributes=attributes,
+            )
+
+        await asyncio.to_thread(_set)
+
+    async def create_queue_with_dlq(
+        self,
+        queue_name: str,
+        *,
+        max_receive_count: int = DLQ_MAX_RECEIVE_COUNT,
+    ) -> tuple[str, str]:
+        """Create main queue + sibling DLQ and wire the RedrivePolicy.
+
+        Idempotent: each create_queue call returns the existing URL, and
+        set_queue_attributes overwrites the policy in-place so re-running
+        ``setup-queues`` after editing ``DLQ_MAX_RECEIVE_COUNT`` rolls the
+        change forward without manual intervention.
+
+        Returns:
+            (main_queue_url, dlq_url)
+        """
+        dlq = dlq_name(queue_name)
+        dlq_url = await self.create_queue(dlq)
+        dlq_arn = await self.get_queue_arn(dlq)
+        main_url = await self.create_queue(queue_name)
+        redrive_policy = json.dumps(
+            {
+                "deadLetterTargetArn": dlq_arn,
+                "maxReceiveCount": max_receive_count,
+            }
+        )
+        await self.set_queue_attributes(
+            queue_name, {"RedrivePolicy": redrive_policy}
+        )
+        return main_url, dlq_url
