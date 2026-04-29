@@ -1,12 +1,12 @@
 # Barkain — Search & Data Acquisition Strategy
 
 > Source: Planning sessions, March–April 2026
-> Last updated: April 20, 2026 (v6.1 — Step 3d-noise-filter: Tier 2 noise classifier escalates cascade to Gemini on accessory/service/peripheral-only Tier 2 results)
+> Last updated: April 28, 2026 (v6.2 — Step 3o-A: autocomplete vocab expanded from 4 448 to 15 000 terms across 8 Amazon scopes; in-script `is_electronics()` filter removed)
 > Companion docs: SCRAPING_AGENT_ARCHITECTURE.md, agent-browser-scraping-guide.md, IDENTITY_DISCOUNTS.md
 
 ---
 
-## Autocomplete (Step 3d)
+## Autocomplete (Step 3d, expanded in Step 3o-A)
 
 The Search tab opens a system-managed `.searchable` field whose suggestions
 are populated entirely on-device — there is no autocomplete endpoint and no
@@ -14,16 +14,29 @@ per-keystroke network call.
 
 **Vocabulary source.** A monthly (or on-flagship-launch) offline sweep at
 `scripts/generate_autocomplete_vocab.py` walks Amazon's public autocomplete
-API across ~702 prefixes (a–z + aa–zz) for two scopes: `aps` (all
-departments) and `electronics`. Best Buy and eBay autocomplete are optional
-extras that gracefully skip on shape drift. The script dedupes (case-insensitive),
-scores by distinct-prefix hit count, filters for electronics relevance
-(brand/category allowlist + model regex + token-prefix hit, plus blanket pass
-for source-scoped sources), and emits a single bundled JSON at
-`Barkain/Resources/autocomplete_vocab.json` (capped at 5 000 terms,
-≤ 250 KB). Re-runs of the script reuse a per-prefix cache directory under
-`scripts/.autocomplete_cache/` (gitignored) so a partial sweep can resume
-without re-hitting Amazon.
+API across ~702 prefixes (a–z + aa–zz) for **6 default scopes** (`aps`,
+`electronics`, `grocery`, `pet-supplies`, `tools`, `beauty`) plus **3
+probe-gated extras** (`automotive`, `health-personal-care`, `office-products`)
+that auto-admit when their `(ca, pa, tir)` probe averages ≥ 5 suggestions
+per prefix. Step 3o-A's discovery confirmed `health-personal-care` is empty
+on Amazon's autocomplete and the gate correctly rejects it. Best Buy and eBay
+autocomplete sources stay wired as optional extras that gracefully skip on
+shape drift; they are not in the production sweep.
+
+The pre-3o-A in-script `is_electronics()` term-content filter has been
+removed. Earlier discovery quantified that this filter rejected ~90% of
+`aps`-unique terms and contributed to a 97%-electronics top-200 — exactly
+the single-vertical UX gap M14 surfaced. The source-scope passlist
+(electronics + bestbuy historically) had been doing the load-bearing work
+of relevance, and source diversity is now load-bearing instead. The script
+dedupes (case-insensitive), scores by distinct-prefix hit count, and emits
+a single bundled JSON at `Barkain/Resources/autocomplete_vocab.json`
+(currently 15 000 terms / 470 KB, schema `version=2`). The
+per-source `sweep_source` calls run concurrently via
+`asyncio.gather(*tasks, return_exceptions=True)` so one source dying doesn't
+kill the run; per-source per-prefix throttle stays at 1.0 s. Re-runs reuse a
+per-prefix cache directory under `scripts/.autocomplete_cache/` (gitignored)
+so a partial sweep can resume without re-hitting Amazon.
 
 **Runtime lookup.** `actor AutocompleteService` lazy-loads the JSON on the
 first `suggestions(for:limit:)` call (one-shot ~20 ms cost on the first
@@ -44,11 +57,13 @@ search fires immediately via `POST /api/v1/products/search` (the existing 3a
 endpoint — Step 3d does not change the backend). A "Search for «query»"
 fallback row always appears so the user can submit any non-matching string.
 
-**Why this shape.** Static JSON + binary search beats a trie at this scale
-(~5 k entries) on cache locality and code complexity, and avoids per-keystroke
-latency entirely. Server autocomplete would need a similarly-sized vocab
-shipped via API anyway, plus a network round-trip per keystroke — a worse UX
-for the same payload.
+**Why this shape.** Static JSON + binary search scales linearly past 15 k
+entries (≈190 ms cold lazy-load on iPhone 15 Pro per static estimate from
+Discovery v1 §D3/§D4, <1 ms binary-search lookup, ≈1.2 MB live memory) and
+beats a trie at this scale on cache locality and code complexity. It also
+avoids per-keystroke latency entirely. Server autocomplete would need a
+similarly-sized vocab shipped via API anyway, plus a network round-trip per
+keystroke — a worse UX for the same payload.
 
 **Behavior change vs. 3a.** Step 3a auto-fired the API search after a 300 ms
 debounce once the user typed 3+ chars. Step 3d removes that path: typing only

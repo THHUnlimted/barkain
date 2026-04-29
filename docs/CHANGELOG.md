@@ -5148,3 +5148,75 @@ iOS (+5 files):
 - **Per-retailer thumbnails are a free win.** Adapters were already extracting `image_url`; they just got dropped at `_classify_retailer_result`. One-line addition. Render side in `PriceRow` is ~20 LOC. Doesn't require any infrastructure beyond AsyncImage.
 
 **Opens.** `thumbnail-coverage-L1` (Tier 3 Gemini search rows have no image — defer until production miss-rate measured). `thumbnail-coverage-L2` (`RecentlyScannedStore` shows stale nil-URL entries until next interaction — self-heals, no action). `thumbnail-coverage-L3` (host-blocklist or HEAD-check on broken-URL backfill — defer, iOS fallback handles it).
+
+---
+
+## Step 3o-A — Autocomplete Vocab Expansion (2026-04-28)
+
+**Branch.** `phase-3/step-3o-A` (PR pending). Source authority: `Discovery_Category_Expansion_v1_findings.md` v1 (paste-back doc, workspace only — not in repo).
+
+**Why.** After M14 (Step 3n) confirmed Barkain's downstream surface is multi-vertical (the misc-retailer slot ships pet/grocery/HPC products without issue), Mike flagged that the autocomplete UX still felt "all electronics, really nothing else." Discovery v1 quantified it: the bundled vocab was 97% electronics in the top-200, and the in-script `is_electronics()` filter was rejecting ~90% of `aps`-unique terms. The shipped 4,448-term vocab was therefore approximately `electronics-scope-unique-terms (3,175) + overlap (675) + aps-survivors (~600)`. Vertical bias was structural — drop the term-content filter, broaden the scope mix, and the bundle becomes representative of what Amazon actually surfaces.
+
+This is the first of three Phase-3 category-expansion prompts. 3o-B (Tier-2 noise filter narrowing) and 3o-C (Gemini system-instruction rewrite) ship separately.
+
+**File inventory.**
+
+Backend / scripts (3 files):
+
+- `scripts/generate_autocomplete_vocab.py` — drop `is_electronics()` + 7 supporting constants (`_BRAND_TOKENS`, `_BRAND_PHRASES`, `_CATEGORY_TOKENS`, `_CATEGORY_PHRASES`, `_TOKEN_PREFIXES`, `_MODEL_RE_LETTERS`, `_MODEL_RE_DIGITS`); replace `ALL_SOURCES = (amazon_aps, amazon_electronics, bestbuy, ebay)` with `DEFAULT_SOURCES` (6-tuple) + `PROBE_SCOPE_CANDIDATES` (3-tuple) composed into `ALL_SOURCES`; refactor `fetch_amazon` to derive `alias = source.removeprefix("amazon_")` so all 9 Amazon scopes share one fetcher; add `probe_scope` + `probe_extra_scopes` (probe `(ca, pa, tir)`, admit avg ≥ 5); add `sweep_all_sources` wrapping `asyncio.gather(*sweep_source_tasks, return_exceptions=True)`; rewrite `assemble_terms` to drop the post-dedup filter pass; bump `--max-terms` default 5000 → 15000; add `--skip-probes` flag; `SweepStats` drops `after_electronics_filter`, gains `scope_probes` + `scope_probes_admitted`; `build_output_payload.version` 1 → 2. Net ~+170 LOC, ~−85 LOC; LOC delta dominated by parallelization + probe machinery.
+- `backend/tests/scripts/test_generate_autocomplete_vocab.py` — remove the 9-case `test_electronics_filter` parametrize block; replace with `test_non_electronics_terms_pass_through` (single test asserting `cat food` / `baby diapers` / `dog treats` survive `assemble_terms`); update `test_build_output_payload_schema_and_sort` to assert `version == 2` and `after_electronics_filter NOT in stats`; add 5 new tests covering the new code paths (`test_default_sources_includes_six_categories`, `test_scope_probe_gates_extras`, `test_sweep_runs_sources_in_parallel`, `test_sweep_soft_fails_on_one_source_error`, `test_output_schema_v2`); add a smoke companion (`test_real_amazon_endpoint_returns_results_for_pet_supplies_scope`) gated on `BARKAIN_RUN_NETWORK_TESTS=1`; thread `--skip-probes` into the two `parse_args`-driven end-to-end tests so the production probe-gating path doesn't bleed into respx-stubbed harnesses.
+- `Barkain/Resources/autocomplete_vocab.json` — full regeneration. Schema unchanged at term-level (`{"t": str, "s": int}`); `version` flipped to `2`; `sources` array reflects admitted scopes only.
+
+iOS code: 0 changes. `Barkain/Services/Autocomplete/AutocompleteService.swift` decodes `Payload.Term` regardless of N; lazy-load + binary search + 8-result cap unchanged. Test bundle's hand-curated 50-term `BarkainTests/Fixtures/autocomplete_vocab_test.json` left untouched.
+
+**Pre-fix block findings (per prompt §Pre-Fix).**
+
+- **Pre-Fix #1 — UPCitemdb env var verification.** Code reads `settings.UPCITEMDB_API_KEY` (`backend/app/config.py:53`); `.env.example` already documents the matching name. EC2 (`/etc/barkain-api.env` + `/home/ubuntu/barkain-api/.env`) has no UPCitemdb key set, but architecturally EC2 is the eBay-webhook + scraper-API shim — UPC resolves run on the local Mac backend where the empty key was originally observed. **Outcome:** no doc fix needed, no in-step code change. The local empty key is Mike-side provisioning. Tracked as informational; not a regression introduced by this step.
+- **Pre-Fix #2 — `gemini_raw` JSON shape verify.** Live PG query: `SELECT source_raw->'gemini_raw' FROM products WHERE source_raw->'gemini_raw' IS NOT NULL LIMIT 1;` returned `{"name": "LG gram Pro 16-inch 2-in-1 Laptop (16T90TP-K.AAB4U1)"}`. Persistence shape is `{"name": str}` — the `device_name` key the discovery query was hunting for has been transformed away by `_get_gemini_data` (`backend/modules/m1_product/service.py:596`) since `vendor-migrate-1`. No `docs/*.md` reference the old `device_name` shape; no doc fix required.
+
+**Sweep run.** Wall-clock 12 minutes (probe phase + parallel 8-scope sweep). Cache reuse: pre-existing `amazon_aps_*` + `amazon_electronics_*` cache entries (`scripts/.autocomplete_cache/`) all hit; new scopes built fresh.
+
+| Probe scope | Avg yield/prefix | Outcome |
+|---|---|---|
+| `amazon_automotive` | 10.0 | admitted |
+| `amazon_office-products` | 7.0 | admitted |
+| `amazon_health-personal-care` | 0.0 | rejected (alias appears not to exist on Amazon's autocomplete; gate held) |
+
+Final scope mix: `amazon_aps`, `amazon_electronics`, `amazon_grocery`, `amazon_pet-supplies`, `amazon_tools`, `amazon_beauty` (6 default) + `amazon_automotive` + `amazon_office-products` (2 admitted) = 8.
+
+**Bundle stats: before vs after.**
+
+| Metric | v1 (pre-3o-A) | v2 (post-3o-A) |
+|---|---|---|
+| Term count | 4,448 | 15,000 (cap) |
+| Bundle size | ~128 KB | 470 KB |
+| Sources swept | 2 (`amazon_aps` + `amazon_electronics`) | 8 |
+| Total prefixes swept | 1,404 | 5,616 |
+| Raw suggestions | ~14,000 | 31,375 |
+| After dedup | ~9,617 | 23,712 |
+| After electronics filter | 4,448 | (filter removed) |
+| Top-200 vertical mix | 97% electronics | mixed (Mothers Day Gifts, Zip Ties, Body Wash, Cat Litter, Dog Food, Garden Hose, Aquaphor, Solar Lights Outdoor, …) |
+| Schema version | 1 | 2 |
+
+**Top-30 sample by score (proof of mix):** My Orders, Apple Watch, Mothers Day Gifts, FSA Eligible Items Only List, Zip Ties, Amazon Vine, Body Wash, Ceiling Fans With Lights, Extension Cord, Gaming PC, Gel Nail Polish, Paper Plates, Teacher Appreciation Gifts, DJI Osmo Pocket 3, Dog Treats, Garden Hose, Ryze Mushroom Coffee, Solar Lights Outdoor, AA Batteries, Aquaphor Healing Ointment, Cat Litter, CD Player, Classroom Must Haves, Dark Spot Remover For Face, Dog Food, Drizzilicious Mini Rice Cakes, Ear Buds, Flea And Tick Prevention For Dogs, JBL Bluetooth Speaker.
+
+**iOS smoke (sim, iPhone 17 / iOS 26.4, headed).**
+
+| Query | Suggestions surfaced |
+|---|---|
+| `cat` | Cat Litter, Cat Food, Cat Tree, Cat Water Fountain, Cat Toys, Cat Litter Box, Cat Scratching Post, Cat Treats — 8 pet rows, 0 electronics |
+| `dog` | Dog Treats, Dog Food, Dog Collar, Dog Harness, Dog Bed, Dog Toys, Dog Bowls, Dog Crate — 8 pet rows |
+| `iph` | Iphone 17 Pro Max Case, Iphone, Iphone 17 Case, Iphone 17 Pro Max, Iphone 16 Pro Max, Iphone 17, Iphone 17 Pro, Iphone Charger — electronics regression-clean |
+
+**Test posture.** Backend 757 → 754 collected (−3): −9 from collapsing `test_electronics_filter` parametrize cases, +6 from new tests (one of which is smoke-gated on `BARKAIN_RUN_NETWORK_TESTS=1` and counts as a skipped-not-passing). The DoD anticipated `+5 (757→~762)` under a different parametrize-counting convention; the actual on-disk delta is `+6 added / −9 collapsed`. iOS 207 unit + 6 UI unchanged. `ruff check scripts/ backend/` clean. `xcodebuild` build clean (only pre-existing Swift 6 warnings unrelated to this step).
+
+**Decisions worth remembering.**
+
+- **Drop the filter, don't rewrite it multi-vertical.** Discovery showed the source-scope passlist (`amazon_electronics`, `bestbuy`) was already doing the load-bearing work; the term-content gate just tilted toward electronics. A "smarter" multi-vertical filter would just reproduce Amazon's department classification with worse precision than Amazon itself. Pure scope-diversity is the cleanest fix.
+- **Probe-gated extras, not hard-coded.** `health-personal-care` was a planning-time guess; on `(ca, pa, tir)` Amazon returned 0 suggestions per prefix. Hard-coding the 9 scopes would have shipped an empty-yield source with no flag for it. The probe pattern auto-prunes dead scopes and surfaces the rejection in `stats.scope_probes` for next-time tuning.
+- **`return_exceptions=True` on the gather.** A single source dying mid-run (Amazon retiring an alias, a transient DNS blip on one scope) shouldn't kill the other 7 sources' terms. The soft-fail keeps partial output viable; `stats.sources_failed` records the casualty. Aligns with the existing `SourceShapeError` posture for `bestbuy` / `ebay`.
+- **Bundle `version=2` is bookkeeping.** The on-the-wire term schema (`{t, s}`) didn't change; iOS doesn't read `version`. The bump exists so future-Mike (or future-Sonnet) can see at a glance that `Barkain/Resources/autocomplete_vocab.json` was regenerated under the post-3o-A rules. If the iOS decoder ever does start reading `version`, the schema field is already there.
+- **No iOS perf measurement.** Static estimate from Discovery §D3/§D4 was 15K terms ≈ 190 ms cold lazy-load + <1 ms binary search + ~1.2 MB memory. The actual bundle is 15,000 terms / 470 KB — comfortably below the estimate envelope. If a regression surfaces post-merge the fix is a `--max-terms` reduction, not a code rewrite.
+- **Pre-warming the cache for the first sweep is not a thing.** Existing `amazon_aps_*.json` / `amazon_electronics_*.json` cache files from Step 3d remained valid (same alias param, same Amazon endpoint); `--resume` reused them. The four new scopes (grocery, pet-supplies, tools, beauty) and two probe-admitted scopes (automotive, office-products) hit the network for all 702 prefixes each.
+
+**Opens.** None tracked as known-issues — the step's success criterion is the iOS smoke, which passed clean. Future regeneration is opportunistic (flagship launches, quarterly refresh). `--resume` reuses the cache so subsequent sweeps only pay for changed/expired prefixes.
