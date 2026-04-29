@@ -125,6 +125,50 @@ def _is_pattern_upc(upc: str) -> bool:
     return bool(_PATTERN_UPC_RE.match(upc))
 
 
+# thumbnail-coverage-L3: hosts known to hotlink-block our app traffic.
+# When a UPC resolution surfaces an image URL on one of these hosts we
+# refuse to persist it — the row is created with `image_url=NULL` so the
+# scraper-backfill path stays eligible AND the iOS fallback chain
+# (Serper image search → category icon) becomes the canonical render.
+# Pre-fix: a single demandware row poisoned the cache for that UPC's
+# lifetime because the backfill only refires on NULL. Match by suffix on
+# the netloc so we cover both apex and CDN subdomains.
+#
+# Add hosts here when telemetry shows a sustained 4xx/5xx rate from
+# them. Keep this list short — every entry forces an extra fallback
+# round-trip on iOS, so don't add hosts that work for most users.
+_KNOWN_BAD_IMAGE_HOSTS: tuple[str, ...] = (
+    "demandware.net",
+)
+
+
+def _filter_known_bad_image_url(url: str | None) -> str | None:
+    """Return None for image URLs whose host hotlink-blocks our traffic.
+
+    Returns the input verbatim for any other URL (including None or empty).
+    Suffix-matches the netloc so subdomains like
+    `images.salsify.com.demandware.net` also drop. Soft-fails on parse
+    errors — a malformed URL returns the input unchanged so the existing
+    persist path can decide what to do with it.
+    """
+    if not url:
+        return url
+    try:
+        from urllib.parse import urlparse
+
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return url
+    for bad in _KNOWN_BAD_IMAGE_HOSTS:
+        if host == bad or host.endswith("." + bad):
+            logger.info(
+                "Dropping known-bad image host %s for persisted product (url=%s)",
+                bad, url,
+            )
+            return None
+    return url
+
+
 class ProductNotFoundError(Exception):
     """Raised when no source can resolve a UPC."""
 
@@ -721,13 +765,22 @@ class ProductResolutionService:
 
         Handles concurrent insert race conditions via IntegrityError.
         """
+        # thumbnail-coverage-L3: filter out image URLs from hosts that are
+        # known to hotlink-block our app traffic. Persisting them poisons
+        # the cache for the lifetime of the row — the iOS fallback chain
+        # papers over it for the user, but only when `Product.image_url`
+        # is NULL (the backfill never refires for non-null rows). Skipping
+        # the persist forces NULL up front so the fallback chain becomes
+        # the canonical path for these hosts.
+        image_url = _filter_known_bad_image_url(data.get("image_url"))
+
         product = Product(
             upc=upc,
             name=data["name"],
             brand=data.get("brand"),
             category=data.get("category"),
             description=data.get("description"),
-            image_url=data.get("image_url"),
+            image_url=image_url,
             asin=data.get("asin"),
             source=source,
             source_raw=data.get("source_raw", data),
