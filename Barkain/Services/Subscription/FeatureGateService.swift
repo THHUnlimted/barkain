@@ -126,9 +126,22 @@ final class FeatureGateService {
         defaults.bool(forKey: Self.optimisticSearchTapKey)
     }
 
-    /// 3n default-OFF: see `miscRetailerEnabledKey` documentation.
+    /// 3n: defaults OFF in production, ON in DEBUG when the flag has never
+    /// been explicitly set, so personal-device dev builds always render the
+    /// misc-retailer card without a `defaults write` ritual. Production
+    /// canary stays on the explicit-OFF default and rolls in 5/50/100 %
+    /// stages per CLAUDE.md. Tests use a non-standard `UserDefaults` suite,
+    /// so the DEBUG override is gated on `=== UserDefaults.standard` — that
+    /// way custom suites still see the explicit `bool(forKey:)` default-OFF
+    /// semantics and existing test expectations don't shift.
     var isMiscRetailerEnabled: Bool {
-        defaults.bool(forKey: Self.miscRetailerEnabledKey)
+        #if DEBUG
+        if defaults === UserDefaults.standard,
+           defaults.object(forKey: Self.miscRetailerEnabledKey) == nil {
+            return true
+        }
+        #endif
+        return defaults.bool(forKey: Self.miscRetailerEnabledKey)
     }
 
     // MARK: - Feature access
