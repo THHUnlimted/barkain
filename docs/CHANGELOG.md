@@ -5220,3 +5220,61 @@ Final scope mix: `amazon_aps`, `amazon_electronics`, `amazon_grocery`, `amazon_p
 - **Pre-warming the cache for the first sweep is not a thing.** Existing `amazon_aps_*.json` / `amazon_electronics_*.json` cache files from Step 3d remained valid (same alias param, same Amazon endpoint); `--resume` reused them. The four new scopes (grocery, pet-supplies, tools, beauty) and two probe-admitted scopes (automotive, office-products) hit the network for all 702 prefixes each.
 
 **Opens.** None tracked as known-issues — the step's success criterion is the iOS smoke, which passed clean. Future regeneration is opportunistic (flagship launches, quarterly refresh). `--resume` reuses the cache so subsequent sweeps only pay for changed/expired prefixes.
+
+---
+
+## Step 3o-B — Tier-2 Noise Filter Narrowing (2026-04-28)
+
+**Why.** The Tier-2 cascade noise filter (`backend/modules/m1_product/search_service.py::_is_tier2_noise`) was built across multiple waves to drop Best Buy's frequent off-target rows: AppleCare warranties, gift cards, gaming subscriptions, screen protectors, controller thumbsticks, etc. Discovery v1 §B3 confirmed it works well as a coarse cascade-to-Gemini trigger — 16/16 BBY rows for 8 non-electronics queries got correctly classified as noise. But it had one **confirmed false-negative** and two **predictable post-3o-A false-negatives**:
+
+1. **Confirmed (Discovery §B3 + §H3):** `cat litter unscented` query → Petkit PuraMax 2 Self-Cleaning Cat Litter Box row → category `Litter Boxes & Accessories` → `accessor` substring fires → row drops despite being the exact product the user wants.
+2. **Predictable, post-3o-A:** Bundled autocomplete now ships 15,000 terms across 8 Amazon scopes (3o-A, PR #84). Surfacing terms include `Iphone 17 Pro Max Case`, `Macbook Air 13 Inch Case`, `Anker Charger`, `Portable Charger`. Users will type these. The unconditional `case` and `charger` category-noise drops would mis-classify them.
+3. **Theoretical (Discovery §H4):** `monitor` could over-fire on legitimate monitor queries (`27gp950` → Gaming Monitors category). No observed false-negatives yet — held in hard pool per wait-and-see.
+
+The fix is **scoped, surgical narrowing**, not a rewrite. The brand-bleed gate (R3), strict-majority gate, model-code gate, voltage-spec gate, and the title-token denylist all stay intact — they're doing real work and have specific test coverage. Only the category-token denylist gets restructured.
+
+**File inventory.**
+
+- `backend/modules/m1_product/search_service.py` — replaced single `_TIER2_NOISE_CATEGORY_TOKENS` (14 entries) with three constants: `_TIER2_HARD_NOISE_CATEGORY_TOKENS` (11), `_TIER2_SOFT_NOISE_CATEGORY_TOKENS` (2), `_SOFT_NOISE_QUERY_OPT_OUT` (dict), `_ACCESSOR_CONTEXT_TOKENS` (frozenset of 16). Added `_query_opts_out` helper. Reworked `_is_tier2_noise` to consult the three pools in order (hard → soft+opt-out → accessor+context → title → query checks). Added `_classify_tier2_noise` sibling returning a reason label. Restructured the escalation-log line at `:566` to include a per-pool `breakdown=` dict. Net diff +89 LOC / −20 LOC (constants doc +30, fn body +15, classifier +35, log breakdown +15).
+- `backend/tests/modules/test_product_search.py` — added 19 new tests covering: case soft-pool drop / opt-out singular / opt-out plural; charger soft-pool drop / opt-out / charging-token opt-out; accessor-context drops (gaming-controller, phone) / keeps (litter, mixer, vacuum); regression preservation (thumbstick title, pixel-10 monitor, applecare warranty hard-pool, screen-protector hard-pool); telemetry (`_classify_tier2_noise` returns hard_category / soft_category / accessor_context / None). All 24 prior tier2/noise tests continue to pass without changes — the existing thumbstick/case row in `test_is_tier2_noise_filters_controller_accessories` has `category="Gaming Controller Accessories"` and `category="Video Game Accessories"`, both of which still drop via the new accessor-context rule because their parent tokens (`gaming`+`controller`, `video game`) are in `_ACCESSOR_CONTEXT_TOKENS`.
+- **Three pools:**
+  - **Hard noise (unconditional):** `warrant`, `applecare`, `subscription`, `gift card`, `specialty gift`, `protection`, `monitor`, `physical video game`, `service`, `digital signage`, `screen protector`. Same semantic as today for these tokens. `monitor` and `screen protector` held here per wait-and-see.
+  - **Soft noise (query-opt-out):** `case` (opts: `{case, cases}`), `charger` (opts: `{charger, chargers, charging}`). Drop unless query mentions a token from the opt-out set.
+  - **Accessor + electronics context:** `accessor` substring fires only when the row category also contains a token from `_ACCESSOR_CONTEXT_TOKENS`: `gaming, controller, console, phone, smartphone, tablet, laptop, computer, tv, video game, camera, drone, headphone, earbud, keyboard, mouse`. Outcome: `Gaming Controller Accessories` drops (gaming+controller), `Phone Accessories` drops (phone), `Litter Boxes & Accessories` keeps (no electronics parent), `KitchenAid Mixer Accessories` keeps, `Shark Vacuum Accessories` keeps.
+
+**Telemetry.** New escalation-log breakdown:
+
+```
+tier2 noise filter dropped bb=N→M upc=P→Q query='...' breakdown={'hard_category': X, 'soft_category': Y, 'accessor_context': Z, 'title': W, 'query_check': V}
+```
+
+Computed by calling `_classify_tier2_noise(row, query=normalized)` per dropped row and bucketing. Lets future telemetry validate the wait-and-see disposition for `monitor` / `screen protector` and detect over-permissive opt-outs (consistently zero `soft_category` drops would mean the `case` / `charger` opt-outs are too permissive; consistently zero `accessor_context` drops would mean Best Buy's category vocabulary has shifted).
+
+**iOS sim smoke (iPhone 17 / iOS 26.4, headed).**
+
+| Query | Outcome | 3o-B path |
+|-------|---------|-----------|
+| `cat litter unscented` | ✅ FN FIXED | Petkit PuraMax 2 + NEAKASA M1 (both `Litter Boxes & Accessories`) + 4 UPCitemdb pet rows. accessor-context kept non-electronics rows that pre-3o-B dropped on bare `accessor` substring |
+| `iphone 17 pro max case` | ✅ KEEPS | 5 case rows (Caseme, Yeykx ×3, Tasnim) + DB Apple iPhone 15 Pro Max. Soft-pool opt-out on `case` |
+| `anker portable charger` | ✅ KEEPS | 4 BBY chargers (PowerCore 20k, Wall Charger 20W/32W/Nano 45W) + 2 UPCitemdb. Categories `Portable Chargers & Power Banks` and `Charging Blocks & Power Adapters` would have dropped pre-3o-B; query opt-out keeps them |
+| `ps5 controller` | ✅ REGRESSION PRESERVED | Sony DualSense + 3 Nacon Revolution 5 Pro real PS5 controllers — all `Gaming Controllers` (not `Gaming Controller Accessories`, so accessor-context didn't fire) |
+| `samsung z flip 7` | ⚠️ pre-existing | 7 Supershield/Tasnim case variants from UPCitemdb with `category=null`. NOT a 3o-B regression — null category means no noise-filter pool can fire; would have surfaced pre-3o-B too |
+
+The autocomplete also surfaces `Iphone 17 Pro Max Case` and `Ps5 Controller` (both 3o-A vocab terms), confirming the prior step's 15K-term bundle is live.
+
+**Test posture.** Backend 754 → 773 passed (+19). 8 skipped (network-gated tests). 781 collected. `ruff check backend/` clean. `xcodebuild` build clean (only pre-existing Swift 6 warnings). iOS test counts unchanged (no Swift code touched).
+
+**Decisions worth remembering.**
+
+- **Query-opt-out vs context-required for soft-pool.** `case` and `charger` use **query-opt-out** because both legitimate and noise rows for these categories have "electronics context" — Anker portable chargers AND SaharaCase phone chargers both look electronic. Context-required wouldn't differentiate. Query-opt-out cleanly does: "anker portable charger" query keeps the row, "samsung z flip 7" query drops it. **`accessor`** uses **context-required** because non-electronics accessory categories (`Litter Boxes & Accessories`, `Mixer Accessories`, `Vacuum Accessories`) don't share parent tokens with electronics categories — clean substring-on-category gate, no query awareness needed.
+- **`_classify_tier2_noise` as sibling, not return-shape change.** Considered changing `_is_tier2_noise` to return `(bool, str | None)` but that would force every caller (production + 24 existing tests) to destructure. Sibling helper called only by the escalation-log line keeps the boolean function clean and minimizes test churn.
+- **Title denylist + brand-bleed gate stay untouched.** Both have specific test coverage and they're doing real work. The thumbstick title token (`thumbstick`) is the safety net for PS5-controller queries if `accessor` ever gets relaxed too far. Brand-bleed catches the cross-brand drift cases (Toro Recycler → Greenworks mowers) that no category gate can handle.
+- **`monitor` and `screen protector` held in hard pool.** Discovery §H4 flagged `monitor` as theoretical concern (potential over-fire on `27gp950` queries → Gaming Monitors), but no observed false-negatives in §B3's 8-query probe. The new per-pool log breakdown is the validation tool — if `hard_category` for `monitor` / `screen protector` shows up consistently for queries that should keep monitor rows, that's signal for a follow-up tightening.
+- **Test design: row-shape fixtures, not live API calls.** Discovery §B3 was a one-off live BBY probe. CI tests use row-shape dicts (`{device_name, brand, category, ...}`) matching the actual `_is_tier2_noise(row, query=...)` function signature. The `BARKAIN_RUN_INTEGRATION_TESTS=1` integration suite already covers live API contracts at the right layer — no need to duplicate.
+- **Plural-vs-singular in soft-pool tests.** `test_case_soft_noise_keeps_on_plural_cases_query` initially failed because the row title had singular "Case" but query had plural "cases" — the soft-pool opt-out worked, but downstream soft-majority then dropped the row (only 1/2 meaningful tokens matched). Fixed by giving the test row a plural title ("Defender Series Cases for iPhone 17") so it satisfies both gates. Singular/plural mismatch is a separate concern, out of scope for 3o-B.
+
+**Opens.**
+
+- `noise-filter-3oB-L1` (LOW) — UPCitemdb rows often have `category=null`; the noise filter cannot fire on null categories. The cat-litter false-negative was BBY-side (`Litter Boxes & Accessories`). UPCitemdb-side false-negatives (e.g. Supershield Z Flip 7 cases when query is just "samsung z flip 7") would need source-level category filling, which is a different surface. Pre-existing behavior, not a 3o-B regression.
+- `noise-filter-3oB-L2` (LOW) — The breakdown log line only fires when noise actually drops. For queries where every row passes (e.g. `cat litter unscented` post-3o-B), no log line. Expected behavior; if observability post-canary needs unconditional emission, switch to a metric/counter rather than a log line.
+- `noise-filter-3oB-L3` (LOW) — Wait-and-see disposition for `monitor` / `screen protector`. Watch the per-pool breakdown for queries that should keep monitor rows; if `hard_category` consistently fires for those, consider moving to soft-pool with a query-opt-out set like `{monitor, monitors, display, displays}`.
