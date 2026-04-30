@@ -94,6 +94,7 @@ async def _record_serper_outcome(outcome: str) -> None:
 
 SERPER_URL = "https://google.serper.dev/search"
 SERPER_SHOPPING_URL = "https://google.serper.dev/shopping"
+SERPER_IMAGES_URL = "https://google.serper.dev/images"
 SERPER_TIMEOUT_SEC = 10.0
 SERPER_SHOPPING_TIMEOUT_SEC = 10.0
 SERPER_NUM_RESULTS = 10
@@ -184,6 +185,66 @@ def _first_image_url(organic: list[dict], *, top: int = SERPER_TOP_N_FOR_PROMPT)
     (manufacturer or retailer), not a Google image-search redirect.
     """
     for hit in organic[:top]:
+        url = hit.get("imageUrl")
+        if isinstance(url, str) and url.startswith(("http://", "https://")):
+            return url
+    return None
+
+
+# MARK: - Thumbnail-only Serper lookup (pass 2 of SEARCH_THUMBNAIL_FALLBACK)
+#
+# Final-fallback thumbnail provider for M1 search rows. Fires only after
+# both the primary providers AND the eBay Browse API thumbnail pass missed,
+# because Serper is paid (~$0.001/call) where eBay is free. Hits Serper's
+# ``/images`` endpoint (Google Images search) — purpose-built for finding
+# images, unlike ``/search`` which only carries an ``imageUrl`` when
+# Google detected an og:image preview (often missing for niche queries).
+# Soft-fail; returns None on any error so the search pipeline never breaks
+# because of a thumbnail call.
+
+
+async def lookup_thumbnail_via_serper(query: str) -> str | None:
+    """Issue one Serper /images (Google Images) call with an arbitrary
+    product query and return the first image's URL.
+
+    Caller composes ``query`` from brand + title (or just title when brand
+    is unknown). Returns None on missing key, non-200, network error, or
+    empty results. Pulls from the ``images[].imageUrl`` field — the
+    direct hosted image, not the Google search-redirect URL.
+    """
+    api_key = settings.SERPER_API_KEY
+    if not api_key:
+        return None
+    cleaned = (query or "").strip()
+    if not cleaned:
+        return None
+
+    body = {"q": cleaned, "num": 3}
+    headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=SERPER_TIMEOUT_SEC) as client:
+            resp = await client.post(SERPER_IMAGES_URL, json=body, headers=headers)
+    except (httpx.HTTPError, httpx.TimeoutException) as exc:
+        logger.warning(
+            "Serper thumbnail fetch failed q=%r: %s: %r",
+            cleaned, type(exc).__name__, exc,
+        )
+        return None
+
+    if resp.status_code != 200:
+        logger.info(
+            "Serper thumbnail non-200 q=%r status=%s",
+            cleaned, resp.status_code,
+        )
+        return None
+
+    try:
+        data = resp.json()
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+    images = data.get("images") or []
+    for hit in images:
         url = hit.get("imageUrl")
         if isinstance(url, str) and url.startswith(("http://", "https://")):
             return url

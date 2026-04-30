@@ -15,6 +15,15 @@ class ProductResolveRequest(BaseModel):
     """Request body for POST /api/v1/products/resolve."""
 
     upc: str
+    # Optional thumbnail the iOS client already has on hand for this product
+    # (typically from a search-result row whose ``image_url`` was supplied by
+    # the M1 thumbnail backfill cascade — eBay → Serper). The backend uses
+    # this only when no upstream resolver (Gemini, UPCitemdb, Serper
+    # synthesis) returned an image. Lets the search-row thumbnail flow
+    # through to ``Product.image_url`` so the loading state and "Recently
+    # sniffed" surface the same picture the user just tapped. Barcode
+    # scans (Scanner path) leave this null.
+    fallback_image_url: str | None = Field(default=None, max_length=2048)
 
     @field_validator("upc")
     @classmethod
@@ -83,6 +92,10 @@ class ResolveFromSearchRequest(BaseModel):
     brand: str | None = Field(default=None, max_length=120)
     model: str | None = Field(default=None, max_length=120)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Same purpose as ProductResolveRequest.fallback_image_url — the
+    # search-row thumbnail (often a backfilled eBay/Serper image) so the
+    # persisted product carries the picture the user tapped.
+    fallback_image_url: str | None = Field(default=None, max_length=2048)
 
     model_config = {"protected_namespaces": ()}
 
@@ -108,6 +121,9 @@ class ResolveFromSearchConfirmRequest(BaseModel):
     model: str | None = Field(default=None, max_length=120)
     user_confirmed: bool
     query: str | None = Field(default=None, max_length=300)
+    # Search-row thumbnail forwarded from the original confirmation prompt,
+    # so the post-confirm persist also carries the user-tapped image.
+    fallback_image_url: str | None = Field(default=None, max_length=2048)
 
     model_config = {"protected_namespaces": ()}
 

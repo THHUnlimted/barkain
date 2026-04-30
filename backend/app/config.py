@@ -148,6 +148,18 @@ class Settings(BaseSettings):
     # noisy on used categories (laptops, phones).
     M2_EBAY_DROP_PARTIAL_LISTINGS: bool = False
 
+    # Last-resort thumbnail backfill for search rows that no primary provider
+    # (DB / Best Buy / UPCitemdb / Gemini-synthesis) populated. Two-pass
+    # cascade per imageless row, in parallel:
+    #   Pass 1 — eBay Browse API keyword search (free within rate limits).
+    #   Pass 2 — Serper /search (paid, ~$0.001/call) for rows still imageless
+    #            after pass 1.
+    # Both passes are soft-fail; a row that errors at any stage stays
+    # imageless and the iOS placeholder (brand initials → pawprint) renders.
+    # Default ON since the cost ceiling is bounded — pass 2 only fires for
+    # rows that pass 1 missed.
+    SEARCH_THUMBNAIL_FALLBACK: bool = True
+
     # demo-prep-1 Item 3: confidence gate on /resolve-from-search. When the
     # client-supplied search-result confidence falls below this threshold,
     # the endpoint returns 409 RESOLUTION_NEEDS_CONFIRMATION instead of

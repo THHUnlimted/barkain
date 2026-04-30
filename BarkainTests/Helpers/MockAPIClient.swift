@@ -149,9 +149,13 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
 
     // MARK: - APIClientProtocol
 
-    func resolveProduct(upc: String) async throws -> Product {
+    var resolveProductLastFallbackImageURL: String?
+    var resolveFromSearchLastFallbackImageURL: String?
+
+    func resolveProduct(upc: String, fallbackImageURL: String?) async throws -> Product {
         resolveProductCallCount += 1
         resolveProductLastUPC = upc
+        resolveProductLastFallbackImageURL = fallbackImageURL
         if resolveProductDelay > 0 {
             try await Task.sleep(for: .seconds(resolveProductDelay))
         }
@@ -162,13 +166,15 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
         deviceName: String,
         brand: String?,
         model: String?,
-        confidence: Double?
+        confidence: Double?,
+        fallbackImageURL: String?
     ) async throws -> ResolveFromSearchOutcome {
         resolveFromSearchCallCount += 1
         resolveFromSearchLastDeviceName = deviceName
         resolveFromSearchLastBrand = brand
         resolveFromSearchLastModel = model
         resolveFromSearchLastConfidence = confidence
+        resolveFromSearchLastFallbackImageURL = fallbackImageURL
         return try resolveFromSearchResult.get()
     }
 

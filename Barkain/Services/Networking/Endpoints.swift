@@ -12,8 +12,8 @@ nonisolated enum HTTPMethod: String {
 // MARK: - Endpoint
 
 nonisolated enum Endpoint {
-    case resolveProduct(upc: String)
-    case resolveFromSearch(deviceName: String, brand: String?, model: String?, confidence: Double?)
+    case resolveProduct(upc: String, fallbackImageURL: String?)
+    case resolveFromSearch(deviceName: String, brand: String?, model: String?, confidence: Double?, fallbackImageURL: String?)
     case resolveFromSearchConfirm(ResolveFromSearchConfirmRequest)
     case searchProducts(query: String, maxResults: Int, forceGemini: Bool)
     case getPrices(productId: UUID, forceRefresh: Bool = false)
@@ -151,9 +151,15 @@ nonisolated enum Endpoint {
 
     var body: Data? {
         switch self {
-        case .resolveProduct(let upc):
-            return try? JSONEncoder().encode(["upc": upc])
-        case .resolveFromSearch(let deviceName, let brand, let model, let confidence):
+        case .resolveProduct(let upc, let fallbackImageURL):
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            struct Body: Encodable {
+                let upc: String
+                let fallbackImageUrl: String?
+            }
+            return try? encoder.encode(Body(upc: upc, fallbackImageUrl: fallbackImageURL))
+        case .resolveFromSearch(let deviceName, let brand, let model, let confidence, let fallbackImageURL):
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase
             struct Body: Encodable {
@@ -161,12 +167,14 @@ nonisolated enum Endpoint {
                 let brand: String?
                 let model: String?
                 let confidence: Double?
+                let fallbackImageUrl: String?
             }
             return try? encoder.encode(Body(
                 deviceName: deviceName,
                 brand: brand,
                 model: model,
-                confidence: confidence
+                confidence: confidence,
+                fallbackImageUrl: fallbackImageURL
             ))
         case .resolveFromSearchConfirm(let request):
             let encoder = JSONEncoder()

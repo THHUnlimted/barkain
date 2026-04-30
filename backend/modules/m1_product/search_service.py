@@ -37,9 +37,13 @@ from ai.prompts.product_search import (
     build_product_search_prompt,
     build_product_search_retry_prompt,
 )
+from ai.web_search import lookup_thumbnail_via_serper
 from app.config import settings
 from modules.m1_product import upcitemdb
 from modules.m1_product.schemas import ProductSearchResponse, ProductSearchResult
+from modules.m2_prices.adapters.ebay_browse_api import (
+    lookup_thumbnail as ebay_lookup_thumbnail,
+)
 
 logger = logging.getLogger("barkain.m1.search")
 
@@ -716,6 +720,14 @@ class ProductSearchService:
         # here, so variant precision is preserved on tap.
         merged = _collapse_variants(merged, normalized, max_results)
 
+        # Last-resort thumbnail backfill (SEARCH_THUMBNAIL_FALLBACK).
+        # Two-pass cascade for rows where no primary provider supplied an
+        # image: pass 1 hits the eBay Browse API (free), pass 2 hits Serper
+        # /search (paid) for whatever pass 1 missed. Soft-fail at every
+        # stage — failed lookups leave the row imageless and the iOS
+        # placeholder (brand initials → pawprint) renders.
+        merged = await self._backfill_thumbnails(merged)
+
         # Attribute the response to the cascade tiers that actually fired
         # so iOS telemetry can split p95 latency by path.
         if force_gemini:
@@ -755,6 +767,72 @@ class ProductSearchService:
     def _cache_key(normalized_query: str, max_results: int) -> str:
         digest = hashlib.sha256(normalized_query.encode("utf-8")).hexdigest()[:16]
         return f"{REDIS_KEY_PREFIX}{digest}:{max_results}"
+
+    # MARK: - Thumbnail backfill (last-resort, SEARCH_THUMBNAIL_FALLBACK)
+
+    async def _backfill_thumbnails(
+        self, results: list[ProductSearchResult]
+    ) -> list[ProductSearchResult]:
+        """Two-pass thumbnail backfill for rows missing ``image_url``.
+
+        Pass 1 — eBay Browse API ``lookup_thumbnail`` (free within rate
+        limits). Pass 2 — Serper ``lookup_thumbnail_via_serper`` (paid),
+        only for rows still imageless after pass 1. Both passes fan out
+        per-row in parallel via ``asyncio.gather`` so total wall time is
+        max single-call latency. Returns a new list with ``image_url``
+        updated where lookups hit; original list is not mutated. No-ops
+        when the flag is off, when the input is empty, or when no rows
+        are imageless.
+        """
+        if not settings.SEARCH_THUMBNAIL_FALLBACK or not results:
+            return results
+
+        holes_idx = [i for i, r in enumerate(results) if not r.image_url]
+        if not holes_idx:
+            return results
+
+        out = list(results)
+
+        def _query_for(row: ProductSearchResult) -> str:
+            brand = (row.brand or "").strip()
+            name = (row.device_name or "").strip()
+            return (f"{brand} {name}".strip() if brand else name)
+
+        # Pass 1: eBay (free).
+        ebay_queries = [_query_for(out[i]) for i in holes_idx]
+        ebay_urls = await asyncio.gather(
+            *(ebay_lookup_thumbnail(q) for q in ebay_queries),
+            return_exceptions=True,
+        )
+        ebay_filled = 0
+        still_holes_idx: list[int] = []
+        for idx, url in zip(holes_idx, ebay_urls):
+            if isinstance(url, str) and url:
+                out[idx] = out[idx].model_copy(update={"image_url": url})
+                ebay_filled += 1
+            else:
+                still_holes_idx.append(idx)
+
+        # Pass 2: Serper (paid). Skip when nothing left to fill.
+        serper_filled = 0
+        if still_holes_idx:
+            serper_queries = [_query_for(out[i]) for i in still_holes_idx]
+            serper_urls = await asyncio.gather(
+                *(lookup_thumbnail_via_serper(q) for q in serper_queries),
+                return_exceptions=True,
+            )
+            for idx, url in zip(still_holes_idx, serper_urls):
+                if isinstance(url, str) and url:
+                    out[idx] = out[idx].model_copy(update={"image_url": url})
+                    serper_filled += 1
+
+        logger.info(
+            "thumbnail backfill: holes=%d ebay_filled=%d serper_filled=%d "
+            "still_imageless=%d",
+            len(holes_idx), ebay_filled, serper_filled,
+            len(holes_idx) - ebay_filled - serper_filled,
+        )
+        return out
 
     # MARK: - DB fuzzy match
 

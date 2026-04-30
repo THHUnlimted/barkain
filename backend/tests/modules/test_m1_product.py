@@ -976,3 +976,75 @@ async def test_persist_product_keeps_safe_image_url(
     assert response.status_code == 200
     body = response.json()
     assert body["image_url"] == "https://m.media-amazon.com/images/I/keep-me.jpg"
+
+
+# MARK: - fallback_image_url (search-row thumbnail propagation)
+
+
+@pytest.mark.asyncio
+async def test_resolve_uses_fallback_image_when_no_upstream_image(
+    client, db_session, fake_redis, gemini_fixture
+):
+    """When the resolver chain produces no image (Gemini returns name only,
+    UPCitemdb returns None), the iOS-supplied fallback_image_url is
+    persisted onto Product.image_url so the search row, loading state,
+    and Recently Sniffed all show the same thumbnail."""
+    fallback = "https://i.ebayimg.com/images/g/abc/s-l500.jpg"
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_fixture,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_URL,
+            json={"upc": VALID_UPC, "fallback_image_url": fallback},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["image_url"] == fallback
+
+
+@pytest.mark.asyncio
+async def test_resolve_ignores_fallback_image_when_upstream_supplies_one(
+    client, db_session, fake_redis, gemini_fixture, upcitemdb_fixture
+):
+    """When an upstream resolver supplies an image_url, the iOS fallback
+    is NOT used — the canonical product image wins. Prevents a stale
+    search-row thumbnail from overriding a fresher catalog image."""
+    upcitemdb_product = {
+        "name": upcitemdb_fixture["items"][0]["title"],
+        "brand": upcitemdb_fixture["items"][0]["brand"],
+        "category": upcitemdb_fixture["items"][0]["category"],
+        "description": upcitemdb_fixture["items"][0]["description"],
+        "asin": upcitemdb_fixture["items"][0]["asin"],
+        "image_url": "https://upstream.example.com/canonical.jpg",
+    }
+    fallback = "https://i.ebayimg.com/images/g/should-be-ignored.jpg"
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_fixture,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=upcitemdb_product,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_URL,
+            json={"upc": VALID_UPC, "fallback_image_url": fallback},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["image_url"] == "https://upstream.example.com/canonical.jpg"
+    assert body["image_url"] != fallback

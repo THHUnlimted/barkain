@@ -1675,3 +1675,240 @@ async def test_search_keeps_primary_upc_for_non_gemini_sources(client, db_sessio
     db_rows = [r for r in data["results"] if r["source"] == "db"]
     assert db_rows, "expected at least one DB row"
     assert db_rows[0]["primary_upc"] == "027242872349"
+
+
+# MARK: - SEARCH_THUMBNAIL_FALLBACK two-pass backfill (eBay → Serper)
+
+
+@pytest.mark.asyncio
+async def test_thumbnail_backfill_ebay_hit_skips_serper(
+    client, db_session, _stub_bestbuy_tier2
+):
+    """Pass 1 (eBay) returns an image → row is filled, pass 2 (Serper) is
+    NOT called. Confirms the cost guard: Serper only fires when eBay
+    missed."""
+    gemini_rows = [
+        {
+            "device_name": "Greenworks 80V 21-inch Cordless Mower",
+            "brand": "Greenworks",
+            "category": "Lawn",
+            "confidence": 0.6,
+            "image_url": None,  # imageless — triggers backfill
+        },
+    ]
+    with (
+        patch(
+            "modules.m1_product.search_service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_rows,
+        ),
+        patch(
+            "modules.m1_product.search_service.ebay_lookup_thumbnail",
+            new_callable=AsyncMock,
+            return_value="https://i.ebayimg.com/greenworks-mower.jpg",
+        ) as mock_ebay,
+        patch(
+            "modules.m1_product.search_service.lookup_thumbnail_via_serper",
+            new_callable=AsyncMock,
+            return_value="https://serper-should-not-be-called.example/img.jpg",
+        ) as mock_serper,
+    ):
+        response = await client.post(
+            SEARCH_URL,
+            json={"query": "greenworks cordless mower", "max_results": 3},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_results"] == 1
+    assert data["results"][0]["image_url"] == "https://i.ebayimg.com/greenworks-mower.jpg"
+    assert mock_ebay.await_count == 1
+    # eBay hit → Serper must NOT fire (paid call avoided).
+    assert mock_serper.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_thumbnail_backfill_serper_runs_when_ebay_misses(
+    client, db_session, _stub_bestbuy_tier2
+):
+    """Pass 1 (eBay) returns None → pass 2 (Serper) fires for that row
+    and its image is attached."""
+    gemini_rows = [
+        {
+            "device_name": "DeWalt 20V MAX Cordless Impact Driver Kit",
+            "brand": "DeWalt",
+            "category": "Tools",
+            "confidence": 0.6,
+            "image_url": None,
+        },
+    ]
+    with (
+        patch(
+            "modules.m1_product.search_service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_rows,
+        ),
+        patch(
+            "modules.m1_product.search_service.ebay_lookup_thumbnail",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_ebay,
+        patch(
+            "modules.m1_product.search_service.lookup_thumbnail_via_serper",
+            new_callable=AsyncMock,
+            return_value="https://cdn.example.com/dewalt-driver.jpg",
+        ) as mock_serper,
+    ):
+        response = await client.post(
+            SEARCH_URL,
+            json={"query": "dewalt impact driver", "max_results": 3},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["results"][0]["image_url"] == "https://cdn.example.com/dewalt-driver.jpg"
+    assert mock_ebay.await_count == 1
+    assert mock_serper.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_thumbnail_backfill_disabled_by_flag(
+    client, db_session, _stub_bestbuy_tier2, monkeypatch
+):
+    """SEARCH_THUMBNAIL_FALLBACK=False → neither eBay nor Serper called,
+    even when rows are imageless. Row stays imageless."""
+    monkeypatch.setattr(settings, "SEARCH_THUMBNAIL_FALLBACK", False)
+    gemini_rows = [
+        {
+            "device_name": "Random Imageless Product",
+            "brand": "TestBrand",
+            "category": "Misc",
+            "confidence": 0.5,
+            "image_url": None,
+        },
+    ]
+    with (
+        patch(
+            "modules.m1_product.search_service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_rows,
+        ),
+        patch(
+            "modules.m1_product.search_service.ebay_lookup_thumbnail",
+            new_callable=AsyncMock,
+        ) as mock_ebay,
+        patch(
+            "modules.m1_product.search_service.lookup_thumbnail_via_serper",
+            new_callable=AsyncMock,
+        ) as mock_serper,
+    ):
+        response = await client.post(
+            SEARCH_URL,
+            json={"query": "random imageless product", "max_results": 3},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["results"][0]["image_url"] is None
+    assert mock_ebay.await_count == 0
+    assert mock_serper.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_thumbnail_backfill_soft_fails_on_lookup_errors(
+    client, db_session, _stub_bestbuy_tier2
+):
+    """Both pass 1 and pass 2 raise → row stays imageless and the search
+    response is still returned successfully (no 500)."""
+    gemini_rows = [
+        {
+            "device_name": "Royal Canin Adult Dog Food",
+            "brand": "Royal Canin",
+            "category": "Pet",
+            "confidence": 0.6,
+            "image_url": None,
+        },
+    ]
+    with (
+        patch(
+            "modules.m1_product.search_service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value=gemini_rows,
+        ),
+        patch(
+            "modules.m1_product.search_service.ebay_lookup_thumbnail",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("ebay went boom"),
+        ),
+        patch(
+            "modules.m1_product.search_service.lookup_thumbnail_via_serper",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("serper went boom"),
+        ),
+    ):
+        response = await client.post(
+            SEARCH_URL,
+            json={"query": "royal canin dog food", "max_results": 3},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["results"][0]["image_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_thumbnail_backfill_skips_rows_that_already_have_an_image(
+    client, db_session, _stub_bestbuy_tier2
+):
+    """Rows with a non-null image_url are passed through untouched —
+    the backfill must not re-query providers for already-thumbnailed rows.
+    BBY rows preserve image_url through merge (Gemini rows hardcode None,
+    so test against the BBY path here). Query and row tokens are aligned
+    so the brand-bleed gate doesn't filter them as Tier 2 noise."""
+    _stub_bestbuy_tier2.return_value = [
+        {
+            "device_name": "Acme Imaged Widget Pro 19283",
+            "model": "M1",
+            "brand": "Acme",
+            "category": "Misc",
+            "primary_upc": "111122223333",
+            "image_url": "https://primary-provider.example/img.jpg",
+            "confidence": 0.9,
+        },
+        {
+            "device_name": "Acme Imageless Widget Lite 47561",
+            "model": "M2",
+            "brand": "Acme",
+            "category": "Misc",
+            "primary_upc": "444455556666",
+            "image_url": None,
+            "confidence": 0.85,
+        },
+    ]
+    with (
+        patch(
+            "modules.m1_product.search_service.ebay_lookup_thumbnail",
+            new_callable=AsyncMock,
+            return_value="https://i.ebayimg.com/sibling.jpg",
+        ) as mock_ebay,
+    ):
+        response = await client.post(
+            SEARCH_URL,
+            json={"query": "acme widget pro lite", "max_results": 3},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    rows_by_name = {r["device_name"]: r for r in data["results"]}
+    assert "Acme Imaged Widget Pro 19283" in rows_by_name
+    assert "Acme Imageless Widget Lite 47561" in rows_by_name
+    # Pre-existing image preserved verbatim.
+    assert rows_by_name["Acme Imaged Widget Pro 19283"]["image_url"] == (
+        "https://primary-provider.example/img.jpg"
+    )
+    # Imageless sibling got the eBay backfill.
+    assert rows_by_name["Acme Imageless Widget Lite 47561"]["image_url"] == (
+        "https://i.ebayimg.com/sibling.jpg"
+    )
+    # Only the imageless row triggered an eBay call.
+    assert mock_ebay.await_count == 1
