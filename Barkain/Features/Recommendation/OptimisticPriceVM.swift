@@ -226,9 +226,15 @@ final class OptimisticPriceVM: PriceComparisonProviding {
     private func resolveTappedResult(
         _ result: ProductSearchResult
     ) async throws -> ResolveFromSearchOutcome {
+        // Forward the search-row thumbnail through to the resolver so the
+        // persisted Product carries the user-tapped image (same pattern as
+        // SearchViewModel.resolveTappedResult).
+        let fallbackImage = result.imageUrl
         if let upc = result.primaryUpc, !upc.isEmpty {
             do {
-                let product = try await apiClient.resolveProduct(upc: upc)
+                let product = try await apiClient.resolveProduct(
+                    upc: upc, fallbackImageURL: fallbackImage
+                )
                 return .loaded(product)
             } catch APIError.notFound {
                 // Fall through to description-based resolve.
@@ -238,7 +244,8 @@ final class OptimisticPriceVM: PriceComparisonProviding {
             deviceName: result.deviceName,
             brand: result.brand,
             model: result.model,
-            confidence: result.confidence
+            confidence: result.confidence,
+            fallbackImageURL: fallbackImage
         )
     }
 

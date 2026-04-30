@@ -211,6 +211,8 @@ class ProductResolutionService:
         device_name: str,
         brand: str | None = None,
         model: str | None = None,
+        *,
+        fallback_image_url: str | None = None,
     ) -> Product:
         """Resolve a Gemini-sourced search result (no UPC yet) to a canonical Product.
 
@@ -298,7 +300,7 @@ class ProductResolutionService:
         # because the row itself is real — it just isn't what the user asked
         # for. Leaving it in PG benefits future scans of the right barcode;
         # we just refuse to surface it for this query.
-        product = await self.resolve(upc)
+        product = await self.resolve(upc, fallback_image_url=fallback_image_url)
         if not _resolved_matches_query(device_name, brand, product.name, product.brand):
             logger.warning(
                 "Resolved product %r (upc=%s, brand=%s) does not match query %r — rejecting",
@@ -316,6 +318,8 @@ class ProductResolutionService:
         device_name: str,
         brand: str | None = None,
         model: str | None = None,
+        *,
+        fallback_image_url: str | None = None,
     ) -> Product:
         """demo-prep-1 Item 3: resolve a low-confidence tap that the user
         confirmed in the ``ConfirmationPromptView`` sheet. Runs the same
@@ -326,7 +330,10 @@ class ProductResolutionService:
         only fires when the client supplies ``confidence`` — future
         scans won't need a gate because we trust the confirmed row).
         """
-        product = await self.resolve_from_search(device_name, brand=brand, model=model)
+        product = await self.resolve_from_search(
+            device_name, brand=brand, model=model,
+            fallback_image_url=fallback_image_url,
+        )
         raw = dict(product.source_raw) if isinstance(product.source_raw, dict) else {}
         if not raw.get("user_confirmed"):
             raw["user_confirmed"] = True
@@ -463,11 +470,19 @@ class ProductResolutionService:
             )
             return None, None
 
-    async def resolve(self, upc: str) -> Product:
+    async def resolve(
+        self, upc: str, *, fallback_image_url: str | None = None
+    ) -> Product:
         """Resolve a UPC to a Product, checking all sources in order.
 
         Args:
             upc: Validated 12-13 digit UPC string.
+            fallback_image_url: Optional thumbnail forwarded by the iOS
+                client (typically a search-row image populated by the M1
+                thumbnail-backfill cascade). Used ONLY at first-persist
+                time when no upstream resolver returned an image — never
+                overrides an existing ``Product.image_url``, never re-fires
+                for cached or already-persisted UPCs.
 
         Returns:
             Product ORM instance (existing or newly created).
@@ -497,7 +512,9 @@ class ProductResolutionService:
             return product
 
         # Step 3: Cross-validated resolution (Gemini + UPCitemdb)
-        product = await self._resolve_with_cross_validation(upc)
+        product = await self._resolve_with_cross_validation(
+            upc, fallback_image_url=fallback_image_url
+        )
         if product:
             return product
 
@@ -538,7 +555,9 @@ class ProductResolutionService:
 
     # MARK: - Cross-Validated Resolution
 
-    async def _resolve_with_cross_validation(self, upc: str) -> Product | None:
+    async def _resolve_with_cross_validation(
+        self, upc: str, *, fallback_image_url: str | None = None
+    ) -> Product | None:
         """Resolve UPC by querying Gemini and UPCitemdb, then cross-validating.
 
         Always attempts both sources for maximum accuracy. Falls back gracefully
@@ -594,7 +613,10 @@ class ProductResolutionService:
             "Product resolved via %s (confidence=%.1f): upc=%s name=%s",
             source_label, confidence, upc, product_data.get("name", "?"),
         )
-        return await self._persist_product(upc, product_data, source_label)
+        return await self._persist_product(
+            upc, product_data, source_label,
+            fallback_image_url=fallback_image_url,
+        )
 
     async def _get_gemini_data(self, upc: str, *, allow_retry: bool = True) -> dict | None:
         """Resolve a UPC via Serper-then-grounded.
@@ -759,11 +781,17 @@ class ProductResolutionService:
     # MARK: - Persistence
 
     async def _persist_product(
-        self, upc: str, data: dict, source: str
+        self, upc: str, data: dict, source: str,
+        *, fallback_image_url: str | None = None,
     ) -> Product:
         """Create or fetch a Product record and cache to Redis.
 
         Handles concurrent insert race conditions via IntegrityError.
+
+        ``fallback_image_url`` is the iOS-supplied search-row thumbnail.
+        Used ONLY when no upstream resolver returned an image (or the
+        upstream image was hotlink-blocked). Goes through the same
+        bad-host filter so a blocklisted fallback still produces NULL.
         """
         # thumbnail-coverage-L3: filter out image URLs from hosts that are
         # known to hotlink-block our app traffic. Persisting them poisons
@@ -773,6 +801,17 @@ class ProductResolutionService:
         # the persist forces NULL up front so the fallback chain becomes
         # the canonical path for these hosts.
         image_url = _filter_known_bad_image_url(data.get("image_url"))
+        if image_url is None and fallback_image_url:
+            # Same blocklist applies — a search-row thumbnail might also
+            # be on a hotlink-blocked host (especially after the eBay or
+            # Serper backfill in M1's search pipeline). Treat the fallback
+            # the same as any upstream image_url.
+            image_url = _filter_known_bad_image_url(fallback_image_url)
+            if image_url is not None:
+                logger.info(
+                    "Persisting iOS-supplied fallback thumbnail for upc=%s",
+                    upc,
+                )
 
         product = Product(
             upc=upc,

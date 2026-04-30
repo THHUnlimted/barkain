@@ -8,17 +8,24 @@ private let sseLog = Logger(subsystem: "com.barkain.app", category: "SSE")
 // MARK: - APIClientProtocol
 
 protocol APIClientProtocol: Sendable {
-    func resolveProduct(upc: String) async throws -> Product
+    /// `fallbackImageURL` carries a search-row thumbnail (typically
+    /// populated by the M1 thumbnail-backfill cascade — eBay → Serper)
+    /// through to the backend, which persists it on the canonical
+    /// `Product.image_url` ONLY when no upstream resolver supplied an
+    /// image. Pass nil from non-search paths (barcode scan).
+    func resolveProduct(upc: String, fallbackImageURL: String?) async throws -> Product
     /// demo-prep-1 Item 3: returns a `ResolveFromSearchOutcome` so the
     /// caller can branch on `.needsConfirmation` (backend 409) vs
     /// `.loaded` (backend 200) without overloading the error type.
     /// `confidence` forwards the search-result value so the backend can
     /// apply its gate; pass nil to skip the gate (legacy path).
+    /// `fallbackImageURL` works the same as on `resolveProduct`.
     func resolveProductFromSearch(
         deviceName: String,
         brand: String?,
         model: String?,
-        confidence: Double?
+        confidence: Double?,
+        fallbackImageURL: String?
     ) async throws -> ResolveFromSearchOutcome
     /// Called after the user taps Yes/No in the confirmation sheet.
     func resolveProductFromSearchConfirm(
@@ -201,15 +208,16 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
 
     // MARK: - APIClientProtocol
 
-    func resolveProduct(upc: String) async throws -> Product {
-        try await request(endpoint: .resolveProduct(upc: upc))
+    func resolveProduct(upc: String, fallbackImageURL: String? = nil) async throws -> Product {
+        try await request(endpoint: .resolveProduct(upc: upc, fallbackImageURL: fallbackImageURL))
     }
 
     func resolveProductFromSearch(
         deviceName: String,
         brand: String? = nil,
         model: String? = nil,
-        confidence: Double? = nil
+        confidence: Double? = nil,
+        fallbackImageURL: String? = nil
     ) async throws -> ResolveFromSearchOutcome {
         do {
             let product: Product = try await request(
@@ -217,7 +225,8 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
                     deviceName: deviceName,
                     brand: brand,
                     model: model,
-                    confidence: confidence
+                    confidence: confidence,
+                    fallbackImageURL: fallbackImageURL
                 )
             )
             return .loaded(product)

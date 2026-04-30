@@ -163,7 +163,8 @@ final class ScannerViewModel {
         isLoading = true
 
         do {
-            let resolvedProduct = try await apiClient.resolveProduct(upc: upc)
+            // Barcode path has no search-row thumbnail to forward — pass nil.
+            let resolvedProduct = try await apiClient.resolveProduct(upc: upc, fallbackImageURL: nil)
             product = resolvedProduct
             isLoading = false
 

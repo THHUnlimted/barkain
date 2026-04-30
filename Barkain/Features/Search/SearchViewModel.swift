@@ -364,7 +364,8 @@ final class SearchViewModel {
                     brand: pick.brand,
                     model: pick.model,
                     userConfirmed: true,
-                    query: queryForTelemetry
+                    query: queryForTelemetry,
+                    fallbackImageURL: pick.imageUrl
                 )
             )
             if let product = response.product {
@@ -426,9 +427,16 @@ final class SearchViewModel {
     /// gate. UPC path hits never trigger the confidence gate — they
     /// return loaded or 404.
     private func resolveTappedResult(_ result: ProductSearchResult) async throws -> ResolveFromSearchOutcome {
+        // Forward the search-row thumbnail (often supplied by the M1
+        // thumbnail-backfill cascade — eBay → Serper) so the persisted
+        // Product carries the same image the user just tapped. Backend
+        // only adopts it when no upstream resolver supplies one.
+        let fallbackImage = result.imageUrl
         if let upc = result.primaryUpc, !upc.isEmpty {
             do {
-                let product = try await apiClient.resolveProduct(upc: upc)
+                let product = try await apiClient.resolveProduct(
+                    upc: upc, fallbackImageURL: fallbackImage
+                )
                 return .loaded(product)
             } catch APIError.notFound {
                 // UPC path failed — fall through to description-based resolve.
@@ -438,7 +446,8 @@ final class SearchViewModel {
             deviceName: result.deviceName,
             brand: result.brand,
             model: result.model,
-            confidence: result.confidence
+            confidence: result.confidence,
+            fallbackImageURL: fallbackImage
         )
     }
 

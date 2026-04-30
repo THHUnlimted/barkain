@@ -18,7 +18,7 @@ class BarePreviewAPIClient: APIClientProtocol, @unchecked Sendable {
 
     // MARK: - Product
 
-    func resolveProduct(upc: String) async throws -> Product {
+    func resolveProduct(upc: String, fallbackImageURL: String?) async throws -> Product {
         previewUnimplemented()
     }
 
@@ -26,7 +26,8 @@ class BarePreviewAPIClient: APIClientProtocol, @unchecked Sendable {
         deviceName: String,
         brand: String?,
         model: String?,
-        confidence: Double?
+        confidence: Double?,
+        fallbackImageURL: String?
     ) async throws -> ResolveFromSearchOutcome {
         previewUnimplemented()
     }

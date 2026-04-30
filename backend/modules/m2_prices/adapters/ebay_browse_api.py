@@ -372,3 +372,80 @@ async def fetch_ebay(
             script_version="ebay_browse_api/1.0",
         ),
     )
+
+
+# MARK: - Thumbnail-only lookup (pass 1 of SEARCH_THUMBNAIL_FALLBACK)
+#
+# Last-resort thumbnail backfill for M1 search rows that the primary
+# providers didn't supply an image for. Free within eBay's rate limits
+# (5k calls/day on the public tier), so we always try eBay before
+# falling through to the paid Serper /search pass. Distinct from
+# `fetch_ebay` above — no condition filter, no listing mapping, just
+# the first item's image URL. Soft-fails on any error so the search
+# pipeline never breaks because of a thumbnail call.
+
+
+async def lookup_thumbnail(
+    query: str,
+    *,
+    cfg: Settings | None = None,
+) -> str | None:
+    """Return the first item's ``image.imageUrl`` for ``query`` from eBay
+    Browse API, or None on missing creds / non-200 / network error /
+    empty results / missing image field.
+
+    Caller is expected to compose ``query`` from brand + title (or just
+    title when brand is unknown). No condition filter is applied — the
+    goal is "find any listing whose photo represents this product",
+    not "rank-correct retail price." Limit is hardcoded to 1 because we
+    only want the first photo.
+    """
+    c = cfg or default_settings
+    if not is_configured(c):
+        return None
+    cleaned = (query or "").strip()
+    if not cleaned:
+        return None
+
+    try:
+        token = await _get_app_token(c)
+    except (EbayBrowseNotConfiguredError, httpx.HTTPError) as exc:
+        logger.warning("ebay.thumbnail oauth failed: %r", exc)
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-EBAY-C-MARKETPLACE-ID": _MARKETPLACE,
+        "Content-Type": "application/json",
+    }
+    params = {"q": cleaned, "limit": 1}
+
+    try:
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+            resp = await client.get(_SEARCH_URL, params=params, headers=headers)
+    except httpx.HTTPError as exc:
+        logger.warning("ebay.thumbnail request failed q=%r: %r", cleaned, exc)
+        return None
+
+    if resp.status_code == 401:
+        # Same token-invalidation pattern as fetch_ebay.
+        _clear_token_cache()
+    if resp.status_code >= 400:
+        logger.info(
+            "ebay.thumbnail HTTP %d q=%r body=%s",
+            resp.status_code, cleaned, resp.text[:200],
+        )
+        return None
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+
+    summaries = data.get("itemSummaries") or []
+    if not summaries:
+        return None
+    image = (summaries[0].get("image") or {}).get("imageUrl")
+    if isinstance(image, str) and image.startswith(("http://", "https://")):
+        return image
+    return None

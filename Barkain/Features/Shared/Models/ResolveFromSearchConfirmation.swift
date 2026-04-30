@@ -23,19 +23,24 @@ nonisolated struct ResolveFromSearchConfirmRequest: Codable, Sendable, Equatable
     let model: String?
     let userConfirmed: Bool
     let query: String?
+    /// Search-row thumbnail forwarded so the confirmed-resolve persists
+    /// the user-tapped image when no upstream resolver supplies one.
+    let fallbackImageURL: String?
 
     init(
         deviceName: String,
         brand: String?,
         model: String?,
         userConfirmed: Bool,
-        query: String?
+        query: String?,
+        fallbackImageURL: String? = nil
     ) {
         self.deviceName = deviceName
         self.brand = brand
         self.model = model
         self.userConfirmed = userConfirmed
         self.query = query
+        self.fallbackImageURL = fallbackImageURL
     }
 }
 

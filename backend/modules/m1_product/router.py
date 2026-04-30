@@ -49,7 +49,9 @@ async def resolve_product(
     """Resolve a UPC barcode to a canonical product."""
     service = ProductResolutionService(db=db, redis=redis_client)
     try:
-        product = await service.resolve(body.upc)
+        product = await service.resolve(
+            body.upc, fallback_image_url=body.fallback_image_url
+        )
         return ProductResponse.model_validate(product)
     except ProductNotFoundError:
         raise_http_error(
@@ -151,6 +153,7 @@ async def resolve_from_search(
             device_name=body.device_name,
             brand=body.brand,
             model=body.model,
+            fallback_image_url=body.fallback_image_url,
         )
         return ProductResponse.model_validate(product)
     except UPCNotFoundForDescriptionError as exc:
@@ -223,6 +226,7 @@ async def resolve_from_search_confirm(
             device_name=body.device_name,
             brand=body.brand,
             model=body.model,
+            fallback_image_url=body.fallback_image_url,
         )
         return ConfirmResolutionResponse(
             product=ProductResponse.model_validate(product),
