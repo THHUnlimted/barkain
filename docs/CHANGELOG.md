@@ -470,7 +470,7 @@ Live integration run against real Gemini + real EC2 containers (Amazon / Best Bu
 
 **Pre-existing issues surfaced during validation (not introduced by Step 2c):**
 
-- **SP-L1 GitHub PAT still embedded in EC2 `~/barkain/.git/config`.** Confirmed visible in `git remote -v` during deploy. Token `gho_UUsp9ML7…` is active and has push access to `molatunji3/barkain`. Still a rotation candidate.
+- **SP-L1 GitHub PAT was embedded in EC2 `~/barkain/.git/config`** at the time of this entry (2c validation). Resolved later: stripped from disk in 2i-d, then revoked by Mike in the GitHub UI on 2026-04-29 (SP-L1-b closed).
 - **EC2 origin points at `molatunji3/barkain`** fork, not `THHUnlimted/barkain` upstream referenced in `CLAUDE.md`. Step 2c landed on `main` at both remotes (squash commit `9ceafe1`), so they're in sync; the fork-vs-upstream split is cosmetic for now but worth resolving.
 
 **No fixes applied.** The SSE streaming mechanism itself — the subject of Step 2c — passed 100% of its structural checks (wire format, cache replay, batch fallback, deploy integrity). The data-quality issues are container-side and predate this session.
@@ -589,7 +589,7 @@ CLAUDE.md                                                  # v5.1 → v5.2, 2i-d
 - Started `i-09ce25ed6df7a09b2` from `stopped`, public IP `100.54.108.23`, SSH via `~/.ssh/barkain-scrapers.pem`.
 - **GitHub auth was broken on EC2**: `.git/config` embedded a leaked PAT pointing at `molatunji3/barkain` (old repo name; canonical is now `THHUnlimted/barkain`). Tried `POST /repos/THHUnlimted/barkain/keys` to add a deploy key — GitHub returned 422 "Deploy keys are disabled for this repository". Falling back on **rsync-based deploy** as the fix: `rsync -az --delete --exclude='.git/'` from local checkout to `ubuntu@ec2:~/barkain/`, then `git remote set-url origin https://github.com/THHUnlimted/barkain.git` to strip the embedded PAT. The 11-retailer Phase C/D portions of `scripts/ec2_deploy.sh` were then run inline via an ad-hoc `/tmp/deploy_2id.sh` that skipped Phase B's broken `git pull` but kept the MD5 verification.
 - **Result:** all 11 retailers built, running, `healthy`. MD5 of every `/app/extract.js` matches the repo copy. **`2b-val-L1` resolved** (no more hot-patched drift). Tunnel forwarded ports 8081–8091 to the Mac for Groups B/C/D.
-- **SP-L1 status:** the PAT string is no longer on EC2 disk, but the token itself is still valid in GitHub. Mike must revoke it in GitHub → Settings → Developer settings. Tracked as **SP-L1-b** (HIGH, Mike-only).
+- **SP-L1 status:** the PAT string was scrubbed from EC2 disk during this step (2i-d). The token remained valid in GitHub at the time of this entry — tracked as **SP-L1-b** (HIGH, Mike-only). **Resolved 2026-04-29:** Mike revoked the token in GitHub → Settings → Developer settings; SP-L1-b closed.
 
 **Group B — Watchdog `--check-all` (caught latent path bug):**
 - First live run (before any fix) classified 6 retailers as `success` (amazon, best_buy, target, home_depot, sams_club, backmarket) and 5 as `selector_drift` (walmart, lowes, ebay_new, ebay_used, fb_marketplace). All 5 heal attempts failed with `action=heal_failed`, `error_details="extract.js not found at /Users/.../backend/containers/{retailer_id}/extract.js"`.
@@ -635,7 +635,7 @@ CLAUDE.md                                                  # v5.1 → v5.2, 2i-d
 - iOS UI: **2** (`testManualUPCEntryToAffiliateSheet` + existing `testLaunch`).
 - ruff: clean on `backend/ scripts/`.
 
-**Verdict:** Step 2i-d ships clean. Phase 2 closes. The watchdog path bug is a real pre-`v0.2.0` fix that wouldn't have been caught without operational validation on first real run — same value proposition as 2i-c's worker-script FK bug. The leaked PAT is off EC2 disk; Mike's remaining deliverables are (1) revoke the token in GitHub UI (SP-L1-b), (2) keep the real `ANTHROPIC_API_KEY` in `.env`, (3) tag `v0.2.0` post-merge.
+**Verdict:** Step 2i-d ships clean. Phase 2 closes. The watchdog path bug is a real pre-`v0.2.0` fix that wouldn't have been caught without operational validation on first real run — same value proposition as 2i-c's worker-script FK bug. The leaked PAT is off EC2 disk; Mike's remaining deliverables are (1) ~~revoke the token in GitHub UI (SP-L1-b)~~ — done 2026-04-29, (2) keep the real `ANTHROPIC_API_KEY` in `.env`, (3) tag `v0.2.0` post-merge.
 
 ---
 
