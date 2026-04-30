@@ -68,13 +68,31 @@ extension Color {
     /// Light #ffddaf · Dark #3a2d15 (warm brown tint on dark surface)
     static let barkainPrimaryFixed = Color.dynamic(light: 0xFFDDAF, dark: 0x3A2D15)
 
+    /// Pre-blended warm tint for the recommendation hero card. In light it
+    /// matches the previous `primaryContainer.opacity(0.55)` over
+    /// `barkainSurface`; in dark it drops to a deep warm-brown so the gold
+    /// "BEST BARKAIN" eyebrow + "Save $X" headline pop at WCAG-AA contrast
+    /// instead of fighting a translucent-gold background.
+    /// Light #F7D18C · Dark #2A1F0E
+    static let barkainHeroSurface = Color.dynamic(light: 0xF7D18C, dark: 0x2A1F0E)
+
     /// Bright gold accent — chart strokes, dark-mode logotype.
     /// Light #ffba41 · Dark #ffd073
     static let barkainPrimaryFixedDim = Color.dynamic(light: 0xFFBA41, dark: 0xFFD073)
 
-    /// Deep brown — label text on `primaryContainer`.
-    /// Light #694700 · Dark #f9b12d (so it reads on dark-mode containers)
+    /// Deep brown — label text on `primaryContainer` (the always-gold pill
+    /// fill used by `BestBarkainBadge`). Stays dark in both modes because
+    /// the container is gold in both modes; gold-on-gold would be unreadable.
+    /// Light #694700 · Dark #2A1C00
     static let barkainOnPrimaryContainer = Color.dynamic(light: 0x694700, dark: 0x2A1C00)
+
+    /// Label text on `primaryFixed` (cream in light, warm-dark in dark) —
+    /// flips so contrast is preserved. In dark mode the previous shared
+    /// `barkainOnPrimaryContainer` token rendered as #2A1C00 deep-brown text
+    /// on the #3A2D15 warm-dark capsule, which was effectively invisible —
+    /// this token gives gold-on-warm-dark instead.
+    /// Light #694700 · Dark #F9B12D
+    static let barkainOnPrimaryFixed = Color.dynamic(light: 0x694700, dark: 0xF9B12D)
 
     // MARK: - Surface
     //

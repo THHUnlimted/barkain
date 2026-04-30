@@ -72,7 +72,7 @@ struct RecommendationHero: View {
         .padding(Spacing.lg)
         .background(
             RoundedRectangle(cornerRadius: Spacing.cornerRadiusLarge, style: .continuous)
-                .fill(Color.barkainPrimaryContainer.opacity(0.55))
+                .fill(Color.barkainHeroSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: Spacing.cornerRadiusLarge, style: .continuous)

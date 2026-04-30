@@ -325,7 +325,7 @@ struct ProfileView: View {
     private var tierBadge: some View {
         Text(subscription.isProUser ? "Barkain Pro" : "Free Plan")
             .font(.barkainCaption.weight(.bold))
-            .foregroundStyle(subscription.isProUser ? .white : Color.barkainOnPrimaryContainer)
+            .foregroundStyle(subscription.isProUser ? .white : Color.barkainOnPrimaryFixed)
             .padding(.horizontal, Spacing.md)
             .padding(.vertical, Spacing.xxs)
             .background(
@@ -401,7 +401,7 @@ struct ProfileView: View {
                 Spacer()
                 Text("\(userCards.count)")
                     .font(.barkainCaption.weight(.bold))
-                    .foregroundStyle(Color.barkainOnPrimaryContainer)
+                    .foregroundStyle(Color.barkainOnPrimaryFixed)
                     .padding(.horizontal, Spacing.sm)
                     .padding(.vertical, Spacing.xxs)
                     .background(
@@ -440,7 +440,7 @@ struct ProfileView: View {
                             Text(card.cardDisplayName)
                                 .font(.barkainCaption.weight(.semibold))
                         }
-                        .foregroundStyle(Color.barkainOnPrimaryContainer)
+                        .foregroundStyle(Color.barkainOnPrimaryFixed)
                         .padding(.horizontal, Spacing.md)
                         .padding(.vertical, Spacing.xs)
                         .background(
@@ -545,7 +545,7 @@ struct ProfileView: View {
                 ForEach(chips, id: \.self) { chip in
                     Text(chip)
                         .font(.barkainCaption)
-                        .foregroundStyle(Color.barkainOnPrimaryContainer)
+                        .foregroundStyle(Color.barkainOnPrimaryFixed)
                         .padding(.horizontal, Spacing.md)
                         .padding(.vertical, Spacing.xs)
                         .background(
