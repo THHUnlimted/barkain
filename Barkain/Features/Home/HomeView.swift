@@ -192,7 +192,7 @@ struct HomeView: View {
                 if !recentlyScanned.items.isEmpty {
                     Text("\(recentlyScanned.items.count)")
                         .font(.barkainCaption.weight(.bold))
-                        .foregroundStyle(Color.barkainOnPrimaryContainer)
+                        .foregroundStyle(Color.barkainOnPrimaryFixed)
                         .padding(.horizontal, Spacing.sm)
                         .padding(.vertical, Spacing.xxs)
                         .background(Capsule().fill(Color.barkainPrimaryFixed))

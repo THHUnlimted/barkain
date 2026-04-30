@@ -20,7 +20,7 @@ struct SavingsBadge: View {
                 .tracking(1.2)
                 .textCase(.uppercase)
         }
-        .foregroundStyle(Color.barkainOnPrimaryContainer)
+        .foregroundStyle(Color.barkainOnPrimaryFixed)
         .padding(.horizontal, Spacing.md)
         .padding(.vertical, Spacing.xs)
         .background(

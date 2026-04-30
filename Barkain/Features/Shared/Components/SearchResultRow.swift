@@ -34,7 +34,7 @@ struct SearchResultRow: View {
                                     Capsule(style: .continuous)
                                         .fill(Color.barkainPrimaryFixed)
                                 )
-                                .foregroundStyle(Color.barkainOnPrimaryContainer)
+                                .foregroundStyle(Color.barkainOnPrimaryFixed)
                         }
                     }
 
