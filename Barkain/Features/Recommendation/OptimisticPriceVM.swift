@@ -240,12 +240,16 @@ final class OptimisticPriceVM: PriceComparisonProviding {
                 // Fall through to description-based resolve.
             }
         }
+        // provisional-resolve: forward the original search query (same
+        // reasoning as SearchViewModel.resolveTappedResult — backend
+        // persists it on a provisional row's source_raw.search_query).
         return try await apiClient.resolveProductFromSearch(
             deviceName: result.deviceName,
             brand: result.brand,
             model: result.model,
             confidence: result.confidence,
-            fallbackImageURL: fallbackImage
+            fallbackImageURL: fallbackImage,
+            query: originalQuery
         )
     }
 

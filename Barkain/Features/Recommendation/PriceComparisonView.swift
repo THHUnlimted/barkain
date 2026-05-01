@@ -145,6 +145,14 @@ struct PriceComparisonView: View {
                     if let recommendation = viewModel.recommendation {
                         RecommendationHero(
                             recommendation: recommendation,
+                            // provisional-resolve: surface the
+                            // "approximate match" banner + downgraded
+                            // eyebrow whenever the underlying Product
+                            // wasn't resolved to a canonical UPC. Caller
+                            // sources both flags off the same Product
+                            // payload the rest of the view already has.
+                            isProvisional: product.isProvisional,
+                            searchQuery: product.isProvisional ? product.name : nil,
                             onOpen: { winner in
                                 // Step 3f — present the purchase interstitial
                                 // instead of opening the browser directly. The

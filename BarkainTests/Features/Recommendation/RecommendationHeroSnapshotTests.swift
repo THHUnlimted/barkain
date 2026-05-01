@@ -118,4 +118,32 @@ struct RecommendationHeroSnapshotTests {
             )
         }
     }
+
+    // MARK: - provisional-resolve
+    //
+    // The provisional path swaps the BEST BARKAIN gold eyebrow for a
+    // muted "APPROXIMATE MATCH" label and lands a soft banner above the
+    // hero card showing the user's original search string. The baseline
+    // pins both surfaces so a future eyebrow / banner regression doesn't
+    // sneak the gold pawprint back onto a non-canonical match.
+
+    @Test("Provisional — approximate-match banner + downgraded eyebrow")
+    func provisional_approximateMatch() {
+        let rec = Self.makeRecommendation(savings: 47.00, basePrice: 199.99)
+        let controller = Self.host(
+            RecommendationHero(
+                recommendation: rec,
+                isProvisional: true,
+                searchQuery: "Milwaukee M18 FUEL 2960-22 kit"
+            )
+        )
+
+        withSnapshotTesting(record: SnapshotTestHelper.recordMode) {
+            assertSnapshot(
+                of: controller,
+                as: SnapshotTestHelper.deviceImage,
+                named: "provisional-approximate-match"
+            )
+        }
+    }
 }

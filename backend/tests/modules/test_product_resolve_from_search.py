@@ -918,3 +918,298 @@ async def test_resolve_from_search_invalidates_bad_cache_entry(
 
     assert response.status_code == 404
     assert await fake_redis.get(cache_key) is None
+
+
+# MARK: - provisional-resolve: persist a best-effort row when no UPC is derived
+#
+# The four checks below cover the scoped behavior change in
+# ``ProductResolutionService.resolve_from_search`` when the router opts in
+# via ``settings.PROVISIONAL_RESOLVE_ENABLED``: convert ONLY the
+# upstream-empty branch (Gemini + UPCitemdb both null) into a persisted
+# Product with ``source='provisional'`` + ``upc=None``. The 409 confidence
+# gate, the cache-mismatch invalidation branch, and the post-resolve
+# relevance-mismatch branch all keep raising so the canonical-row gates
+# stay authoritative.
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_persists_provisional_when_flag_on(
+    client, db_session, fake_redis, monkeypatch
+):
+    """Both upstream legs return null + flag ON → 200 with provisional row.
+
+    Asserts the persisted Product carries the markers the M2 stream and
+    iOS hero rely on: ``source='provisional'``, ``upc=None``,
+    ``source_raw['provisional'] is True``, ``source_raw['search_query']``
+    forwarded from the request, and the API surface exposes
+    ``match_quality='provisional'``.
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "PROVISIONAL_RESOLVE_ENABLED", True)
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value={
+                "upc": None,
+                "reasoning": "Multiple SKU variants — recommend scanning the barcode.",
+            },
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={
+                "device_name": "Milwaukee M18 FUEL 2960-22 Mid-Torque Impact Wrench Kit",
+                "brand": "Milwaukee",
+                "model": "2960-22",
+                "query": "Milwaukee M18 FUEL 2960-22 kit",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["upc"] is None
+    assert body["source"] == "provisional"
+    assert body["match_quality"] == "provisional"
+    assert body["name"] == (
+        "Milwaukee M18 FUEL 2960-22 Mid-Torque Impact Wrench Kit"
+    )
+
+    # The persisted row carries the search_query so the M2 stream can
+    # auto-inject ``query_override`` and the Gemini refusal reason for
+    # later telemetry mining.
+    from sqlalchemy import select
+    stmt = select(Product).where(Product.id == body["id"])
+    persisted = (await db_session.execute(stmt)).scalar_one()
+    assert persisted.source == "provisional"
+    assert persisted.upc is None
+    assert persisted.source_raw["provisional"] is True
+    assert (
+        persisted.source_raw["search_query"]
+        == "Milwaukee M18 FUEL 2960-22 kit"
+    )
+    assert "gemini_no_upc_reason" in persisted.source_raw
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_404_when_flag_off(
+    client, db_session, fake_redis, monkeypatch
+):
+    """Flag OFF (default) preserves the legacy 404 path — no provisional persist.
+
+    Dark-launch invariant: the schema + property changes must ship safely
+    to production with the flag still flipped off. This test is the lower
+    bound on regressions to the canonical resolve path.
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "PROVISIONAL_RESOLVE_ENABLED", False)
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            return_value={"upc": None, "reasoning": "discontinued"},
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={
+                "device_name": "Festool TS 60 KEBQ-Plus Track Saw 577419",
+                "brand": "Festool",
+                "query": "Festool TS 60 577419",
+            },
+        )
+
+    assert response.status_code == 404
+    assert (
+        response.json()["detail"]["error"]["code"]
+        == "UPC_NOT_FOUND_FOR_PRODUCT"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_provisional_dedup_within_7_days(
+    client, db_session, fake_redis, monkeypatch
+):
+    """Two consecutive provisional taps for the same (name, brand) reuse the
+    same Product row instead of inserting a second.
+
+    Without dedup, every retry of a dead-end query would mint a new row;
+    the 7-day window is wide enough that re-tapping in a session re-binds
+    to the same UUID (so the iOS hero's price stream stays stable across
+    a refresh) but narrow enough that a stale row can be replaced after a
+    week of upstream upgrades.
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "PROVISIONAL_RESOLVE_ENABLED", True)
+
+    body = {
+        "device_name": "Steam Deck OLED 1TB Limited Edition",
+        "brand": "Valve",
+        "query": "Steam Deck OLED 1TB Limited",
+    }
+
+    async def _post():
+        with (
+            patch(
+                "modules.m1_product.service.gemini_generate_json",
+                new_callable=AsyncMock,
+                return_value={"upc": None, "reasoning": "limited edition not in catalog"},
+            ),
+            patch(
+                "modules.m1_product.service.upcitemdb_lookup",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            return await client.post(RESOLVE_FROM_SEARCH_URL, json=body)
+
+    first = await _post()
+    second = await _post()
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["id"] == second.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_low_confidence_409_precedes_provisional(
+    client, db_session, fake_redis, monkeypatch
+):
+    """The 409 RESOLUTION_NEEDS_CONFIRMATION gate fires BEFORE provisional
+    persistence. A low-confidence tap must always surface the iOS sheet
+    so the user gets a chance to course-correct before any row is written.
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "PROVISIONAL_RESOLVE_ENABLED", True)
+    monkeypatch.setattr(settings, "LOW_CONFIDENCE_THRESHOLD", 0.70)
+
+    response = await client.post(
+        RESOLVE_FROM_SEARCH_URL,
+        json={
+            "device_name": "Some niche thing",
+            "confidence": 0.55,
+            "query": "Some niche thing",
+        },
+    )
+
+    assert response.status_code == 409
+    assert (
+        response.json()["detail"]["error"]["code"]
+        == "RESOLUTION_NEEDS_CONFIRMATION"
+    )
+    # No Product row was written.
+    from sqlalchemy import select
+    stmt = select(Product).where(Product.source == "provisional")
+    rows = (await db_session.execute(stmt)).scalars().all()
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_from_search_resolved_mismatch_still_404_with_flag_on(
+    client, db_session, fake_redis, monkeypatch
+):
+    """When Gemini DOES produce a UPC but the resolved canonical product
+    fails the relevance gate, the endpoint must still 404 — that path
+    means there's a real product behind a real UPC, just not what the
+    user asked for; the relevance pack is the right authority and we do
+    not want a provisional row stomping it.
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "PROVISIONAL_RESOLVE_ENABLED", True)
+    derived_upc = "841821087104"
+
+    async def fake_gemini(prompt, **kwargs):
+        system = kwargs.get("system_instruction", "") or ""
+        if "product description" in system:
+            return {"upc": derived_upc, "reasoning": "best guess"}
+        # UPC→product call returns a Greenworks mower for the
+        # ``841821087104`` UPC — the existing brand-bleed gate in
+        # ``_resolved_matches_query`` rejects this when the user asked
+        # for a Toro mower.
+        return {
+            "device_name": "Greenworks 80V 21-inch cordless mower",
+            "brand": "Greenworks",
+        }
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            side_effect=fake_gemini,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={
+                "device_name": "Toro Recycler 22-inch self-propelled mower",
+                "brand": "Toro",
+            },
+        )
+
+    assert response.status_code == 404
+    assert (
+        response.json()["detail"]["error"]["code"]
+        == "UPC_NOT_FOUND_FOR_PRODUCT"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_response_match_quality_exact_for_canonical(
+    client, db_session, fake_redis
+):
+    """Successful UPC-resolved rows surface ``match_quality='exact'`` —
+    the field is additive, not a behavior change for the legacy path.
+    """
+    derived_upc = "190198451736"
+
+    async def fake_gemini(prompt, **kwargs):
+        system = kwargs.get("system_instruction", "") or ""
+        if "product description" in system:
+            return {"upc": derived_upc, "reasoning": "verified"}
+        return {"device_name": "Apple iPhone 8 64GB", "model": "iPhone 8"}
+
+    with (
+        patch(
+            "modules.m1_product.service.gemini_generate_json",
+            new_callable=AsyncMock,
+            side_effect=fake_gemini,
+        ),
+        patch(
+            "modules.m1_product.service.upcitemdb_lookup",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        response = await client.post(
+            RESOLVE_FROM_SEARCH_URL,
+            json={
+                "device_name": "Apple iPhone 8 (64GB)",
+                "brand": "Apple",
+                "model": "iPhone 8",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["match_quality"] == "exact"

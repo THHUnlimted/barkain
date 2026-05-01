@@ -18,9 +18,10 @@ import hashlib
 import logging
 import re
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import redis.asyncio as aioredis
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -213,6 +214,8 @@ class ProductResolutionService:
         model: str | None = None,
         *,
         fallback_image_url: str | None = None,
+        search_query: str | None = None,
+        allow_provisional: bool = False,
     ) -> Product:
         """Resolve a Gemini-sourced search result (no UPC yet) to a canonical Product.
 
@@ -227,8 +230,21 @@ class ProductResolutionService:
         Then delegates to :meth:`resolve` for the standard Gemini + UPCitemdb
         cross-validation and Redis caching paths.
 
+        ``allow_provisional`` (gated at the router by
+        ``settings.PROVISIONAL_RESOLVE_ENABLED``) flips the "no UPC at all"
+        branch from a ``UPCNotFoundForDescriptionError`` into a best-effort
+        provisional persist via :meth:`_persist_provisional`. Only the
+        upstream-empty branch is converted — the cache-mismatch and
+        post-resolve-mismatch branches still raise so the relevance gates
+        keep authority over canonical rows. ``search_query`` is the user's
+        original search string (forwarded to ``source_raw`` so the M2
+        stream can auto-inject a ``?query=`` override).
+
         Raises:
-            UPCNotFoundForDescriptionError: neither stage produced a UPC.
+            UPCNotFoundForDescriptionError: neither stage produced a UPC
+                (or a relevance-gate rejected the resolved canonical
+                product); when ``allow_provisional`` is set, the
+                upstream-empty branch persists a provisional row instead.
             ProductNotFoundError: UPC was derived but no source identified a product.
         """
         cache_key = self._devupc_cache_key(device_name, brand)
@@ -287,6 +303,25 @@ class ProductResolutionService:
 
         upc = gemini_upc or upcitemdb_upc
         if not upc:
+            # No UPC from either upstream. With ``allow_provisional`` the
+            # router opts the user into a best-effort row keyed on the
+            # search query; the M2 stream auto-injects ``?query=`` and
+            # the relevance gates (model-number hard, brand-bleed, 0.4
+            # token overlap) become the safety net at price-fetch time.
+            if allow_provisional:
+                logger.info(
+                    "resolve-from-search: persisting provisional row for %r "
+                    "(no UPC from Gemini or UPCitemdb; reason=%r)",
+                    device_name, gemini_reasoning,
+                )
+                return await self._persist_provisional(
+                    device_name=device_name,
+                    brand=brand,
+                    model=model,
+                    search_query=search_query,
+                    fallback_image_url=fallback_image_url,
+                    gemini_no_upc_reason=gemini_reasoning,
+                )
             # cat-rel-1-L2-ux: pass Gemini's stated reason through so the
             # router can include it in the 404 envelope and iOS can show
             # *why* we came back empty (multi-variant SKU, dealer-only,
@@ -320,6 +355,8 @@ class ProductResolutionService:
         model: str | None = None,
         *,
         fallback_image_url: str | None = None,
+        search_query: str | None = None,
+        allow_provisional: bool = False,
     ) -> Product:
         """demo-prep-1 Item 3: resolve a low-confidence tap that the user
         confirmed in the ``ConfirmationPromptView`` sheet. Runs the same
@@ -329,10 +366,17 @@ class ProductResolutionService:
         future (the confidence check lives in the router layer, which
         only fires when the client supplies ``confidence`` — future
         scans won't need a gate because we trust the confirmed row).
+
+        ``allow_provisional`` and ``search_query`` flow through to
+        :meth:`resolve_from_search` so the confirm path can also persist a
+        provisional row when the user re-affirmed a low-confidence pick
+        whose Gemini+UPCitemdb upstream came back empty.
         """
         product = await self.resolve_from_search(
             device_name, brand=brand, model=model,
             fallback_image_url=fallback_image_url,
+            search_query=search_query,
+            allow_provisional=allow_provisional,
         )
         raw = dict(product.source_raw) if isinstance(product.source_raw, dict) else {}
         if not raw.get("user_confirmed"):
@@ -842,6 +886,90 @@ class ProductResolutionService:
             raise  # Should not happen, but re-raise if it does
 
         await self._cache_to_redis(upc, product)
+        return product
+
+    async def _persist_provisional(
+        self,
+        *,
+        device_name: str,
+        brand: str | None,
+        model: str | None,
+        search_query: str | None,
+        fallback_image_url: str | None,
+        gemini_no_upc_reason: str | None,
+    ) -> Product:
+        """Persist a best-effort Product when no UPC could be derived.
+
+        Lets ``/resolve-from-search`` keep the user moving instead of 404'ing
+        on real-but-narrow SKUs (Steam Deck OLED 1TB LE, ThinkPad X1 Carbon
+        Gen 12 full-spec, Milwaukee 2960-22 kit, Traeger TFB97RLG) where
+        Gemini refuses to commit and UPCitemdb has no row. The persisted
+        Product carries:
+
+        * ``upc=NULL`` (so the unique-on-non-null index doesn't apply)
+        * ``source="provisional"`` (telemetry + filter handle)
+        * ``source_raw["provisional"]=True`` (drives ``match_quality`` +
+          M2 query auto-injection + iOS hero banner)
+        * ``source_raw["search_query"]`` (the user's original string —
+          forwarded to the price stream as ``query_override``)
+
+        Dedup window: a matching ``(name, brand, source='provisional')``
+        row created in the last 7 days is reused so re-tapping the same
+        dead-end query in a session doesn't keep spawning rows. There's
+        no natural unique key here (multiple users can search the same
+        string) so dedup is a soft-best-effort, not a constraint.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        norm_brand = (brand or "").strip()
+        existing_stmt = (
+            select(Product)
+            .where(
+                Product.source == "provisional",
+                Product.name == device_name,
+                func.coalesce(Product.brand, "") == norm_brand,
+                Product.created_at > cutoff,
+            )
+            .order_by(Product.created_at.desc())
+            .limit(1)
+        )
+        existing = (await self.db.execute(existing_stmt)).scalar_one_or_none()
+        if existing is not None:
+            logger.info(
+                "resolve-from-search: reusing provisional row %s for %r "
+                "(within 7-day window)",
+                existing.id, device_name,
+            )
+            return existing
+
+        image_url = _filter_known_bad_image_url(fallback_image_url)
+        source_raw: dict[str, object] = {
+            "provisional": True,
+            "device_name": device_name,
+            "brand": brand,
+            "model": model,
+            "search_query": search_query,
+            "created_via": "resolve-from-search",
+        }
+        if gemini_no_upc_reason:
+            source_raw["gemini_no_upc_reason"] = gemini_no_upc_reason
+
+        product = Product(
+            upc=None,
+            name=device_name,
+            brand=brand,
+            category=None,
+            description=None,
+            image_url=image_url,
+            asin=None,
+            source="provisional",
+            source_raw=source_raw,
+        )
+        self.db.add(product)
+        await self.db.flush()
+        logger.info(
+            "resolve-from-search: persisted provisional row %s for %r",
+            product.id, device_name,
+        )
         return product
 
     async def _cache_to_redis(self, upc: str, product: Product) -> None:

@@ -581,6 +581,107 @@ async def test_get_prices_with_query_override_skips_db_cache_short_circuit(
     assert result["prices"][0]["price"] == 100.00
 
 
+# MARK: - provisional-resolve: server-side query_override injection
+#
+# A Product persisted by /resolve-from-search with ``source='provisional'``
+# carries no canonical UPC; its ``name`` is the user's original search
+# string. The price aggregation service injects ``query_override =
+# product.name`` whenever no caller-supplied override is present so the
+# bare-name cache scope, container query, and per-container product_name
+# hint all key off the user's intent rather than a generic SKU title.
+# That keeps the provisional row's stream from polluting (or being
+# polluted by) any future canonical row's bucket.
+
+
+async def test_get_prices_provisional_product_auto_injects_query_override(
+    db_session, fake_redis
+):
+    """A provisional product with no caller-supplied override is
+    dispatched as if the caller had passed ``query_override=product.name``.
+    Verifies both the dispatch query and the per-container product_name
+    hint flip to the user's search string.
+    """
+    from modules.m2_prices.service import PriceAggregationService
+
+    product = Product(
+        name="Milwaukee M18 FUEL 2960-22 Mid-Torque Impact Wrench Kit",
+        brand="Milwaukee",
+        upc=None,
+        source="provisional",
+        source_raw={
+            "provisional": True,
+            "search_query": (
+                "Milwaukee M18 FUEL 2960-22 Mid-Torque Impact Wrench Kit"
+            ),
+        },
+    )
+    db_session.add(product)
+    await db_session.flush()
+    await _seed_retailers(db_session, ["amazon"])
+
+    captured_kwargs: dict = {}
+
+    async def _capturing_extract_all(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {"amazon": _make_container_response("amazon", 499.00)}
+
+    mock_client = AsyncMock()
+    mock_client.extract_all = _capturing_extract_all
+
+    service = PriceAggregationService(
+        db=db_session, redis=fake_redis, container_client=mock_client
+    )
+    await service.get_prices(product.id, force_refresh=True)
+
+    assert captured_kwargs["query"] == product.name, (
+        f"provisional row should auto-inject product.name as the dispatch "
+        f"query, got {captured_kwargs['query']!r}"
+    )
+    assert captured_kwargs["product_name"] == product.name
+
+
+async def test_get_prices_caller_override_wins_over_provisional_default(
+    db_session, fake_redis
+):
+    """A caller-supplied ``query_override`` takes precedence over the
+    server-side provisional injection. Lets a future surface (e.g.
+    autocomplete-driven re-resolve) target the same provisional row with
+    a refined query without the server fighting it.
+    """
+    from modules.m2_prices.service import PriceAggregationService
+
+    product = Product(
+        name="Steam Deck OLED 1TB Limited Edition",
+        brand="Valve",
+        upc=None,
+        source="provisional",
+        source_raw={"provisional": True},
+    )
+    db_session.add(product)
+    await db_session.flush()
+    await _seed_retailers(db_session, ["amazon"])
+
+    captured_kwargs: dict = {}
+
+    async def _capturing_extract_all(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {"amazon": _make_container_response("amazon", 749.00)}
+
+    mock_client = AsyncMock()
+    mock_client.extract_all = _capturing_extract_all
+
+    service = PriceAggregationService(
+        db=db_session, redis=fake_redis, container_client=mock_client
+    )
+    await service.get_prices(
+        product.id,
+        force_refresh=True,
+        query_override="Steam Deck OLED 1TB White Frame",
+    )
+
+    assert captured_kwargs["query"] == "Steam Deck OLED 1TB White Frame"
+
+
 # MARK: - Relevance Scoring (Step 2b)
 
 

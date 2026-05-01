@@ -151,6 +151,7 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
 
     var resolveProductLastFallbackImageURL: String?
     var resolveFromSearchLastFallbackImageURL: String?
+    var resolveFromSearchLastQuery: String?
 
     func resolveProduct(upc: String, fallbackImageURL: String?) async throws -> Product {
         resolveProductCallCount += 1
@@ -167,7 +168,8 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
         brand: String?,
         model: String?,
         confidence: Double?,
-        fallbackImageURL: String?
+        fallbackImageURL: String?,
+        query: String?
     ) async throws -> ResolveFromSearchOutcome {
         resolveFromSearchCallCount += 1
         resolveFromSearchLastDeviceName = deviceName
@@ -175,6 +177,7 @@ final class MockAPIClient: APIClientProtocol, @unchecked Sendable {
         resolveFromSearchLastModel = model
         resolveFromSearchLastConfidence = confidence
         resolveFromSearchLastFallbackImageURL = fallbackImageURL
+        resolveFromSearchLastQuery = query
         return try resolveFromSearchResult.get()
     }
 

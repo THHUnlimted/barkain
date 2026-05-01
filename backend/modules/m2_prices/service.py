@@ -715,6 +715,15 @@ class PriceAggregationService:
         # Step 1: Validate product exists
         product = await self._validate_product(product_id)
 
+        # provisional-resolve: rows persisted by /resolve-from-search when
+        # no UPC could be derived have ``source = 'provisional'`` and
+        # ``name = the user's search string``. Auto-inject the override
+        # so the bare-name cache scope, container query, and per-container
+        # product_name hint all key off the user's intent rather than a
+        # canonical SKU title — relevance gates do the rest.
+        if query_override is None and product.source == "provisional":
+            query_override = product.name
+
         # Step 2: Check Redis cache
         if not force_refresh:
             cached = await self._check_redis(
@@ -891,6 +900,12 @@ class PriceAggregationService:
         accumulates a dict) — that's why they're not merged.
         """
         product = await self._validate_product(product_id)
+
+        # provisional-resolve: see ``get_prices`` for rationale. Server-side
+        # injection so the iOS client doesn't need to know about provisional
+        # rows — the price stream's scope follows the persisted product type.
+        if query_override is None and product.source == "provisional":
+            query_override = product.name
 
         # `query_override` (sent by iOS when the user tapped a generic search
         # row like "Apple iPhone 16 [Any variant]") replaces both the search

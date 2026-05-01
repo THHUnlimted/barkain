@@ -241,13 +241,20 @@ class RecommendationService:
         # about to compute. Marker is set in m2's `_check_inflight` —
         # underscore-prefixed so it stays internal to the price service
         # contract and never reaches the wire.
-        if prices_payload.get("_inflight"):
+        #
+        # provisional-resolve: same skip applies to provisional rows so a
+        # later canonical UPC backfill (or a re-tap that finally produces a
+        # UPC) isn't masked by a 15-min snapshot. Marker is set in
+        # ``_gather_inputs`` based on ``Product.source == 'provisional'``.
+        if prices_payload.get("_inflight") or prices_payload.get("_provisional"):
             logger.info(
-                "recommendation_built_from_inflight user=%s product=%s "
-                "succeeded=%d skipping cache write",
+                "recommendation_skip_cache_write user=%s product=%s "
+                "succeeded=%d inflight=%s provisional=%s",
                 user_id,
                 product_id,
                 prices_payload.get("retailers_succeeded", 0),
+                bool(prices_payload.get("_inflight")),
+                bool(prices_payload.get("_provisional")),
             )
         else:
             await self._write_cache(
@@ -307,6 +314,15 @@ class RecommendationService:
             self._load_active_retailer_ids(),
             self._load_drift_flagged_retailer_ids(),
         )
+
+        # provisional-resolve: tag the payload so the cache-write branch can
+        # skip the 15-min cache for rows persisted by /resolve-from-search
+        # without a canonical UPC. The relevance picture for a provisional
+        # row can shift the moment a real UPC backfill lands, so caching a
+        # 15-min snapshot would mask the upgrade. Underscore-prefixed so the
+        # marker stays internal to the recommendation service contract.
+        if product.source == "provisional":
+            prices_payload["_provisional"] = True
         return (
             product,
             prices_payload,

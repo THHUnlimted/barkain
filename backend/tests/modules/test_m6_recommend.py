@@ -919,8 +919,11 @@ async def test_recommendation_skips_cache_write_when_prices_came_from_inflight(
 
     # Telemetry assertion — the structured log line is the only signal
     # to operators that a rec was built from a partial snapshot.
+    # provisional-resolve renamed the log key to ``recommendation_skip_cache_write``
+    # since the same skip-write branch now covers both inflight + provisional.
     assert any(
-        "recommendation_built_from_inflight" in r.getMessage()
+        "recommendation_skip_cache_write" in r.getMessage()
+        and "inflight=True" in r.getMessage()
         for r in caplog.records
     ), [r.getMessage() for r in caplog.records]
 
@@ -928,6 +931,99 @@ async def test_recommendation_skips_cache_write_when_prices_came_from_inflight(
     # protecting against is "second call returns the stale provisional".
     second = await service.get_recommendation(MOCK_USER_ID, product.id)
     assert second.cached is False
+
+
+async def test_recommendation_skips_cache_write_for_provisional_product(
+    db_session, fake_redis, caplog, monkeypatch
+):
+    """A provisional Product (persisted by /resolve-from-search when no UPC
+    could be derived) MUST NOT be cached in M6's 15-min slot. The
+    relevance picture for a provisional row can shift the moment a real
+    UPC backfill upgrades it to canonical, and a cached snapshot would
+    mask the upgrade for up to 15 min.
+
+    Mocks ``price_service.get_prices`` to return a clean (non-inflight)
+    payload so the only reason the cache write is skipped is the
+    provisional marker — isolates the new branch from the existing
+    inflight skip.
+    """
+    import logging
+
+    await _seed_user(db_session)
+    await _seed_retailer(db_session, "amazon")
+    await _seed_retailer(db_session, "best_buy")
+    await _seed_health(db_session, "amazon")
+    await _seed_health(db_session, "best_buy")
+
+    product = Product(
+        upc=None,
+        name="Steam Deck OLED 1TB Limited Edition",
+        brand="Valve",
+        source="provisional",
+        source_raw={
+            "provisional": True,
+            "search_query": "Steam Deck OLED 1TB Limited Edition",
+        },
+    )
+    db_session.add(product)
+    await db_session.flush()
+
+    # Stand in for a healthy 2-retailer canonical fetch — no `_inflight`
+    # marker, so the skip-write must trigger purely on the provisional
+    # tag the recommendation service sets in `_gather_inputs`.
+    mock_payload = {
+        "product_id": str(product.id),
+        "product_name": product.name,
+        "prices": [
+            _wire_price("amazon", 100.0), _wire_price("best_buy", 110.0)
+        ],
+        "retailer_results": [],
+        "total_retailers": 2,
+        "retailers_succeeded": 2,
+        "retailers_failed": 0,
+        "cached": False,
+        "fetched_at": datetime.now(UTC).isoformat(),
+    }
+
+    async def _stub_get_prices(*args, **kwargs):
+        return dict(mock_payload)
+
+    from modules.m2_prices.service import PriceAggregationService
+    monkeypatch.setattr(
+        PriceAggregationService, "get_prices", _stub_get_prices
+    )
+
+    caplog.set_level(logging.INFO, logger="barkain.m6")
+
+    service = RecommendationService(db_session, fake_redis)
+    rec = await service.get_recommendation(MOCK_USER_ID, product.id)
+    assert rec.cached is False
+
+    # CRITICAL: neither cache key shape (bare or scoped) was written.
+    from modules.m6_recommend.service import _portal_membership_hash
+    user_card_hash = await service._user_card_hash(MOCK_USER_ID)
+    identity_hash = await service._identity_flag_hash(MOCK_USER_ID)
+    portal_hash = _portal_membership_hash({})
+    bare_key = service._cache_key(
+        MOCK_USER_ID, product.id, user_card_hash, identity_hash, portal_hash
+    )
+    scoped_key = service._cache_key(
+        MOCK_USER_ID, product.id, user_card_hash, identity_hash, portal_hash,
+        query_override=product.name,
+    )
+    assert await fake_redis.get(bare_key) is None
+    assert await fake_redis.get(scoped_key) is None, (
+        "M6 cache must not be written for provisional rows"
+    )
+
+    # Telemetry: skip-write log line carries provisional=True (the new
+    # signal) AND inflight=False (so operators can attribute correctly).
+    assert any(
+        "recommendation_skip_cache_write" in r.getMessage()
+        and "provisional=True" in r.getMessage()
+        and "inflight=False" in r.getMessage()
+        for r in caplog.records
+    ), [r.getMessage() for r in caplog.records]
 
 
 async def test_recommendation_writes_cache_when_prices_came_from_canonical(

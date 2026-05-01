@@ -45,6 +45,27 @@ class Product(Base):
             return self.source_raw.get("gemini_model")
         return None
 
+    @property
+    def match_quality(self) -> str:
+        """``"exact"`` for canonical UPC-resolved rows, ``"provisional"`` for
+        best-effort rows persisted when no UPC could be derived.
+
+        Provisional rows carry ``source_raw["provisional"] = True`` plus the
+        original ``search_query`` so the M2 stream can auto-inject a
+        ``query_override`` and the iOS hero can downgrade the Best Barkain
+        pill to "approximate". Read off JSONB so the surface ships without a
+        column migration; if the flag rate ever justifies bulk-retry tooling,
+        a generated ``is_provisional`` column + partial index can be added
+        later without breaking this property.
+        """
+        if (
+            self.source_raw
+            and isinstance(self.source_raw, dict)
+            and self.source_raw.get("provisional") is True
+        ):
+            return "provisional"
+        return "exact"
+
     __table_args__ = (
         Index("idx_products_upc", "upc", postgresql_where=text("upc IS NOT NULL")),
         Index("idx_products_asin", "asin", postgresql_where=text("asin IS NOT NULL")),

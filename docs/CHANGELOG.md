@@ -5343,3 +5343,229 @@ Aggregate: `recall_old=1/5, recall_new=0/5`. Pass criterion `no_electronics_regr
 - `3o-C-L1-fabricated-upc-tap` (MEDIUM) — Tier 3 Gemini search rows ship a fabricated `primary_upc` (Gemini imagines a 12-digit string that often shares only the brand prefix); iOS `Barkain/Features/Search/SearchViewModel.swift::resolveTappedResult:399` calls `/resolve` on it, grounded Gemini hallucinates an unrelated product (concrete repro: search "rustoleum paint" → tap row #2 "Rust-Oleum Painter's Touch 2X Ultra Cover Spray Paint (Gloss White)" with `primary_upc=020066249091` → Gemini grounded under 3o-C resolves to "Tide Pods Laundry Detergent Spring Meadow Scent (42-Count)" because Serper has no real index for that UPC — top organic results are Nuwave cookware, Ninja pots, Amazon Basics trash cans). Pre-existing since 3c (Tier 3 search has fabricated UPCs since first ship), but 3o-C's category breadth amplifies how visibly off-vertical the wrong answer is. **Two fix options:** (A) backend strips `primary_upc` from Tier 3 Gemini rows in `m1_product/service.py` Tier 3 serialization, forcing iOS to use `/resolve-from-search` by name (which goes through UPCitemdb cross-val + 409 confirmation gate at low confidence); (B) iOS gates the UPC path on `result.source != .gemini` in `resolveTappedResult`. Both are 1-line changes. Picked up as separate work post-3o-C merge.
 - `rustoleum-ux-L1` (LOW) — SearchView with text in field + previous PriceComparisonView in nav stack: typing without dispatching the deep-search fallback row leaves the prior product visible underneath, creating "I searched X but got Y" misattribution. Confirmed via sim repro (the L'Oreal Excellence hair color page Mike saw was held over from an earlier "Rogaine For Women" recent search resolution; the "rustoleum paint" text was just sitting in the search field). Cosmetic but confusing.
 - `rustoleum-ux-L2` (LOW) — Autocomplete vocab has `Rust-oleum-334128-stops-turbo-spray` (with hyphen) but normalized user input retains hyphenless `rustoleum` — zero suggestions surface for the canonical brand spelling. Strip hyphens in `AutocompleteService` matching key.
+
+---
+
+### Step fix/dark-mode-contrast (2026-04-30)
+
+**Branch.** `fix/dark-mode-contrast` → `main` (PR #93, merged).
+
+**Why.** During headed-sim verification of `thumbnail-coverage-L1`, Mike noticed the "Save $324.89" badge, "Recently sniffed" count capsule, "Free Plan" tier badge, and the recommendation hero card were essentially unreadable in dark mode. Root cause was a single mis-typed hex on `barkainOnPrimaryContainer`: the doc comment said `Dark #f9b12d (so it reads on dark-mode containers)` but the actual value was `0x2A1C00` — deeper brown than `barkainPrimaryFixed`'s `#3A2D15` warm-dark capsule it was supposed to sit on top of (≈1.2:1 contrast, well below WCAG AA's 4.5:1 minimum for body text). Affected the SavingsBadge, SearchResultRow "Any variant" pill, HomeView Recently-sniffed count, and four ProfileView capsules. The hero card had a related but separate issue — `Color.barkainPrimaryContainer.opacity(0.55)` over the near-black surface in dark mode produced a muted gold (`≈#93743D`), then `barkainPrimary` gold "BEST BARKAIN" eyebrow + "Save $X" headline landed on it at ≈2.6:1.
+
+**The diagnosis trick.** `barkainOnPrimaryContainer` was used on TWO visually-different backgrounds:
+- `BestBarkainBadge` in `ScentTrail.swift` — sits on `barkainPrimaryContainer` (always-gold in both modes — `#F9B12D` light, `#FFC35A` dark)
+- Everything else (SavingsBadge, count capsules, "Any variant" pill, profile chips) — sits on `barkainPrimaryFixed` (theme-flipping — cream `#FFDDAF` light, warm-dark `#3A2D15` dark)
+
+A single shared "on" color can't satisfy both: `BestBarkainBadge` needs always-dark text (gold-on-gold would be invisible); the warm-dark capsules need a flipping color so dark mode gets light text. The mis-typed hex was the symptom; the structural fix is to split the token.
+
+**Token split.**
+- `barkainOnPrimaryContainer` stays as-is — always-dark in both modes (`#694700` light / `#2A1C00` dark). Used ONLY by the always-gold `BestBarkainBadge` pill.
+- `barkainOnPrimaryFixed` (NEW) — flips for contrast (`#694700` light / `#F9B12D` dark, the brand gold). Used on the warm-cream/warm-dark `barkainPrimaryFixed` capsules.
+- `barkainHeroSurface` (NEW) — pre-blended hero-card fill (`#F7D18C` light / `#2A1F0E` dark). Light value matches the previous `barkainPrimaryContainer.opacity(0.55)` rendering visually so the light-mode look is preserved; dark value is a deep warm-brown so gold text/accents pop instead of fighting a translucent-gold layer.
+
+Contrast math after fix (dark mode):
+- Save-$ badge: gold `#F9B12D` text on warm-dark `#3A2D15` capsule → ≈4.7:1 (WCAG AA pass for body text).
+- Hero "Save $X": gold `#FFBA41` text on `#2A1F0E` hero surface → ≈8:1 (WCAG AAA pass).
+- Effective price (off-white) on hero surface → ≈11.8:1.
+
+**Files touched (all iOS, +28/−10).**
+
+- `Barkain/Features/Shared/Extensions/Colors.swift` — added `barkainOnPrimaryFixed` (new), added `barkainHeroSurface` (new), kept `barkainOnPrimaryContainer` as-is with comment correcting the always-dark intent. ~22 LOC.
+- `Barkain/Features/Recommendation/RecommendationHero.swift` — `.fill(Color.barkainPrimaryContainer.opacity(0.55))` → `.fill(Color.barkainHeroSurface)`. 1 LOC.
+- `Barkain/Features/Shared/Components/SavingsBadge.swift` — text color `OnPrimaryContainer` → `OnPrimaryFixed`. 1 LOC.
+- `Barkain/Features/Shared/Components/SearchResultRow.swift` — "Any variant" pill text color migrated. 1 LOC.
+- `Barkain/Features/Home/HomeView.swift` — Recently-sniffed count capsule text color migrated. 1 LOC.
+- `Barkain/Features/Profile/ProfileView.swift` — 4 sites: tier badge (Free Plan branch only — Pro keeps `.white`), My-Cards count, card chip flow, identity chip flow. 4 LOC.
+
+**Intentionally untouched.** `Barkain/Features/Shared/Components/ScentTrail.swift::BestBarkainBadge` keeps `barkainOnPrimaryContainer` because its capsule background is `barkainPrimaryContainer` (always-gold) — always-dark text is correct in both modes.
+
+**Verification.** No new tests (cosmetic color-token change with no business logic). Visual verification on iPhone 17 Pro sim, dark mode set via `set_sim_appearance`. `xcodebuild` clean (only pre-existing Swift 6 actor-isolation warnings).
+
+**Pattern worth remembering.** When a color token is used on two visually-different backgrounds (always-saturated vs theme-flipping), split it. A single shared "on" name fights itself in the mode where the backgrounds diverge. Watch for this when adding new components — grep both background uses before naming a new "on" color.
+
+---
+
+### Step feat/search-thumbnail-fallback (2026-04-30)
+
+**Branch.** `feat/search-thumbnail-fallback` → `main` (PR #94, open).
+
+**Why.** Search rows from M1's cascade often arrive imageless: Tier 3 Gemini results are text-only, UPCitemdb sometimes lacks images for niche items, and DB rows from hotlink-blocked hosts get NULLed at persist time by `thumbnail-coverage-L3`. The iOS `thumbnail-coverage-L1` placeholder (brand initials → pawprint) papers over it but Mike asked for actual product thumbnails on every row. A second consistency request followed: the search-row image needs to flow through `/resolve` so the loading state and Recently Sniffed inherit the same picture.
+
+**Two-pass cascade.** Added in `ProductSearchService._backfill_thumbnails`, called after `_collapse_variants` and before the response is built. For each row whose `image_url` is None or empty:
+
+- **Pass 1 — eBay Browse API `lookup_thumbnail`** (free within rate limits, 5k calls/day on the public tier). New helper at the bottom of `backend/modules/m2_prices/adapters/ebay_browse_api.py`. Reuses `_get_app_token` for auth, hits `_SEARCH_URL` with `q=<brand title>` and `limit=1`, returns `summaries[0].image.imageUrl` or None on any failure (missing creds, OAuth fail, network error, non-200, parse error, empty result, missing image field). 401 clears the token cache. Soft-fails everywhere — never raises.
+
+- **Pass 2 — Serper `/images` `lookup_thumbnail_via_serper`** (paid, ~$0.001/call). New helper in `backend/ai/web_search.py`. Hits `https://google.serper.dev/images` with `{q, num: 3}`, returns the first valid `images[].imageUrl`. **Mid-build pivot:** initially used Serper `/search` (mirroring the existing `_serper_fetch` resolve path), but headed-sim verification on "vintage 1970 transistor radio" surfaced a Johnson-Smith / Incredibuilds row that Serper `/search` couldn't backfill — `/search` only carries `imageUrl` when Google detects an og:image preview, which is often absent for niche queries. Switched to `/images` (Google Images search), which is purpose-built and returned `https://r2.gear4music.com/...` and `https://www.merchoid.com/...` on the same query. Cost is identical between the two endpoints.
+
+Both passes use `asyncio.gather(*[...], return_exceptions=True)` so per-row latency is `max(single-call)` not `sum`. Failures at any stage leave the row imageless and the iOS placeholder takes over. Hook is conditional on `settings.SEARCH_THUMBNAIL_FALLBACK` (new flag in `app/config.py`, default ON).
+
+**Resolve-path wire-through.** The backfill makes search rows pretty, but tapping a row still went through `/resolve` (UPC tap) or `/resolve-from-search` (no-UPC tap) which re-resolves from scratch via Gemini/UPCitemdb — losing the search-row image. To preserve continuity:
+
+- New `fallback_image_url: str | None = Field(default=None, max_length=2048)` on `ProductResolveRequest`, `ResolveFromSearchRequest`, `ResolveFromSearchConfirmRequest`.
+- `ProductResolutionService.resolve()` + `resolve_from_search()` + `resolve_from_search_confirmed()` + `_resolve_with_cross_validation()` + `_persist_product()` all take `fallback_image_url` as a kwarg, threaded through.
+- `_persist_product` only adopts the fallback when the upstream image_url filtered to None (no upstream supplied OR upstream was on a known-bad host). The fallback itself goes through the same `_filter_known_bad_image_url` blocklist so a bad-host fallback also writes NULL.
+- Router (`m1_product/router.py`) pulls the field from each request body and forwards it to the service.
+
+iOS:
+- `APIClientProtocol.resolveProduct(upc:fallbackImageURL:)` and `resolveProductFromSearch(deviceName:brand:model:confidence:fallbackImageURL:)` both gain the parameter. Default-arg `nil` works on the concrete `APIClient` calls but Swift protocols don't support default-arg propagation through protocol-typed call sites — every `apiClient: APIClientProtocol` holder must pass the arg explicitly.
+- `Endpoints.resolveProduct` + `resolveFromSearch` cases gain the field; `body` encoder uses inline `Body` structs with `convertToSnakeCase` (matches the existing `resolveFromSearch` pattern; can't use `JSONEncoder().encode([...])` dict literal because the dict-encoding needs a Codable struct for `fallback_image_url` snake-case).
+- `ResolveFromSearchConfirmRequest` gets `fallbackImageURL: String?` (default nil for back-compat).
+- `SearchViewModel.resolveTappedResult` and `OptimisticPriceVM.resolveTappedResult` both forward `result.imageUrl` on both the UPC-path and the description-path call.
+- `SearchViewModel.confirmResolution` forwards `pick.imageUrl` on the confirm request.
+- `ScannerViewModel.resolveProduct(upc:)` (barcode path — no search-row image to forward) passes `fallbackImageURL: nil`.
+- `BarePreviewAPIClient` + `BarkainTests/Helpers/MockAPIClient.swift` updated for protocol conformance; mock adds `resolveProductLastFallbackImageURL` + `resolveFromSearchLastFallbackImageURL` capture vars.
+
+**Files touched (+19 sites, +673/−31 LOC).**
+
+Backend (5 files):
+- `backend/app/config.py` — `SEARCH_THUMBNAIL_FALLBACK: bool = True`. ~12 LOC.
+- `backend/ai/web_search.py` — `SERPER_IMAGES_URL` constant + `lookup_thumbnail_via_serper(query)` (~50 LOC).
+- `backend/modules/m2_prices/adapters/ebay_browse_api.py` — `lookup_thumbnail(query)` (~70 LOC at end of file).
+- `backend/modules/m1_product/search_service.py` — top-of-file imports (`lookup_thumbnail_via_serper`, `ebay_lookup_thumbnail`); new `_backfill_thumbnails(self, results)` method (~65 LOC); 1-line hook after `_collapse_variants`.
+- `backend/modules/m1_product/service.py` — `resolve()` + `_resolve_with_cross_validation()` + `_persist_product()` + `resolve_from_search()` + `resolve_from_search_confirmed()` all take `fallback_image_url` kwarg; `_persist_product` checks filtered upstream image, falls through to filtered fallback. ~25 LOC.
+- `backend/modules/m1_product/router.py` — 3 sites pull `body.fallback_image_url` and forward to service.
+- `backend/modules/m1_product/schemas.py` — 3 schemas gain the field. ~12 LOC.
+
+iOS (5 files):
+- `Barkain/Services/Networking/APIClient.swift` — protocol + concrete signatures updated.
+- `Barkain/Services/Networking/Endpoints.swift` — `resolveProduct` + `resolveFromSearch` cases + body encoders.
+- `Barkain/Features/Shared/Models/ResolveFromSearchConfirmation.swift` — `fallbackImageURL` field.
+- `Barkain/Features/Search/SearchViewModel.swift` — 2 sites (resolveTappedResult, confirmResolution).
+- `Barkain/Features/Recommendation/OptimisticPriceVM.swift` — 1 site (resolveTappedResult).
+- `Barkain/Features/Scanner/ScannerViewModel.swift` — 1 site (passes `fallbackImageURL: nil`).
+- `Barkain/Features/Shared/Previews/BarePreviewAPIClient.swift` — protocol conformance.
+- `BarkainTests/Helpers/MockAPIClient.swift` — protocol conformance + capture vars.
+
+**Tests (+7 backend, 799→806).**
+
+- `tests/modules/test_product_search.py` (5 tests):
+  - `test_thumbnail_backfill_ebay_hit_skips_serper` — pass 1 returns image → row filled, pass 2 NOT called (cost guard).
+  - `test_thumbnail_backfill_serper_runs_when_ebay_misses` — pass 1 returns None → pass 2 fires, image attached.
+  - `test_thumbnail_backfill_disabled_by_flag` — `SEARCH_THUMBNAIL_FALLBACK=False` → neither pass called.
+  - `test_thumbnail_backfill_soft_fails_on_lookup_errors` — both raise → row stays imageless, no 500.
+  - `test_thumbnail_backfill_skips_rows_that_already_have_an_image` — pre-existing image preserved verbatim, only imageless siblings trigger an eBay call. Uses BBY rows because the merge hardcodes `image_url=None` for Gemini rows; query + row tokens aligned to bypass the brand-bleed gate.
+- `tests/modules/test_m1_product.py` (2 tests):
+  - `test_resolve_uses_fallback_image_when_no_upstream_image` — Gemini returns name only, UPCitemdb None → persisted `Product.image_url == fallback`.
+  - `test_resolve_ignores_fallback_image_when_upstream_supplies_one` — UPCitemdb supplies image → persisted url is upstream's, not fallback's.
+
+**Live verification (sim, iPhone 17 Pro / iOS 26.4 / dark mode).** Backend logs confirmed the cascade fires. API curls across 5 obscure queries (`obscure japanese rice cooker zojirushi`, `kong classic dog toy`, `petco kitten chunky food`, `purina pro plan adult cat 7 lbs`, `vintage 1970 transistor radio`) returned every result row with a thumbnail — `i.ebayimg.com`, `purina.com`, `bigcommerce.com`, `insighteditions.com`, `r2.gear4music.com` host distribution. Sim screenshot showed the previously brand-initials-placeholder "(set) 1970s Style Retro Radio Kit" row now displaying a real vintage-radio thumbnail.
+
+**Decisions worth remembering.**
+
+- **Free → paid cascade order is load-bearing.** eBay Browse is rate-limited but free within those limits; Serper is `~$0.001/call`. Pass 1 fills 80%+ of holes on common queries, so pass 2 only fires for genuinely-niche products. Worst-case spend with a 5-imageless-row Tier-3 result and zero eBay hits is ~$0.005 per search.
+- **Soft-fail at every layer.** A failing thumbnail backfill must never break the search response. Both helpers wrap every network/parse/auth path in try/except → return None; `asyncio.gather(return_exceptions=True)` catches anything else.
+- **Same blocklist for fallback as for upstream.** `_filter_known_bad_image_url` runs on `data.get("image_url")` AND on `fallback_image_url` in `_persist_product` — a hotlink-blocked fallback (e.g. eBay sometimes returns a CDN URL on a host that 403s our app) still writes NULL.
+- **Swift protocol default-args don't propagate.** `func foo(x: Int? = nil)` on the concrete `APIClient` works for direct callers, but `apiClient: APIClientProtocol` callers must pass `x: nil` explicitly. `ScannerViewModel` build broke until the explicit `fallbackImageURL: nil` was added.
+- **Serper `/search` vs `/images`.** `/search` only carries `imageUrl` when Google detected an og:image preview during organic-result extraction — fine for shopping-heavy queries (existing `resolve_via_serper` path uses it for product UPCs), insufficient for niche product titles where SERP is mostly informational pages. `/images` is Google Image Search proper and reliably returns hosted image URLs for niche queries. Same pricing tier, different recall surface. **Pattern:** for "find an image of X", always pick `/images`; for "extract an image while doing semantic search", `/search` is fine if the result type is og:image-rich.
+
+**Opens.** None new. `vendor-migrate-1-L1` (Serper resolve outcome counter) was already shipped in known-issues-triage-3; the new Serper `/images` path doesn't share its counter (different bucket semantics — image lookup has only success/no-image/error states, and the existing counter is bound to `resolve_via_serper`).
+
+---
+
+### Step feat/provisional-resolve (2026-05-01)
+
+**Branch.** `feat/provisional-resolve` (open).
+
+**Why.** Yesterday's headed-sim sweep across 10 hyper-specific queries surfaced 4 hard 404s on real, popular SKUs: Steam Deck OLED 1TB Limited Edition, ThinkPad X1 Carbon Gen 12 (full-spec), Milwaukee M18 FUEL 2960-22 kit, Festool TS 60 KEBQ-Plus 577419, Traeger Ironwood XL TFB97RLG. Each returned `404 UPC_NOT_FOUND_FOR_PRODUCT` because Gemini's device→UPC + UPCitemdb keyword search both came back null — Gemini refuses to commit to a single SKU when a model has multi-variant ambiguity, and UPCitemdb has no row for niche/discontinued products. The dead-end is a real-product bear-trap: the user typed something correct, the relevance gates would have caught noise, but the resolve step bailed before the price stream got a chance to run. The plumbing for a fix already mostly existed — `/prices/{id}/stream` accepts `?query=` override (shipped in tier-2-ebay-search) and the relevance pack (model-number hard gate, brand-bleed, 0.4 token overlap) is the safety net. Just needed a Product row to hang the override on.
+
+**Scope.** Persist a best-effort Product when `/resolve-from-search` would otherwise 404 because Gemini + UPCitemdb both returned null UPC. Tag it `source="provisional"` + `source_raw["provisional"]=True` + `source_raw["search_query"]=<user's query>`. Auto-inject `query_override = product.name` on the price stream + recommendation paths so the bare-name cache scope, container query, and per-container product_name hint all key off the user's intent. Skip M6's 15-min cache for these rows (a future canonical-UPC backfill would otherwise be masked). iOS hero shows an "approximate match" banner + downgraded eyebrow; Recently Sniffed excludes provisional rows so the rail stays canonical.
+
+**Dark-launched** behind new `settings.PROVISIONAL_RESOLVE_ENABLED: bool = False`. The schema additions (`Product.match_quality`, `ResolveFromSearchRequest.query`) ship safely with behavior unchanged until the flag flips. Mirrors how `SEARCH_THUMBNAIL_FALLBACK` was bounded — additive surface lands first, behavior change second.
+
+**The narrow conversion branch.** `resolve_from_search` raises `UPCNotFoundForDescriptionError` from THREE distinct sites:
+1. **Cached UPC mismatch** (~L256) — Redis-cached device→UPC mapping resolved a wrong-brand product; cache invalidated, re-raise.
+2. **Both upstream legs null** (~L294) — neither Gemini nor UPCitemdb produced any UPC. **This is the only branch we convert.**
+3. **Post-resolve relevance mismatch** (~L309) — Gemini DID produce a UPC and `resolve()` persisted a real product, but `_resolved_matches_query` rejected it (e.g. Toro→Greenworks brand bleed at UPC `841821087104`).
+
+The cache-mismatch branch keeps raising because the cache fix is an invalidate-and-retry, not a missing-row signal — re-running the gather may legitimately succeed. The post-resolve mismatch branch keeps raising because we already persisted a real product behind a real UPC; layering a provisional row on the same query would either step on it or introduce duplicate-meaning rows. Only the upstream-empty branch is unambiguously a "no canonical answer exists yet" signal where a provisional persist is strictly additive.
+
+**The 409 confidence gate fires BEFORE provisional persistence.** A low-confidence tap still surfaces the iOS confirmation sheet (`RESOLUTION_NEEDS_CONFIRMATION`) — no row gets written until the user confirms. After confirm, `resolve_from_search_confirmed` calls into `resolve_from_search` with `allow_provisional=True` so the user can still get a provisional result for a confirmed-but-upstream-empty pick. New backend test pins this ordering (`test_resolve_from_search_low_confidence_409_precedes_provisional`) — without the ordering, a 0.55-confidence tap on a niche SKU would silently land a provisional row instead of asking.
+
+**The 7-day dedup window.** `_persist_provisional` SELECTs an existing matching `(name, brand, source='provisional')` row created in the last 7 days and reuses its UUID instead of inserting. Without dedup, every retry of a dead-end query would mint a new row and pollute the products table; with a too-narrow window (24h), a user re-tapping the same query the next morning would get a stale row pinned for 6 days. 7 days gives the iOS hero state stability across a session AND a re-resolve attempt window — if upstream improves and Gemini starts returning a UPC for the query within the week, the next tap goes through `resolve_from_search`'s cache-hit path naturally; the stale provisional row times out and a future retry can write fresh. There's no natural unique key (multiple users can search the same string) so dedup is soft-best-effort SELECT-then-INSERT, not a UNIQUE constraint.
+
+**Server-side `query_override` injection.** `m2_prices/service.py:get_prices` and `stream_prices` both detect `product.source == "provisional"` and `query_override is None`, then assign `query_override = product.name`. Server-side rather than iOS-side because:
+- Older iOS builds without this PR get the same behavior (provisional rows always served correctly regardless of client).
+- Future surfaces (background workers, M6 cache warm jobs) get it for free.
+- A caller-supplied override still wins (e.g. a future autocomplete-driven re-resolve targeting the same provisional row with a refined query).
+
+The cache key already had `:q<sha1>` scoping for query-override calls (added in tier-2-ebay-search), so provisional rows naturally get a separate cache bucket from canonical rows for the same product_id — no new key plumbing.
+
+**M6 cache skip.** `_gather_inputs` tags `prices_payload["_provisional"] = True` when `product.source == "provisional"`, after the existing `_inflight` marker but in the same payload. The cache-write guard at `get_recommendation` was generalized: the inflight-only branch now covers both inflight + provisional, with the log line renamed `recommendation_skip_cache_write` and tags `inflight=<bool> provisional=<bool>` so operators can attribute. Cache READ is unchanged — by construction, no provisional rows existed before the flag flip, so no stale reads are possible. Only cache WRITE is suppressed.
+
+**iOS hero downgrade.** `RecommendationHero` gains optional `isProvisional: Bool = false` and `searchQuery: String? = nil` props. When `isProvisional=true`:
+- Banner above the hero card: warm-cream pill with `info.circle.fill` icon, headline `Best results for "<query>"`, caption `Exact match unavailable — verify before tapping Open.`
+- Eyebrow downgraded: `pawprint.fill` → `magnifyingglass`, "BEST BARKAIN" → "APPROXIMATE MATCH", `barkainPrimary` gold → `barkainOnSurfaceVariant` muted grey.
+- Hero card body, savings, retailer name, breakdown receipt, and CTA button all unchanged — the user can still complete the spending flow.
+
+`PriceComparisonView` reads `product.isProvisional` and `product.name` straight from the same Product the rest of the view already has. No new VM field.
+
+**Recently Sniffed exclusion.** `SearchView.swift`'s `.onChange` recordAllow guard adds `guard !product.isProvisional else { return }` ahead of `recentlyScanned.record(...)`. The rail is meant to be re-tappable; a provisional row's prices were keyed on a search string, not a UPC, and re-tapping the rail entry wouldn't preserve that scoping cleanly. Excluding them keeps the rail canonical-only — when a future canonical-UPC scan lands the row gets recorded normally.
+
+**Wire-through: `query: String?` plumbing.** New optional field on `ResolveFromSearchRequest`. iOS protocol + concrete + mock + preview all gain `query: String?` on `resolveProductFromSearch`. Swift protocol default-args don't propagate through protocol-typed call sites — same gotcha thumbnail-fallback hit. Every `apiClient: APIClientProtocol` holder passes the arg explicitly. `BarePreviewAPIClient` + `BarkainTests/Helpers/MockAPIClient.swift` updated for protocol conformance; mock adds `resolveFromSearchLastQuery` capture var.
+
+**Files touched (+12 sites, +332/−40 LOC).**
+
+Backend (5 files):
+- `backend/app/config.py` — `PROVISIONAL_RESOLVE_ENABLED: bool = False`. ~12 LOC w/ docstring.
+- `backend/modules/m1_product/models.py` — `Product.match_quality` `@property` reading `source_raw["provisional"]`. ~22 LOC.
+- `backend/modules/m1_product/schemas.py` — `match_quality` Literal field on `ProductResponse`; new `query: str?` on `ResolveFromSearchRequest`. ~12 LOC.
+- `backend/modules/m1_product/service.py` — `resolve_from_search`/`resolve_from_search_confirmed` signatures gain `search_query` + `allow_provisional` kwargs (~25 LOC); new `_persist_provisional()` method (~75 LOC) using `func.coalesce` + `datetime` for the 7-day dedup window. Top-of-file imports gain `datetime, timedelta, timezone` from `datetime` and `func` from `sqlalchemy`.
+- `backend/modules/m1_product/router.py` — both endpoints pass `search_query=body.query, allow_provisional=settings.PROVISIONAL_RESOLVE_ENABLED`. ~4 LOC.
+- `backend/modules/m2_prices/service.py` — 2 sites: `get_prices` and `stream_prices` each gain a 4-line block right after `_validate_product` that auto-injects `query_override = product.name` when `product.source == "provisional"` and override wasn't supplied.
+- `backend/modules/m6_recommend/service.py` — `_gather_inputs` tags `prices_payload["_provisional"]` when product is provisional; `get_recommendation`'s cache-write guard generalized to cover both `_inflight` and `_provisional`; log line renamed `recommendation_skip_cache_write`.
+
+iOS (8 files):
+- `Barkain/Features/Shared/Models/Product.swift` — `matchQuality: String?` field + `isProvisional` computed convenience + memberwise init w/ default. ~30 LOC.
+- `Barkain/Features/Recommendation/RecommendationHero.swift` — new `isProvisional` + `searchQuery` props (~6 LOC); new `provisionalBanner` ViewBuilder + `provisionalBannerHeadline` string formatter (~30 LOC); eyebrow ternary on icon/text/foregroundStyle.
+- `Barkain/Features/Recommendation/PriceComparisonView.swift` — passes `isProvisional: product.isProvisional` + `searchQuery: product.isProvisional ? product.name : nil` to the hero call site.
+- `Barkain/Features/Search/SearchView.swift` — `recentlyScanned.record` guard skips provisional rows.
+- `Barkain/Features/Search/SearchViewModel.swift` — `resolveTappedResult` forwards `query: query` (the VM's current `self.query`) on the `resolveProductFromSearch` call.
+- `Barkain/Features/Recommendation/OptimisticPriceVM.swift` — `resolveTappedResult` forwards `query: originalQuery` (the search string captured at init time) on the `resolveProductFromSearch` call.
+- `Barkain/Services/Networking/APIClient.swift` — `resolveProductFromSearch` protocol + concrete impl gain `query: String?`.
+- `Barkain/Services/Networking/Endpoints.swift` — `resolveFromSearch` enum case + body encoder both gain `query`.
+- `Barkain/Features/Shared/Previews/BarePreviewAPIClient.swift` — protocol conformance.
+- `BarkainTests/Helpers/MockAPIClient.swift` — `resolveFromSearchLastQuery` capture var + signature.
+
+**Tests (+9 backend, 806 → 815; +1 iOS hero snapshot, 215 → 216).**
+
+Backend:
+- `tests/modules/test_product_resolve_from_search.py` (6 new):
+  - `test_resolve_from_search_persists_provisional_when_flag_on` — Gemini + UPCitemdb both null + flag ON → 200 with `match_quality="provisional"`, `upc=None`, `source="provisional"`, `source_raw["provisional"] is True`, `source_raw["search_query"]` forwarded from body, `gemini_no_upc_reason` captured.
+  - `test_resolve_from_search_404_when_flag_off` — flag OFF (default) preserves the legacy 404 path. The dark-launch invariant.
+  - `test_resolve_from_search_provisional_dedup_within_7_days` — same `(device_name, brand)` posted twice → both responses carry the same product UUID.
+  - `test_resolve_from_search_low_confidence_409_precedes_provisional` — confidence 0.55 + flag ON → 409 with `RESOLUTION_NEEDS_CONFIRMATION`, no provisional row written.
+  - `test_resolve_from_search_resolved_mismatch_still_404_with_flag_on` — Gemini DOES return a UPC but `_resolved_matches_query` rejects (Toro→Greenworks at `841821087104`) → 404, no provisional row.
+  - `test_resolve_response_match_quality_exact_for_canonical` — happy-path UPC-resolved row carries `match_quality="exact"`. Additive-field regression guard.
+- `tests/modules/test_m2_prices.py` (2 new):
+  - `test_get_prices_provisional_product_auto_injects_query_override` — provisional product without caller-supplied override is dispatched with `query=product.name` and `product_name=product.name` (the override path).
+  - `test_get_prices_caller_override_wins_over_provisional_default` — explicit caller override takes precedence over server-side injection.
+- `tests/modules/test_m6_recommend.py` (1 new + 1 modified):
+  - `test_recommendation_skips_cache_write_for_provisional_product` — provisional product + non-inflight prices payload + `recommendation_skip_cache_write` log line carries `provisional=True inflight=False`. Cache key in both bare and scoped shapes confirmed unset. Mocks `PriceAggregationService.get_prices` to return a clean payload so the only reason the write is skipped is the provisional marker.
+  - `test_recommendation_skips_cache_write_when_prices_came_from_inflight` — assertion updated from `recommendation_built_from_inflight` to `recommendation_skip_cache_write` + `inflight=True` (log was renamed).
+
+iOS:
+- `BarkainTests/Features/Recommendation/RecommendationHeroSnapshotTests.swift` (1 new) — `provisional_approximateMatch()` exercises `RecommendationHero(recommendation: rec, isProvisional: true, searchQuery: "Milwaukee M18 FUEL 2960-22 kit")` against an iPhone 17 Pro 402×2800 @3x baseline. Records under `RECORD_SNAPSHOTS=1`, baseline committed at `__Snapshots__/RecommendationHeroSnapshotTests/provisional_approximateMatch.provisional-approximate-match.png`. Also re-recorded the existing tier1/2/3 baselines because the new conditional `if isProvisional { provisionalBanner }` branch shifted layout pixels by a small amount in the false-branch case.
+
+**Live verification (sim, iPhone 17 Pro / iOS 26.4).**
+
+Backend started with `PROVISIONAL_RESOLVE_ENABLED=1`:
+- POST `/api/v1/products/resolve-from-search` `{"device_name": "Festool TS 60 KEBQ-Plus Track Saw 577419", "brand": "Festool", "query": "Festool TS 60 577419"}` → `200` with `match_quality: "provisional"`, `upc: null`, `source: "provisional"`, UUID `494d5429-d9db-45c9-a806-93f723860cdb`.
+- GET `/api/v1/prices/494d5429-…/stream` returned `retailer_result` events for all 9 retailers. Most reported `status: "no_match"` (relevance gates correctly filtering noise on a niche SKU). FB Marketplace reported `status: "success"` with a real $700 used Festool TS 60 listing (URL contained `marketplace/item/3023899047947335`, condition `used`, image hosted on `scontent-ord5-3.xx.fbcdn.net`).
+- Re-POSTing the same Festool body returned the same UUID (7-day dedup confirmed in-process, not just in tests).
+- POST with the Milwaukee 2960-22 body returned `match_quality: "exact"` with a derived UPC `045242568918` — Gemini's variance flipped the Milwaukee resolve to canonical on retry, exactly the behavior the dark-launch is supposed to leave alone. The flag only opens the floor for the persistent-empty case.
+
+**Decisions worth remembering.**
+
+- **Dark-launch the behavior change, ship the schema first.** `match_quality` and `query` field on the wire schemas, plus `Product.match_quality` `@property`, all land with the flag at False. iOS, older clients, and integration tests all see additive surface only. Behavior flip is one config edit on the backend host. Same pattern as the SEARCH_THUMBNAIL_FALLBACK shipping cadence.
+- **Convert ONLY the upstream-empty branch.** The other two `UPCNotFoundForDescriptionError` raise sites mean different things ("retry-after-cache-invalidate" and "we have a real product, just not the right one for this query"). Provisional persistence is right only when we genuinely have no canonical answer. Mixing the three would either step on legitimate canonical rows or write provisional rows that 7-day-shadow correct ones.
+- **Server-side query injection beats client-side.** Older iOS builds, M6 cache warm jobs, and any future re-resolve job all get the right behavior without each remembering the rule. The rule is tied to the persisted product's `source`, which is the right level of abstraction.
+- **Skip M6 cache for provisional, don't shorten TTL.** Considered a 30-min provisional TTL but the upgrade pathway (a future canonical-UPC backfill) is the load-bearing case — a stale provisional snapshot for up to 30 min after the upgrade is exactly what the cache skip prevents. Cost of skipping is one extra `_filter_prices` + identity/cards/portals join per call (~50 ms), well under the 15-min TTL win.
+- **Generalize the `_inflight` skip-write log line to cover both signals.** The two signals (inflight vs provisional) have the same outcome (don't cache) but different causes. Keeping them in the same log line with explicit `inflight=… provisional=…` tags lets ops attribute correctly without grepping multiple keys. Renaming the log was the only "compatibility" cost — caught by the existing inflight test, which the migration updates in a one-liner.
+- **7 days, not 24 hours.** Re-tapping a dead-end query the next day shouldn't spawn a fresh row; re-tapping a week later should so the user benefits from any upstream improvement.
+- **Banner copy stays user-facing first.** "Best results for \"<query>\" — exact match unavailable. Verify before tapping Open." sets expectation without scolding the user. The downgraded eyebrow + muted color do the rest visually. CTA still works; the spending flow is preserved.
+
+**Opens.**
+
+- **Provisional row pollution.** Without dedup, every botched search tap would create a row. 7-day dedup keeps this bounded for in-session retries but `products.source='provisional'` rows accumulate over time. A nightly sweep (`DELETE WHERE source='provisional' AND created_at < now() - interval '90 days' AND NOT EXISTS (SELECT 1 FROM price_history ph WHERE ph.product_id = products.id)`) is the natural follow-up. Deferred — not v1.
+- **`is_provisional` generated column + partial index.** Migration `0013` would add `is_provisional bool generated always as ((source_raw->>'provisional')::bool) stored` plus a partial index for batch-retry tooling. JSONB scan is fine for the iOS surface (it never queries the column directly — reads `match_quality` off the response). Defer until cleanup tooling needs it.
+- **Tap-to-upgrade.** A natural follow-up: when a provisional row's price stream lands a high-confidence retailer match (e.g. eBay returns a row whose model number AND brand match exactly), backfill `Product.upc` from that retailer's row and flip `source_raw["provisional"]=False`. Would let the row "graduate" to canonical mid-stream. Deferred; `_resolved_matches_query` would need to be reused to gate the upgrade.
