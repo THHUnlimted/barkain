@@ -13,6 +13,17 @@ struct RecommendationHero: View {
 
     let recommendation: Recommendation
 
+    /// provisional-resolve: when true the hero renders an "approximate
+    /// match" banner above the card and downgrades the BEST BARKAIN
+    /// eyebrow to "APPROXIMATE MATCH" so the user knows the underlying
+    /// Product was persisted as a best-effort row (no canonical UPC).
+    /// Defaults to false so existing call sites keep their behavior.
+    var isProvisional: Bool = false
+
+    /// User's original search string, surfaced inside the provisional
+    /// banner copy. Ignored when `isProvisional` is false.
+    var searchQuery: String? = nil
+
     /// Fired on the primary CTA tap. Parent wires this to the existing
     /// affiliate-click round-trip so the hero and retailer rows share
     /// the same in-app browser path.
@@ -29,6 +40,9 @@ struct RecommendationHero: View {
 
     var body: some View {
         VStack(spacing: Spacing.md) {
+            if isProvisional {
+                provisionalBanner
+            }
             heroCard
             if let callout = recommendation.brandDirectCallout {
                 calloutPill(callout)
@@ -40,6 +54,47 @@ struct RecommendationHero: View {
         .transition(.opacity.combined(with: .scale(scale: 0.96)))
         .animation(.spring(duration: 0.35), value: recommendation)
         .accessibilityIdentifier("recommendationHero")
+    }
+
+    // MARK: - Provisional banner (provisional-resolve)
+    //
+    // Soft, non-blocking banner above the hero card that tells the user
+    // the underlying Product is a best-effort match — Gemini + UPCitemdb
+    // couldn't pin a canonical UPC, so the price stream ran on the user's
+    // original search string with the relevance gates as the safety net.
+    // The banner sets expectation; the eyebrow downgrade ("APPROXIMATE
+    // MATCH") + hidden BEST BARKAIN gold saturation reinforce it without
+    // breaking the spending flow — the CTA still works.
+
+    private var provisionalBanner: some View {
+        HStack(alignment: .top, spacing: Spacing.sm) {
+            Image(systemName: "info.circle.fill")
+                .foregroundStyle(Color.barkainPrimary)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(provisionalBannerHeadline)
+                    .font(.barkainBody)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color.barkainOnSurface)
+                Text("Exact match unavailable — verify before tapping Open.")
+                    .font(.barkainCaption)
+                    .foregroundStyle(Color.barkainOnSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(Spacing.md)
+        .background(Color.barkainPrimaryFixed.opacity(0.18))
+        .clipShape(RoundedRectangle(cornerRadius: Spacing.cornerRadius, style: .continuous))
+        .accessibilityIdentifier("provisionalMatchBanner")
+        .accessibilityElement(children: .combine)
+    }
+
+    private var provisionalBannerHeadline: String {
+        if let q = searchQuery, !q.isEmpty {
+            return "Best results for \"\(q)\""
+        }
+        return "Approximate match"
     }
 
     // MARK: - Hero card
@@ -85,13 +140,15 @@ struct RecommendationHero: View {
 
     private var eyebrow: some View {
         HStack(spacing: Spacing.xxs) {
-            Image(systemName: "pawprint.fill")
+            Image(systemName: isProvisional ? "magnifyingglass" : "pawprint.fill")
                 .font(.system(size: 12, weight: .semibold))
-            Text("BEST BARKAIN")
+            Text(isProvisional ? "APPROXIMATE MATCH" : "BEST BARKAIN")
                 .font(.barkainLabel)
                 .tracking(0.8)
         }
-        .foregroundStyle(Color.barkainPrimary)
+        .foregroundStyle(
+            isProvisional ? Color.barkainOnSurfaceVariant : Color.barkainPrimary
+        )
     }
 
     // MARK: - Hero lines (savings-math-prominence Item 1)

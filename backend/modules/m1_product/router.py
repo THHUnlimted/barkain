@@ -154,6 +154,8 @@ async def resolve_from_search(
             brand=body.brand,
             model=body.model,
             fallback_image_url=body.fallback_image_url,
+            search_query=body.query,
+            allow_provisional=settings.PROVISIONAL_RESOLVE_ENABLED,
         )
         return ProductResponse.model_validate(product)
     except UPCNotFoundForDescriptionError as exc:
@@ -227,6 +229,8 @@ async def resolve_from_search_confirm(
             brand=body.brand,
             model=body.model,
             fallback_image_url=body.fallback_image_url,
+            search_query=body.query,
+            allow_provisional=settings.PROVISIONAL_RESOLVE_ENABLED,
         )
         return ConfirmResolutionResponse(
             product=ProductResponse.model_validate(product),

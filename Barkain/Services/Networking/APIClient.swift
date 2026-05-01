@@ -20,12 +20,19 @@ protocol APIClientProtocol: Sendable {
     /// `confidence` forwards the search-result value so the backend can
     /// apply its gate; pass nil to skip the gate (legacy path).
     /// `fallbackImageURL` works the same as on `resolveProduct`.
+    /// `query` carries the user's original search string so the backend
+    /// can persist it on a provisional `Product`'s `source_raw.search_query`
+    /// (the M2 stream's `query_override` auto-injection reads this).
+    /// Pass nil from non-search call sites; protocol default-args do not
+    /// flow through protocol-typed call sites, so every conformer + caller
+    /// must supply this explicitly.
     func resolveProductFromSearch(
         deviceName: String,
         brand: String?,
         model: String?,
         confidence: Double?,
-        fallbackImageURL: String?
+        fallbackImageURL: String?,
+        query: String?
     ) async throws -> ResolveFromSearchOutcome
     /// Called after the user taps Yes/No in the confirmation sheet.
     func resolveProductFromSearchConfirm(
@@ -217,7 +224,8 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
         brand: String? = nil,
         model: String? = nil,
         confidence: Double? = nil,
-        fallbackImageURL: String? = nil
+        fallbackImageURL: String? = nil,
+        query: String? = nil
     ) async throws -> ResolveFromSearchOutcome {
         do {
             let product: Product = try await request(
@@ -226,7 +234,8 @@ nonisolated final class APIClient: APIClientProtocol, @unchecked Sendable {
                     brand: brand,
                     model: model,
                     confidence: confidence,
-                    fallbackImageURL: fallbackImageURL
+                    fallbackImageURL: fallbackImageURL,
+                    query: query
                 )
             )
             return .loaded(product)

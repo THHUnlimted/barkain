@@ -69,6 +69,13 @@ struct SearchView: View {
             // a unified surface regardless of how the product arrived.
             guard let product = viewModel?.presentedProductViewModel?.product,
                   product.id == newValue else { return }
+            // provisional-resolve: skip provisional rows. They're
+            // best-effort matches keyed on the user's search string, not
+            // canonical SKUs — promoting them to Recently Sniffed would
+            // pollute the rail with non-canonical thumbnails the user
+            // can't scan back to. A future canonical upgrade will land
+            // here naturally on the next scan/tap.
+            guard !product.isProvisional else { return }
             recentlyScanned.record(
                 id: product.id,
                 upc: product.upc,
@@ -175,22 +182,30 @@ struct SearchView: View {
             text: Binding(
                 get: { vm.query },
                 set: { newValue in
-                    // Update the bound `query` SYNCHRONOUSLY so the system X
-                    // "Clear text" button (and subsequent keystrokes) see a
-                    // fresh value immediately. Wrapping the whole setter in
-                    // a Task races against the next edit — that was the
-                    // root cause of the "Clear doesn't actually clear" bug.
-                    //
-                    // Mirrors the same spurious-empty guard `onQueryChange`
-                    // applies (see SearchViewModel comment): when a stream
-                    // is presented, an empty-value setter call is almost
-                    // certainly a SwiftUI .searchable teardown artifact and
-                    // would dismiss the comparison view if we wrote it
-                    // through. The async path still runs in either case so
-                    // suggestions and presented-VM dismissal stay correct.
-                    let isRealEdit = !newValue.isEmpty && newValue != vm.query
-                    if isRealEdit || (newValue.isEmpty && vm.presentedProductViewModel == nil) {
-                        vm.query = newValue
+                    // Spurious-empty guard: SwiftUI fires setter("") when
+                    // `.searchable` detaches mid-stream (nav bar hides). We
+                    // narrow the guard to actively-streaming presentations
+                    // — once the stream completes the user's X-tap is real
+                    // and must clear the field.
+                    let isStreaming = vm.presentedProductViewModel?.isPriceLoading == true
+                    let isSpuriousEmpty = newValue.isEmpty && isStreaming
+                    if isSpuriousEmpty {
+                        Task { await vm.onQueryChange(newValue) }
+                        return
+                    }
+
+                    let oldValue = vm.query
+                    let isRealEdit = !newValue.isEmpty && newValue != oldValue
+                    let isExplicitClear = newValue.isEmpty && !oldValue.isEmpty
+                    vm.query = newValue
+                    // Dismiss any presented comparison synchronously on
+                    // real edits or explicit clears so the suggestion
+                    // drawer + results aren't hidden behind a stale
+                    // resolved product. The async `onQueryChange` can't do
+                    // this — by the time it runs, `query == newValue`, so
+                    // its own isRealEdit check is always false here.
+                    if (isRealEdit || isExplicitClear), vm.presentedProductViewModel != nil {
+                        vm.presentedProductViewModel = nil
                     }
                     Task { await vm.onQueryChange(newValue) }
                 }

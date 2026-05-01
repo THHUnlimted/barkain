@@ -442,12 +442,18 @@ final class SearchViewModel {
                 // UPC path failed — fall through to description-based resolve.
             }
         }
+        // provisional-resolve: forward the user's original search string
+        // so the backend can persist it on a provisional Product's
+        // ``source_raw.search_query`` (the M2 stream's ``query_override``
+        // auto-injection reads this). No-op when the backend resolves
+        // canonically — the field is just ignored on the canonical path.
         return try await apiClient.resolveProductFromSearch(
             deviceName: result.deviceName,
             brand: result.brand,
             model: result.model,
             confidence: result.confidence,
-            fallbackImageURL: fallbackImage
+            fallbackImageURL: fallbackImage,
+            query: query
         )
     }
 

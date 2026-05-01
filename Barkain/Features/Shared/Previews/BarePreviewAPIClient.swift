@@ -27,7 +27,8 @@ class BarePreviewAPIClient: APIClientProtocol, @unchecked Sendable {
         brand: String?,
         model: String?,
         confidence: Double?,
-        fallbackImageURL: String?
+        fallbackImageURL: String?,
+        query: String?
     ) async throws -> ResolveFromSearchOutcome {
         previewUnimplemented()
     }

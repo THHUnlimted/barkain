@@ -160,6 +160,18 @@ class Settings(BaseSettings):
     # rows that pass 1 missed.
     SEARCH_THUMBNAIL_FALLBACK: bool = True
 
+    # provisional-resolve: flip /resolve-from-search's "no UPC at all" branch
+    # from a hard 404 into a best-effort persisted Product (``source =
+    # 'provisional'``, ``upc = NULL``) so the user gets a price stream keyed
+    # on their search string instead of an unresolved-product surface. The
+    # M2 stream auto-injects ``query_override = product.name`` for these
+    # rows and the relevance gates (model-number hard, brand-bleed, 0.4
+    # token overlap) become the safety net at price-fetch time. iOS reads
+    # ``Product.match_quality`` and renders an "approximate match" banner +
+    # excludes the row from Recently Sniffed. Default OFF — dark-launched
+    # so we can ship the model + schema changes ahead of the behavior flip.
+    PROVISIONAL_RESOLVE_ENABLED: bool = False
+
     # demo-prep-1 Item 3: confidence gate on /resolve-from-search. When the
     # client-supplied search-result confidence falls below this threshold,
     # the endpoint returns 409 RESOLUTION_NEEDS_CONFIRMATION instead of

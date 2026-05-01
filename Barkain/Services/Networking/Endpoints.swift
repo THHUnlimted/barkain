@@ -13,7 +13,7 @@ nonisolated enum HTTPMethod: String {
 
 nonisolated enum Endpoint {
     case resolveProduct(upc: String, fallbackImageURL: String?)
-    case resolveFromSearch(deviceName: String, brand: String?, model: String?, confidence: Double?, fallbackImageURL: String?)
+    case resolveFromSearch(deviceName: String, brand: String?, model: String?, confidence: Double?, fallbackImageURL: String?, query: String?)
     case resolveFromSearchConfirm(ResolveFromSearchConfirmRequest)
     case searchProducts(query: String, maxResults: Int, forceGemini: Bool)
     case getPrices(productId: UUID, forceRefresh: Bool = false)
@@ -159,7 +159,7 @@ nonisolated enum Endpoint {
                 let fallbackImageUrl: String?
             }
             return try? encoder.encode(Body(upc: upc, fallbackImageUrl: fallbackImageURL))
-        case .resolveFromSearch(let deviceName, let brand, let model, let confidence, let fallbackImageURL):
+        case .resolveFromSearch(let deviceName, let brand, let model, let confidence, let fallbackImageURL, let query):
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase
             struct Body: Encodable {
@@ -168,13 +168,19 @@ nonisolated enum Endpoint {
                 let model: String?
                 let confidence: Double?
                 let fallbackImageUrl: String?
+                // provisional-resolve: original search string forwarded so
+                // the backend can persist it on a provisional Product's
+                // ``source_raw.search_query`` (used by the M2 stream's
+                // server-side ``query_override`` injection).
+                let query: String?
             }
             return try? encoder.encode(Body(
                 deviceName: deviceName,
                 brand: brand,
                 model: model,
                 confidence: confidence,
-                fallbackImageUrl: fallbackImageURL
+                fallbackImageUrl: fallbackImageURL,
+                query: query
             ))
         case .resolveFromSearchConfirm(let request):
             let encoder = JSONEncoder()

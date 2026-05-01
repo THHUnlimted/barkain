@@ -52,6 +52,11 @@ class ProductResponse(BaseModel):
     image_url: str | None
     source: str
     confidence: float = 0.0
+    # ``"exact"`` for UPC-resolved rows, ``"provisional"`` for best-effort
+    # rows persisted by ``/resolve-from-search`` when no UPC could be
+    # derived. iOS reads this to render the "approximate match" banner
+    # and skip the Recently Sniffed rail; older clients ignore the field.
+    match_quality: Literal["exact", "provisional"] = "exact"
     created_at: datetime
     updated_at: datetime
 
@@ -96,6 +101,13 @@ class ResolveFromSearchRequest(BaseModel):
     # search-row thumbnail (often a backfilled eBay/Serper image) so the
     # persisted product carries the picture the user tapped.
     fallback_image_url: str | None = Field(default=None, max_length=2048)
+    # provisional-resolve: the user's original search string, forwarded so
+    # a provisional Product row carries it in ``source_raw.search_query``
+    # (the M2 stream auto-injects this as ``query_override`` for
+    # provisional rows). Optional and additive — older clients omit it
+    # and the behavior is unchanged when ``PROVISIONAL_RESOLVE_ENABLED``
+    # is off.
+    query: str | None = Field(default=None, max_length=300)
 
     model_config = {"protected_namespaces": ()}
 
