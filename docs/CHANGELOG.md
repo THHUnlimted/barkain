@@ -5569,3 +5569,49 @@ Backend started with `PROVISIONAL_RESOLVE_ENABLED=1`:
 - **Provisional row pollution.** Without dedup, every botched search tap would create a row. 7-day dedup keeps this bounded for in-session retries but `products.source='provisional'` rows accumulate over time. A nightly sweep (`DELETE WHERE source='provisional' AND created_at < now() - interval '90 days' AND NOT EXISTS (SELECT 1 FROM price_history ph WHERE ph.product_id = products.id)`) is the natural follow-up. Deferred — not v1.
 - **`is_provisional` generated column + partial index.** Migration `0013` would add `is_provisional bool generated always as ((source_raw->>'provisional')::bool) stored` plus a partial index for batch-retry tooling. JSONB scan is fine for the iOS surface (it never queries the column directly — reads `match_quality` off the response). Defer until cleanup tooling needs it.
 - **Tap-to-upgrade.** A natural follow-up: when a provisional row's price stream lands a high-confidence retailer match (e.g. eBay returns a row whose model number AND brand match exactly), backfill `Product.upc` from that retailer's row and flip `source_raw["provisional"]=False`. Would let the row "graduate" to canonical mid-stream. Deferred; `_resolved_matches_query` would need to be reused to gate the upgrade.
+
+### Step fix/3o-C-L1-token-overlap-gate (2026-05-01)
+
+**Branch.** `fix/3o-C-L1-token-overlap-gate` (open).
+
+**Why.** Closes Known Issue `3o-C-L1-fabricated-upc-tap` (carried since 3c, amplified by 3o-C breadth). Re-diagnosed during the 2026-05-01 non-headed sweep: query `Apple Watch Ultra 2 49mm Natural Titanium GPS Cellular` returned a canonical row whose name was **"Apple MacBook Air 13-inch M3 Chip 8-Core CPU 10-Core GPU 16GB RAM 512GB SSD Midnight (MXCV3LL/A)"** at UPC `195949036323` and surfaced 4 MacBook Air retailer rows ($769–$830). The original Known Issue label called this "fabricated UPC" — but the UPC is real (a genuine MacBook Air SKU); Gemini's `_lookup_upc_from_description` just picked the wrong product when given the Apple Watch description. Defense-in-depth lives at the relevance gate, not the LLM prompt.
+
+**Root cause.** `_resolved_matches_query` in `backend/modules/m1_product/service.py:67-114` had two gates:
+1. **Brand** — supplied `query_brand` (or leading meaningful alpha token) must appear in resolved haystack.
+2. **Strict-spec** — voltage tokens (`40v`/`80v`) and 4+digit pure-numeric model numbers (`5200`/`6400`) must echo verbatim.
+
+For `Apple Watch Ultra 2 49mm Natural Titanium GPS Cellular` → MacBook Air haystack:
+- brand-token = `"apple"` → present in `"apple macbook air..."` haystack → **gate 1 PASSES (false-positive)**
+- strict-specs = `[]` → `49mm` doesn't match `^\d{4,}$`, no voltage → **gate 2 inert**
+- → returns True, MacBook Air row accepted.
+
+**Fix (one-liner pattern).** Add a 3rd gate: token-overlap floor. When the query has ≥2 meaningful tokens (`_meaningful_query_tokens` from `search_service.py`: ≥3 chars, not in `_RELEVANCE_STOPWORDS`), require ≥2 to substring-match the haystack. For Apple-Watch-vs-MacBook-Air the meaningful set is `[apple, watch, 49mm, natural, titanium, gps, cellular]` (7 tokens); only `apple` appears → 1 < 2 → **REJECT**.
+
+```python
+meaningful = _meaningful_query_tokens(query)
+if len(meaningful) >= 2:
+    hits = sum(1 for tok in meaningful if tok in haystack)
+    if hits < 2:
+        return False
+```
+
+**Edge case guard.** When the meaningful set has <2 tokens, the new gate is inert. `iPhone 16 Pro` tokenizes to `[iphone]` (`16` is len 2 — below 3-char floor; `pro` is in `_RELEVANCE_STOPWORDS`). For these single-iconic-name queries the brand + strict-spec gates remain authoritative — single-iconic-name resolves aren't penalized.
+
+**Why reuse `_meaningful_query_tokens` not duplicate the logic.** Search-time and resolve-time should tokenize identically. The function in `search_service.py` is the single source of truth for "what counts as a query anchor"; pulling it into `service.py` would drift over time. Cross-module import is fine — both files are in `m1_product/`.
+
+**Tests.** +2 unit tests in `tests/modules/test_product_resolve_from_search.py`:
+- `test_resolved_matches_query_rejects_in_brand_cross_category_drift` — pins the Apple Watch → MacBook Air case verbatim.
+- `test_resolved_matches_query_passes_for_short_iconic_query` — guards `iPhone 16 Pro` against over-rejection.
+
+All 7 existing `_resolved_matches_query` tests still pass. Backend test totals: **815 → 817** passed; 8 skipped unchanged.
+
+**Live verification (2026-05-01, post-fix, `PROVISIONAL_RESOLVE_ENABLED=1`).** Same `Apple Watch Ultra 2 49mm Natural Titanium GPS Cellular` query:
+1. **Cache-hit branch.** First call hits the bad UPC `195949036323` in Redis devupc cache from the pre-fix sweep. The new gate rejects it on resolve, the existing cache-invalidation branch fires (`Cached UPC … but does not match query … — invalidating`), and the route 404s with `gemini_reasoning` propagated. ✓
+2. **Fresh-upstream branch.** Second call: Redis cache cleared. Gemini + UPCitemdb fire in parallel. Gemini returned no UPC this time (non-deterministic); UPCitemdb was rate-limited. Upstream-empty branch fires `_persist_provisional` → returns `match_quality: "provisional"` → 4 real Apple Watch Ultra 2 prices (Walmart pre-owned $341.96, eBay used $367.99, eBay open-box $419.95, FB used $650) in M2 + 3 misc rows (Unclaimed Baggage / PayMore Chelsea / Instacart) in M14. ✓
+
+Both branches deliver correct user behavior — wrong-product UPCs get rejected; upstream-empty queries get provisional rows with real prices.
+
+**Pattern note.** When the test cases for a 2-gate function start growing examples that pass both gates wrong, add a 3rd gate before tightening the upstream LLM prompt. Prompt-side fixes are best-effort (3o-C rewrite reduced but didn't eliminate wrong-product picks); gate-side fixes are deterministic.
+
+**Renamed in spirit.** Issue ID `3o-C-L1-fabricated-upc-tap` kept stable for grep-history; mechanism is "wrong-product UPC", not "fabricated UPC". The UPC is a real GS1 entry — the LLM mapping is wrong.
+
