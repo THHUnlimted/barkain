@@ -40,6 +40,7 @@ from ai.prompts.upc_lookup import (
 from modules.m1_product.models import Product
 from modules.m1_product.search_service import (
     _RELEVANCE_STOPWORDS,
+    _meaningful_query_tokens,
     _query_strict_specs,
 )
 from modules.m1_product.upcitemdb import lookup_upc as upcitemdb_lookup
@@ -72,7 +73,7 @@ def _resolved_matches_query(
 ) -> bool:
     """Sanity-check that a UPC's canonical product reflects the user's query.
 
-    Two gates, ANY miss → reject:
+    Three gates, ANY miss → reject:
 
     1. **Brand gate** — the supplied ``query_brand`` (or, when absent, the
        leading meaningful alpha token of ``query``) must appear in the
@@ -84,9 +85,17 @@ def _resolved_matches_query(
        must echo back verbatim in the haystack. Catches Vitamix
        5200→Explorian E310 and Greenworks 40V→80V drift, where the
        upstream UPC database returns the wrong canonical row.
-
-    Reuses ``_query_strict_specs`` so search-time and resolve-time use
-    the same definition of "must match verbatim".
+    3. **Token-overlap gate** — when the query has ≥2 meaningful tokens
+       (≥3 chars, not in ``_RELEVANCE_STOPWORDS``), require ≥2 of them to
+       appear as substrings in the haystack. Catches in-brand cross-
+       category drift the brand gate alone can't see: "Apple Watch Ultra
+       2 49mm Natural Titanium GPS Cellular" → Gemini-picked MacBook Air
+       UPC, where "apple" matches both haystacks but watch/49mm/titanium/
+       gps/cellular don't appear in the MacBook Air row. Falls back to
+       gates 1+2 only when the query has <2 meaningful tokens (e.g.
+       "iPhone 16 Pro" → ["iphone"]) so single-iconic-name resolves
+       aren't penalized. Reuses ``_meaningful_query_tokens`` so search-
+       time and resolve-time use the same tokenizer.
     """
     haystack = " ".join([
         (resolved_name or "").lower(),
@@ -109,6 +118,12 @@ def _resolved_matches_query(
 
     for spec in _query_strict_specs(query):
         if spec not in haystack:
+            return False
+
+    meaningful = _meaningful_query_tokens(query)
+    if len(meaningful) >= 2:
+        hits = sum(1 for tok in meaningful if tok in haystack)
+        if hits < 2:
             return False
 
     return True

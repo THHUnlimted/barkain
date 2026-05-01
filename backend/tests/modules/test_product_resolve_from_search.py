@@ -730,6 +730,48 @@ def test_resolved_matches_query_passes_when_brand_in_resolved_name_only():
     ) is True
 
 
+def test_resolved_matches_query_rejects_in_brand_cross_category_drift():
+    """`3o-C-L1-fabricated-upc-tap` live repro: brand-only match isn't enough.
+
+    "Apple Watch Ultra 2 49mm Natural Titanium GPS Cellular" → Gemini
+    `_lookup_upc_from_description` returned UPC ``195949036323`` which
+    resolves to a real "Apple MacBook Air 13-inch M3" canonical row. The
+    brand gate sees "apple" in both haystacks and the strict-spec gate
+    has nothing to anchor on (no voltage, no 4+digit pure-numeric).
+    The token-overlap gate rejects: 7 meaningful query tokens, only
+    "apple" appears in the MacBook Air haystack.
+    """
+    from modules.m1_product.service import _resolved_matches_query
+
+    assert _resolved_matches_query(
+        query="Apple Watch Ultra 2 49mm Natural Titanium GPS Cellular",
+        query_brand=None,
+        resolved_name=(
+            "Apple MacBook Air 13-inch M3 Chip 8-Core CPU 10-Core GPU "
+            "16GB RAM 512GB SSD Midnight (MXCV3LL/A)"
+        ),
+        resolved_brand=None,
+    ) is False
+
+
+def test_resolved_matches_query_passes_for_short_iconic_query():
+    """Single-token queries fall back to brand+strict-spec only.
+
+    Guards the new token-overlap gate from over-rejecting when there's
+    only one meaningful token to match. "iPhone 16 Pro" tokenizes to
+    ["iphone"] (16 too short, "pro" stopword), so the new gate is
+    inert and the existing brand gate passes the resolve.
+    """
+    from modules.m1_product.service import _resolved_matches_query
+
+    assert _resolved_matches_query(
+        query="iPhone 16 Pro",
+        query_brand="Apple",
+        resolved_name="Apple iPhone 16 Pro 256GB Natural Titanium",
+        resolved_brand="Apple",
+    ) is True
+
+
 @pytest.mark.asyncio
 async def test_resolve_from_search_404_when_resolved_drifts_on_voltage(
     client, db_session, fake_redis
