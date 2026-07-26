@@ -290,6 +290,64 @@ def _from_inventory_depletion(snapshots: list[Snapshot]) -> DemandEstimate | Non
     )
 
 
+def estimate_from_inventory_report(
+    units_sold: int, period_days: int, *, adjustments: int = 0
+) -> DemandEstimate:
+    """Units sold from a first-party WFS inventory reconciliation report.
+
+    This is the depletion signal without the inference. For SKUs you already
+    own, Walmart reports exactly how many units left the fulfillment centre in
+    the period, with Lost / Found / Removed / Transferred broken out into their
+    own columns — so the restock and stock-correction guesswork that the
+    cart-quantity estimator has to do is simply handled at the source.
+
+    The cart-scraping path in ``_from_inventory_depletion`` is what this
+    *approximates* for prospective items you don't own yet. Where this report
+    exists it wins outright, and it's why the two live at the same confidence
+    tier: they measure the same quantity, one by observation and one by
+    authority.
+
+    ``adjustments`` (lost + removed) is reported for transparency but is
+    deliberately NOT counted as sales — a unit written off as damaged left the
+    warehouse without anyone buying it.
+    """
+    days = max(period_days, 1)
+    monthly = units_sold / days * 30.0
+    basis = f"{units_sold} units shipped in {days} days (WFS inventory report)"
+    if adjustments:
+        basis += f"; {adjustments} lost/removed excluded"
+    return DemandEstimate(
+        estimated_monthly_sales=round(monthly, 1),
+        confidence=DemandConfidence.OBSERVED,
+        basis=basis,
+        observation_days=days,
+        assumptions=("seller_specific_not_listing_wide", "first_party_report"),
+    )
+
+
+def estimate_from_orders(order_units: int, window_days: int) -> DemandEstimate:
+    """Demand rate from the orders export — what customers *asked for*.
+
+    Deliberately distinct from units shipped. Orders that are still
+    ACKNOWLEDGED haven't shipped and haven't been billed, so a shipment-based
+    rate under-reads demand by the whole in-flight backlog — on a fast mover
+    that's days of sales, and it's a systematic under-read, not noise.
+
+    Use this for demand; use the billed count for cash. They are not the same
+    question and conflating them biases every reorder decision downward.
+    """
+    days = max(window_days, 1)
+    monthly = order_units / days * 30.0
+    return DemandEstimate(
+        estimated_monthly_sales=round(monthly, 1),
+        confidence=DemandConfidence.OBSERVED,
+        basis=f"{order_units} units ordered in {days} days (orders export)",
+        observation_days=days,
+        assumptions=("seller_specific_not_listing_wide", "first_party_report",
+                     "includes_unshipped_orders"),
+    )
+
+
 def _from_sold_count(snapshots: list[Snapshot]) -> DemandEstimate | None:
     """Exact sold count over a stated window → monthly. Measurement, not model.
 

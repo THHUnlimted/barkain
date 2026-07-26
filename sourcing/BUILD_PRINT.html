@@ -397,10 +397,10 @@
       <div class="field"><span class="field__label">Branch</span><span class="field__value">claude/wholesale-sourcing-scanner-83n3ch</span></div>
       <div class="field"><span class="field__label">Location</span><span class="field__value">/sourcing</span></div>
       <div class="field"><span class="field__label">Date</span><span class="field__value">2026-07-26</span></div>
-      <div class="field"><span class="field__label">Python</span><span class="field__value">7,531 lines · 17 files</span></div>
+      <div class="field"><span class="field__label">Python</span><span class="field__value">8,240 lines · 17 files</span></div>
       <div class="field"><span class="field__label">Channels</span><span class="field__value">Walmart · eBay · Amazon (BSR)</span></div>
       <div class="field"><span class="field__label">Files touched outside /sourcing</span><span class="field__value">0</span></div>
-      <div class="field"><span class="field__label">Revision</span><span class="field__value">C — calibrated</span></div>
+      <div class="field"><span class="field__label">Revision</span><span class="field__value">D — first-party</span></div>
     </div>
   </div>
 
@@ -752,6 +752,26 @@ flowchart TD
 
     <p>So the rule is: <strong>an observed fee always beats a published rate.</strong> Published tables become the fallback for products you've never sold, and every import shrinks that set.</p>
 
+    <h3>Why $4.45 matched no weight tier</h3>
+
+    <p>A settlement report answered it outright. Every one of twelve <code>FulfillmentFee</code> rows for an $8.99 item carried:</p>
+
+    <div class="term">
+      <div class="term__bar">settlement.csv — the column that explained the mismatch</div>
+<pre>  Transaction Type   FulfillmentFee
+  Billing Method     <b>Under$10</b>
+  Net Payable        4.45      <span class="c">x12 lines, across three separate weeks</span></pre>
+    </div>
+
+    <p><strong>WFS prices items under $10 on a separate flat schedule, not on the weight tiers at all.</strong> That's why $4.45 sat between the published 0–1 lb ($3.45) and 1–2 lb ($4.95) bands — it was never being priced by weight. It's the kind of rule that's easy to miss on a rate card and impossible to miss in a settlement, and it matters disproportionately for wholesale: sub-$10 items are exactly where thin margins live, so mispricing their fulfillment by a dollar decides the whole category.</p>
+
+    <p>With the rule encoded, the engine reproduces the real order exactly: <strong>commission $1.08, WFS $4.45, net $3.46.</strong></p>
+
+    <div class="note note--warn">
+      <p><strong>Two traps in the same file.</strong> One order billed $2.95 rather than $4.45 — a $1.50 discount — followed by a separate <code>DiscountAdjustment</code> line recouping it, because "a discount was applied in error." Calibrating on net payable would have taught a fulfillment fee that isn't real; the parser uses the pre-discount amount and reports clawbacks separately.</p>
+      <p>And Walmart's own reports disagree on category names: the reconciliation report calls this item <em>Automotive &amp; Powersports</em>, the settlement calls it <em>Vehicles, Parts &amp; Accessories</em>. Same item, same 12%. Both spellings have to resolve to one key or the calibration splits in two and each half looks under-sampled.</p>
+    </div>
+
     <div class="term">
       <div class="term__bar">same order, both ways — actual was commission $1.08, WFS $4.45, net $3.46</div>
 <pre>  published tables only    commission $1.08   WFS $<span class="f">3.45</span>   net $<span class="f">4.38</span>
@@ -952,6 +972,40 @@ flowchart TD
       <p>Worth noting the contrast with Sheet S-07: eBay's <em>Marketplace Insights</em> API (competitor sold data) is effectively closed, but the <em>Sell</em> APIs covering your own account are open to any seller with a dev key. The hard data to get is other people's; your own is available.</p>
     </div>
 
+    <h3>Three reports, three different numbers, all correct</h3>
+
+    <p>The first real export of all three Walmart reports for one SKU produced this — and the disagreement is the useful part:</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Report</th><th>Window</th><th class="num">Units</th><th>What it actually measures</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">orders.xlsx</td><td>26 days</td><td class="num">14</td><td><strong>Demand</strong> — what customers asked for</td></tr>
+          <tr><td class="mono">inventoryReconciliation.csv</td><td>29 days</td><td class="num">12</td><td><strong>Fulfilled</strong> — what left the warehouse</td></tr>
+          <tr><td class="mono">settlement.csv</td><td>30 days</td><td class="num">12</td><td><strong>Billed</strong> — what Walmart charged you for</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="term">
+      <div class="term__bar">cross_check() — same SKU, three sources reconciled</div>
+<pre>  ordered_units          14      <span class="c">11 DELIVERED + 3 ACKNOWLEDGED</span>
+  in_flight_units         3
+  sold_units             12
+  billed_units           12
+  shipped_vs_billed_gap   0      <span class="p">clean — no lost or unbilled units</span>
+
+  demand_rate_monthly  16.2      <span class="c">from orders — the right number for reordering</span>
+  units_on_hand          37
+  months_of_cover       3.0</pre>
+    </div>
+
+    <div class="note note--warn">
+      <p><strong>Using the billed count as a demand estimate under-reads demand by the entire in-flight backlog</strong> — here 3 of 14 units, or 21%. That's not noise, it's a systematic downward bias, and it biases every reorder decision in the same direction. Orders for demand, billed for cash. The scanner now models them as separate estimators for exactly this reason.</p>
+    </div>
+
+    <p>The inventory reconciliation report is also the depletion signal <em>without the inference</em>. For SKUs you already own, Walmart reports units shipped directly, with Lost / Found / Removed / Transferred broken into their own columns — so the restock detection and outlier guarding that the cart-quantity estimator has to do is simply handled at the source. Cart scraping is what that <em>approximates</em> for prospective items you don't own yet.</p>
+
     <h3>What the loop learns</h3>
 
     <p>Pairing matches each actual to the latest forecast made <em>before</em> the window opened — a prediction made after the sales it's judged on isn't a prediction. Two things fall out:</p>
@@ -1107,7 +1161,8 @@ flowchart TD
           <tr><td>CSV / TSV ingest</td><td><span class="chip chip--pass">done</span></td><td>Header detection + column mapping verified</td></tr>
           <tr><td>XLSX ingest</td><td><span class="chip chip--watch">untested</span></td><td>Code written; needs <code>openpyxl</code> and a real workbook</td></tr>
           <tr><td>Fee engines (WMT/eBay)</td><td><span class="chip chip--pass">done</span></td><td>Plan-aware, calibration-aware, verified against real orders to the cent</td></tr>
-          <tr><td>Settlement import</td><td><span class="chip chip--pass">done</span></td><td>Walmart MP/WFS reconciliation CSV → learned fee tables</td></tr>
+          <tr><td>Settlement import</td><td><span class="chip chip--pass">done</span></td><td>Reconciliation + settlement + inventory + orders. Four formats</td></tr>
+          <tr><td>Cross-check</td><td><span class="chip chip--pass">done</span></td><td>Reconciles ordered / shipped / billed across the three reports</td></tr>
           <tr><td>Velocity/margin slider</td><td><span class="chip chip--pass">done</span></td><td>Continuous 0–1, geometric blend, list-normalized</td></tr>
           <tr><td>Forecast vs actual engine</td><td><span class="chip chip--pass">done</span></td><td>Pairing, per-tier bias, guards. Tables + migration staged</td></tr>
           <tr><td>Seller-API collectors</td><td><span class="chip chip--todo">not built</span></td><td>Walmart Orders/Insights, eBay Fulfillment/Finances/Analytics</td></tr>
@@ -1159,7 +1214,8 @@ flowchart TD
       <table>
         <thead><tr><th>Question</th><th>Why it matters</th></tr></thead>
         <tbody>
-          <tr><td><strong>More reconciliation exports.</strong> Several months, ideally across categories.</td><td>Two orders of one SKU taught the engine one product type and one category. A few months would give real WFS fee curves and category rates across your actual catalog — worth more than any published table.</td></tr>
+          <tr><td><strong>Exports covering more SKUs</strong>, especially above and below the $10 line and in other categories.</td><td>The current set is one SKU at one price point. It found the Under-$10 schedule; a second price band would confirm where the weight tiers take over, and other categories would validate the referral table beyond Automotive.</td></tr>
+          <tr><td>Whatever is sitting in inventory at <strong>451+ days</strong>.</td><td>The settlement shows a $2.84 long-term storage charge at that age band. That's the exact cost velocity-first ranking exists to prevent, and it's worth seeing which SKU is generating it.</td></tr>
           <tr><td>Freight $/lb into your prep centre, and prep + polybag per unit.</td><td>The demo uses $0.42/lb and $0.83 combined as placeholders. These move verdicts more than anything else on the sheet.</td></tr>
           <tr><td>Walmart Marketplace + eBay developer keys for the Sell APIs.</td><td>Unlocks the actuals half of Sheet S-08b. Both are your own account data, so neither needs an approval gauntlet.</td></tr>
           <tr><td>Is Amazon a third channel, and on which plan?</td><td>Keepa is already on the Phase 4 roadmap. Adding it later is a new adapter plus a fee table; designing for it now costs nothing.</td></tr>
@@ -1173,7 +1229,7 @@ flowchart TD
 
   <footer>
     <span>Barkain M15 · Wholesale Sourcing Scanner</span>
-    <span>Build print rev. C · 2026-07-26</span>
+    <span>Build print rev. D · 2026-07-26</span>
     <span>branch claude/wholesale-sourcing-scanner-83n3ch</span>
   </footer>
 

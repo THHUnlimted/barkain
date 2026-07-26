@@ -133,6 +133,13 @@ _CATEGORY_KEYWORDS: tuple[tuple[str, str], ...] = (
     ("pet", "pet_supplies"),
     ("tire", "tires_wheels"),
     ("automotive", "automotive_powersports"),
+    # Walmart's own reports disagree with each other: the reconciliation report
+    # calls this item's category "Automotive & Powersports" while the settlement
+    # report calls it "Vehicles, Parts & Accessories". Same item, same 12% rate.
+    # Both spellings have to resolve or the calibration keys split in two and
+    # each half looks under-sampled.
+    ("vehicles", "automotive_powersports"),
+    ("parts & accessories", "automotive_powersports"),
     ("tool", "tools_home_improvement"),
     ("home improvement", "tools_home_improvement"),
     ("hardware", "tools_home_improvement"),
@@ -288,15 +295,42 @@ class ItemDimensions:
 DEFAULT_ASSUMED_WEIGHT_LB = Decimal("1.5")
 
 
-def wfs_fulfillment_fee(dims: ItemDimensions) -> tuple[Decimal, list[str]]:
+# ── The Under-$10 schedule ────────────────────────────────────────────
+#
+# WFS bills items priced under $10 on a **separate flat schedule**, not on the
+# standard weight tiers. This is why an observed $4.45 charge matched neither
+# the published 0–1 lb ($3.45) nor 1–2 lb ($4.95) band — it was never being
+# priced by weight at all.
+#
+# Found in a settlement report, where every FulfillmentFee row for an $8.99 item
+# carried ``Billing Method: "Under$10"`` and a flat $4.45, across 12 orders and
+# three different weeks. It's the kind of rule that's easy to miss from a rate
+# card and impossible to miss from a settlement, and it matters enormously for
+# wholesale: sub-$10 items are exactly where thin margins live, and mispricing
+# their fulfillment by a dollar decides the whole category.
+_WFS_UNDER_10_THRESHOLD = Decimal("10.00")
+_WFS_UNDER_10_FEE = Decimal("4.45")
+
+
+def wfs_fulfillment_fee(
+    dims: ItemDimensions, sale_price: Decimal | None = None
+) -> tuple[Decimal, list[str]]:
     """WFS fulfillment fee for one unit, plus any assumptions made.
 
     Returns ``(fee, notes)``. ``notes`` is non-empty whenever the number rests
     on an assumption — that flag rides all the way to the verdict so a PASS
     built on a guessed weight is visibly different from one built on measured
     dimensions.
+
+    When ``sale_price`` is under $10 the weight tiers don't apply at all; see
+    ``_WFS_UNDER_10_FEE``.
     """
     notes: list[str] = []
+
+    if sale_price is not None and sale_price < _WFS_UNDER_10_THRESHOLD:
+        notes.append("wfs_under_10_schedule")
+        return _WFS_UNDER_10_FEE, notes
+
     weight = dims.billable_weight_lb
     if weight is None:
         weight = DEFAULT_ASSUMED_WEIGHT_LB
@@ -638,7 +672,7 @@ def walmart_economics(
             fulfillment = observed_fee
             assumptions.append(f"wfs_fee_{basis}")
         else:
-            fulfillment, notes = wfs_fulfillment_fee(dims)
+            fulfillment, notes = wfs_fulfillment_fee(dims, sale_price)
             assumptions.extend(notes)
 
         observed_storage = None
