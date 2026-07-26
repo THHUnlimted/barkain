@@ -13,19 +13,37 @@ should not look the same on screen.
 
 ## Signal hierarchy
 
-1. ``DIRECT``    — eBay sold-count over 90 days. Not an estimate; it's the
-                   number. Requires Marketplace Insights API approval (Terapeak
-                   in Seller Hub is the free manual equivalent).
-2. ``VELOCITY``  — Δreview_count between two snapshots ≥ ``MIN_VELOCITY_DAYS``
+Ordered by how close each is to actually counting units. Only the top three
+should ever move capital; the rest exist to rank and to fill the gap while the
+snapshot table accumulates.
+
+1. ``OBSERVED``  — inventory depletion. Poll the purchasable quantity on a
+                   listing, sum the day-over-day *decreases*, and reset the
+                   baseline on any increase (a restock). That sum is units
+                   sold — not modelled, observed. It is the only signal that
+                   measures a *specific seller's* movement rather than the
+                   whole listing's, which is exactly what unit-share wants.
+                   Published accuracy on products with observable stock
+                   movement runs around 87% of actual monthly units.
+2. ``DIRECT``    — eBay exact sold count over a window. Terapeak / Product
+                   Research inside Seller Hub is the practical source; the
+                   Marketplace Insights API covers the same ground but is a
+                   Limited Release that, as of mid-2026, is effectively closed
+                   to anyone who isn't a major partner.
+3. ``RANK``      — Amazon Best Sellers Rank run through a per-category curve.
+                   Roughly 20–40% of actual under rank 50,000, degrading badly
+                   on fresh listings and the long tail. Category-specific by
+                   necessity: rank 1,000 in Beauty is not rank 1,000 in Books.
+4. ``VELOCITY``  — Δreview_count between two snapshots ≥ ``MIN_VELOCITY_DAYS``
                    apart, divided by the share of buyers who leave a review.
-                   This is the good one, and it's why the snapshot table has to
-                   start filling before the feature is useful.
-3. ``BADGE``     — Walmart's "500+ bought since yesterday" flag. Coarse, and a
+                   Cheap and universal, but it rests entirely on the review-rate
+                   constant, which is the softest number in the system.
+5. ``BADGE``     — Walmart's "500+ bought since yesterday" flag. Coarse, and a
                    *floor* rather than an estimate, but it's same-day truth.
-4. ``HEURISTIC`` — total review count over listing age. Wildly noisy: a listing
+6. ``HEURISTIC`` — total review count over listing age. Wildly noisy: a listing
                    with 4,000 reviews accumulated over six years tells you
                    almost nothing about this month. Ranks; never decides.
-5. ``UNKNOWN``   — no listing, or no signal at all.
+7. ``UNKNOWN``   — no listing, or no signal at all.
 
 ## The review-rate constant
 
@@ -53,7 +71,9 @@ MAX_VELOCITY_WINDOW_DAYS = 120
 
 
 class DemandConfidence(str, Enum):
+    OBSERVED = "observed"
     DIRECT = "direct"
+    RANK = "rank"
     VELOCITY = "velocity"
     BADGE = "badge"
     HEURISTIC = "heuristic"
@@ -63,12 +83,25 @@ class DemandConfidence(str, Enum):
 # Ordering for "which estimate wins when several are available". Higher is
 # better; used by `estimate_demand` to pick among computed candidates.
 _CONFIDENCE_RANK: dict[DemandConfidence, int] = {
-    DemandConfidence.DIRECT: 4,
+    DemandConfidence.OBSERVED: 6,
+    DemandConfidence.DIRECT: 5,
+    DemandConfidence.RANK: 4,
     DemandConfidence.VELOCITY: 3,
     DemandConfidence.BADGE: 2,
     DemandConfidence.HEURISTIC: 1,
     DemandConfidence.UNKNOWN: 0,
 }
+
+# Minimum span before depletion data is worth reading. Two consecutive days of
+# stock counts on a slow mover is mostly noise; a week is enough for the
+# decreases to separate from the restocks.
+MIN_DEPLETION_DAYS = 5
+
+# A single-day drop larger than this is treated as a stock correction (a seller
+# pulling inventory, a feed error, a listing-level quantity reset) rather than
+# a sale. Without the guard, one bad observation of "quantity: 0" turns a
+# 40-unit/month item into a 900-unit/month item.
+_MAX_PLAUSIBLE_DAILY_DEPLETION = 0.75  # share of the running baseline
 
 
 @dataclass(frozen=True)
@@ -82,8 +115,19 @@ class Snapshot:
     seller_count: int | None = None
     in_stock: bool | None = None
     sold_count_90d: int | None = None
+    sold_count_window_days: int | None = None  # window `sold_count_90d` covers
     bought_badge_min: int | None = None  # "500+ bought since yesterday" → 500
     first_available_at: datetime | None = None
+    # Purchasable quantity as reported by the channel — the raw material for
+    # the depletion estimator. On Walmart and Amazon this is what the cart
+    # surfaces when you request an implausibly large quantity; the response
+    # names the true remaining stock for the current offer.
+    available_quantity: int | None = None
+    # Amazon Best Sellers Rank and the top-level category it's ranked in.
+    # Both are required together — a rank without its category can't be
+    # converted, because the curves differ by an order of magnitude.
+    sales_rank: int | None = None
+    sales_rank_category: str | None = None
 
 
 @dataclass(frozen=True)
@@ -107,8 +151,24 @@ class DemandEstimate:
         return (
             self.estimated_monthly_sales is not None
             and self.confidence
-            in (DemandConfidence.DIRECT, DemandConfidence.VELOCITY, DemandConfidence.BADGE)
+            in (
+                DemandConfidence.OBSERVED,
+                DemandConfidence.DIRECT,
+                DemandConfidence.RANK,
+                DemandConfidence.VELOCITY,
+                DemandConfidence.BADGE,
+            )
         )
+
+    @property
+    def is_seller_specific(self) -> bool:
+        """True when the estimate already measures one offer, not the whole listing.
+
+        Inventory depletion tracks a single seller's stock, so dividing it by
+        seller count again would double-count the competition and understate a
+        good row by a factor of five.
+        """
+        return self.confidence == DemandConfidence.OBSERVED
 
     def unit_share(self, seller_count: int | None) -> float | None:
         """Your slice of monthly demand: ``sales ÷ (sellers + 1)``.
@@ -116,9 +176,14 @@ class DemandEstimate:
         The ``+1`` is you joining the listing. Five sellers on a 300 unit/month
         item is 50 units each and a real business; five sellers on a 40
         unit/month item is a price war with extra steps.
+
+        Skipped entirely for seller-specific estimates — see
+        ``is_seller_specific``.
         """
         if self.estimated_monthly_sales is None:
             return None
+        if self.is_seller_specific:
+            return round(self.estimated_monthly_sales, 1)
         sellers = seller_count if seller_count and seller_count > 0 else 0
         return round(self.estimated_monthly_sales / (sellers + 1), 1)
 
@@ -143,18 +208,204 @@ UNKNOWN_DEMAND = DemandEstimate(
 # MARK: - Individual estimators
 
 
+def _from_inventory_depletion(snapshots: list[Snapshot]) -> DemandEstimate | None:
+    """Sum observed stock decreases, resetting the baseline on every restock.
+
+    This is the closest thing to counting units without the retailer's own
+    data. The algorithm is deliberately boring:
+
+        walk the observations in time order
+        a decrease  → that many units sold
+        an increase → a restock; reset the baseline, count nothing
+        an implausibly large single-day decrease → a correction, not a sale
+
+    The last guard is what separates this from the naive version. Sellers pull
+    inventory, feeds glitch, and a listing that reports 400 units on Monday and
+    0 on Tuesday almost certainly went out of stock rather than selling 400
+    units in a day. Counting it would put a garbage row at the top of the rank,
+    which on a velocity-first ranking is the worst possible failure.
+
+    Note this measures **one offer's** movement, not the listing's. That's a
+    feature: it's already the seller-specific number that unit-share is trying
+    to approximate, so callers should not divide it by seller count again.
+    """
+    observed = [s for s in snapshots if s.available_quantity is not None]
+    if len(observed) < 2:
+        return None
+    observed.sort(key=lambda s: s.captured_at)
+
+    span_days = (
+        observed[-1].captured_at - observed[0].captured_at
+    ).total_seconds() / 86400.0
+    if span_days < MIN_DEPLETION_DAYS:
+        return None
+
+    units_sold = 0
+    restocks = 0
+    discarded = 0
+    previous = observed[0].available_quantity
+    assert previous is not None
+
+    for snapshot in observed[1:]:
+        current = snapshot.available_quantity
+        assert current is not None
+        if current > previous:
+            restocks += 1
+        elif current < previous:
+            drop = previous - current
+            if previous > 0 and drop / previous > _MAX_PLAUSIBLE_DAILY_DEPLETION:
+                discarded += 1
+            else:
+                units_sold += drop
+        previous = current
+
+    if units_sold <= 0 and restocks == 0:
+        # Stock never moved across the whole window. That IS a signal — this
+        # offer sells roughly nothing — so report zero rather than falling
+        # through to a rosier proxy.
+        return DemandEstimate(
+            estimated_monthly_sales=0.0,
+            confidence=DemandConfidence.OBSERVED,
+            basis=f"no stock movement observed over {span_days:.0f} days",
+            observation_days=int(round(span_days)),
+        )
+
+    monthly = units_sold / span_days * 30.0
+    detail = f"{units_sold} units of observed stock depletion over {span_days:.0f} days"
+    if restocks:
+        detail += f", {restocks} restock(s) excluded"
+    if discarded:
+        detail += f", {discarded} implausible drop(s) discarded"
+
+    assumptions = ["seller_specific_not_listing_wide"]
+    if discarded:
+        assumptions.append("depletion_outliers_discarded")
+
+    return DemandEstimate(
+        estimated_monthly_sales=round(monthly, 1),
+        confidence=DemandConfidence.OBSERVED,
+        basis=detail,
+        observation_days=int(round(span_days)),
+        assumptions=tuple(assumptions),
+    )
+
+
 def _from_sold_count(snapshots: list[Snapshot]) -> DemandEstimate | None:
-    """eBay 90-day sold count → monthly. Direct measurement, no assumptions."""
+    """Exact sold count over a stated window → monthly. Measurement, not model.
+
+    ``sold_count_window_days`` defaults to 90 because that's what both eBay
+    Terapeak and the Marketplace Insights API report, but it's carried
+    explicitly so a 30-day Product Research export doesn't get divided by three.
+    """
     latest = next(
         (s for s in reversed(snapshots) if s.sold_count_90d is not None), None
     )
     if latest is None or latest.sold_count_90d is None:
         return None
-    monthly = latest.sold_count_90d / 3.0
+    window = latest.sold_count_window_days or 90
+    if window <= 0:
+        return None
+    monthly = latest.sold_count_90d / window * 30.0
     return DemandEstimate(
         estimated_monthly_sales=round(monthly, 1),
         confidence=DemandConfidence.DIRECT,
-        basis=f"{latest.sold_count_90d} sold in trailing 90 days",
+        basis=f"{latest.sold_count_90d} sold in trailing {window} days",
+        observation_days=window,
+    )
+
+
+# MARK: - Amazon BSR
+#
+# Per-category power-law curves: monthly_units ≈ a × rank^(-b). Rank-to-sales is
+# category-specific by an order of magnitude — a rank of 1,000 in Books is a
+# very different business from a rank of 1,000 in Beauty, because the
+# denominators (catalogue size and category velocity) differ enormously.
+#
+# These coefficients are calibrated to published sales-rank charts as of
+# 2026-07 and should be treated exactly like the fee tables: configuration to
+# re-verify, not constants. Accuracy is roughly 20–40% of actual under rank
+# 50,000 and degrades sharply beyond it and on fresh listings.
+
+_BSR_CURVES: dict[str, tuple[float, float]] = {
+    # category → (a, b) for monthly_units = a * rank ** -b
+    "books": (95_000.0, 0.72),
+    "beauty": (52_000.0, 0.80),
+    "health_household": (60_000.0, 0.80),
+    "grocery": (38_000.0, 0.79),
+    "home_kitchen": (78_000.0, 0.78),
+    "tools_home_improvement": (42_000.0, 0.80),
+    "toys_games": (46_000.0, 0.79),
+    "sports_outdoors": (40_000.0, 0.80),
+    "pet_supplies": (36_000.0, 0.79),
+    "electronics": (55_000.0, 0.77),
+    "office_products": (30_000.0, 0.80),
+    "clothing": (48_000.0, 0.81),
+    "baby": (28_000.0, 0.79),
+    "automotive": (32_000.0, 0.81),
+    "default": (45_000.0, 0.79),
+}
+
+# Beyond this rank the curve is extrapolating far past where it was calibrated
+# and the honest answer is "almost nothing", not a precise small number.
+_BSR_TAIL_CUTOFF = 500_000
+
+
+def normalize_bsr_category(raw: str | None) -> str:
+    """Map an Amazon category breadcrumb to a curve key, defaulting safely."""
+    if not raw:
+        return "default"
+    text = raw.strip().lower().replace("&", " ").replace("-", " ")
+    text = " ".join(text.split())
+    candidates = {
+        "books": "books", "beauty": "beauty", "personal care": "beauty",
+        "health": "health_household", "household": "health_household",
+        "grocery": "grocery", "gourmet": "grocery",
+        "home": "home_kitchen", "kitchen": "home_kitchen",
+        "tools": "tools_home_improvement", "home improvement": "tools_home_improvement",
+        "toys": "toys_games", "games": "toys_games",
+        "sports": "sports_outdoors", "outdoors": "sports_outdoors",
+        "pet": "pet_supplies",
+        "electronics": "electronics", "computers": "electronics",
+        "office": "office_products",
+        "clothing": "clothing", "shoes": "clothing", "apparel": "clothing",
+        "baby": "baby",
+        "automotive": "automotive",
+    }
+    for keyword, key in candidates.items():
+        if keyword in text:
+            return key
+    return "default"
+
+
+def estimate_units_from_bsr(rank: int, category: str | None = None) -> float | None:
+    """Convert a Best Sellers Rank to estimated monthly units."""
+    if rank is None or rank <= 0:
+        return None
+    if rank > _BSR_TAIL_CUTOFF:
+        return 0.0
+    a, b = _BSR_CURVES.get(
+        normalize_bsr_category(category), _BSR_CURVES["default"]
+    )
+    return round(a * (rank ** -b), 1)
+
+
+def _from_sales_rank(snapshots: list[Snapshot]) -> DemandEstimate | None:
+    """Amazon BSR → monthly units via the category curve."""
+    latest = next((s for s in reversed(snapshots) if s.sales_rank), None)
+    if latest is None or not latest.sales_rank:
+        return None
+    monthly = estimate_units_from_bsr(latest.sales_rank, latest.sales_rank_category)
+    if monthly is None:
+        return None
+    category = normalize_bsr_category(latest.sales_rank_category)
+    assumptions = ["bsr_curve_estimate"]
+    if category == "default":
+        assumptions.append("bsr_category_unknown")
+    return DemandEstimate(
+        estimated_monthly_sales=monthly,
+        confidence=DemandConfidence.RANK,
+        basis=f"BSR #{latest.sales_rank:,} in {category.replace('_', ' ')}",
+        assumptions=tuple(assumptions),
     )
 
 
@@ -272,7 +523,9 @@ def estimate_demand(
     now = now or datetime.now(UTC)
 
     candidates = [
+        _from_inventory_depletion(ordered),
         _from_sold_count(ordered),
+        _from_sales_rank(ordered),
         _from_review_velocity(ordered, review_rate),
         _from_badge(ordered),
         _from_review_total(ordered, review_rate, now),

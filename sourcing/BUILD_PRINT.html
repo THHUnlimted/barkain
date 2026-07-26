@@ -390,17 +390,17 @@
     <div class="titleblock__head">
       <p class="eyebrow">Build Print · Barkain · Module M15</p>
       <h1>Wholesale Sourcing Scanner</h1>
-      <p class="titleblock__sub">A list cruncher, not a scanner. A distributor sends 3,000 rows of UPC and cost; this finds the handful worth buying and tells you why. Built on Barkain's existing retailer adapters, isolated to one directory.</p>
+      <p class="titleblock__sub">A list cruncher, not a scanner. A distributor sends 3,000 rows of UPC and cost; this finds the handful worth buying and tells you why. Costed to the landed unit, ranked by how fast the money comes back — not by margin.</p>
     </div>
     <div class="titleblock__grid">
       <div class="field"><span class="field__label">Repository</span><span class="field__value">THHUnlimted/barkain</span></div>
       <div class="field"><span class="field__label">Branch</span><span class="field__value">claude/wholesale-sourcing-scanner-83n3ch</span></div>
       <div class="field"><span class="field__label">Location</span><span class="field__value">/sourcing</span></div>
       <div class="field"><span class="field__label">Date</span><span class="field__value">2026-07-26</span></div>
-      <div class="field"><span class="field__label">Python</span><span class="field__value">5,023 lines · 13 files</span></div>
-      <div class="field"><span class="field__label">Channels</span><span class="field__value">Walmart · eBay</span></div>
+      <div class="field"><span class="field__label">Python</span><span class="field__value">6,100 lines · 15 files</span></div>
+      <div class="field"><span class="field__label">Channels</span><span class="field__value">Walmart · eBay · Amazon (BSR)</span></div>
       <div class="field"><span class="field__label">Files touched outside /sourcing</span><span class="field__value">0</span></div>
-      <div class="field"><span class="field__label">Status</span><span class="field__value">Core complete · unwired</span></div>
+      <div class="field"><span class="field__label">Revision</span><span class="field__value">B — velocity-first</span></div>
     </div>
   </div>
 
@@ -411,8 +411,10 @@
     <a href="#s04"><span>S-04</span> UPC normalization</a>
     <a href="#s05"><span>S-05</span> Spreadsheet ingest</a>
     <a href="#s06"><span>S-06</span> Fee engine</a>
-    <a href="#s07"><span>S-07</span> Demand &amp; the moat</a>
-    <a href="#s08"><span>S-08</span> Verdict scoring</a>
+    <a href="#s6b"><span>S-06b</span> Landed cost</a>
+    <a href="#s6c"><span>S-06c</span> Selling plans</a>
+    <a href="#s07"><span>S-07</span> Popularity signals</a>
+    <a href="#s08"><span>S-08</span> Velocity-first scoring</a>
     <a href="#s09"><span>S-09</span> Live run</a>
     <a href="#s10"><span>S-10</span> Data model</a>
     <a href="#s11"><span>S-11</span> Reuse from Barkain</a>
@@ -497,9 +499,11 @@ flowchart TD
 ├── <b>m15_sourcing/</b>
 │   ├── <b>upc.py</b>                     <i>GTIN normalization — pure</i>                 512
 │   ├── <b>ingest.py</b>                  <i>CSV/TSV/XLSX parsing — pure</i>               557
-│   ├── <b>fees.py</b>                    <i>Walmart + eBay fee engines — pure</i>         632
-│   ├── <b>demand.py</b>                  <i>snapshots → monthly sales — pure</i>          378
-│   ├── <b>scoring.py</b>                 <i>thresholds → verdict — pure</i>               393
+│   ├── <b>fees.py</b>                    <i>Walmart + eBay fee engines — pure</i>         645
+│   ├── <b>landed_cost.py</b>             <i>freight, prep, duty, reserves — pure</i>      316
+│   ├── <b>plans.py</b>                   <i>subscriptions + breakeven — pure</i>          312
+│   ├── <b>demand.py</b>                  <i>7-tier popularity engine — pure</i>           610
+│   ├── <b>scoring.py</b>                 <i>velocity-first verdicts — pure</i>            487
 │   ├── <b>inquiry.py</b>                 <i>distributor email drafts — pure</i>           146
 │   ├── <b>models.py</b>                  <i>4 SQLAlchemy tables</i>                       282
 │   ├── <b>service.py</b>                 <i>orchestration · cache · fan-out</i>           764
@@ -512,7 +516,7 @@ flowchart TD
     └── <b>0013_sourcing_tables.py</b>    <i>staged, not yet in versions/</i>              198</div>
 
     <div class="note">
-      <p><strong>Why the pure/impure split is drawn where it is.</strong> Six of the thirteen modules have no imports beyond the standard library and each other. That's not tidiness for its own sake — it means the entire decision path from "here is a cost" to "here is a verdict" can be tested, benchmarked, and replayed without a database, an API key, or a network. <code>demo_crunch.py</code> exercises the whole thing offline, which is how the numbers on Sheet S-09 were produced.</p>
+      <p><strong>Why the pure/impure split is drawn where it is.</strong> Eight of the fifteen modules have no imports beyond the standard library and each other. That's not tidiness for its own sake — it means the entire decision path from "here is a cost" to "here is a verdict" can be tested, benchmarked, and replayed without a database, an API key, or a network. <code>demo_crunch.py</code> exercises the whole thing offline, which is how the numbers on Sheet S-09 were produced.</p>
     </div>
   </section>
 
@@ -638,33 +642,141 @@ flowchart TD
   </section>
 
   <!-- ────────────────────────────────────────────────────────── -->
-  <section id="s07">
-    <span class="sheetnum">Sheet S-07</span>
-    <h2>Demand estimation, and the thing nobody can copy</h2>
+  <section id="s6b">
+    <span class="sheetnum">Sheet S-06b</span>
+    <h2>Landed cost</h2>
 
-    <p>Walmart doesn't publish sales figures and neither does eBay for active listings. So every number here is a proxy, and the honest move is to rank the proxies by trustworthiness and carry that ranking all the way to the interface. A verdict built on a direct sold-count and one built on a single lifetime review total should not look the same on screen.</p>
+    <p>The number on the price list is the <em>invoice</em> cost. By the time a unit is sellable it has also absorbed freight, prep, packaging, duty, payment fees, and a share of the units that arrived broken or came back. Scoring on invoice cost overstates margin — and it overstates it <strong>unevenly</strong>, which is what makes it dangerous. It doesn't shift every row by the same amount; it reorders them.</p>
 
     <div class="scroll">
       <table>
-        <thead><tr><th>Tier</th><th>Signal</th><th>Method</th><th>Actionable?</th></tr></thead>
+        <thead><tr><th>Grain</th><th>Components</th><th>Allocation</th></tr></thead>
         <tbody>
-          <tr><td><span class="chip chip--pass">direct</span></td><td>eBay sold count, 90d</td><td>Marketplace Insights ÷ 3. Not an estimate — the number.</td><td>yes</td></tr>
-          <tr><td><span class="chip chip--pass">velocity</span></td><td>Review delta</td><td>Δreviews ÷ days × 30 ÷ 2% review rate. Needs 2 snapshots ≥7 days apart.</td><td>yes</td></tr>
-          <tr><td><span class="chip chip--watch">badge</span></td><td>"500+ bought yesterday"</td><td>Coarse, and a floor rather than a point estimate. Same-day truth.</td><td>yes</td></tr>
-          <tr><td><span class="chip chip--watch">heuristic</span></td><td>Lifetime reviews ÷ age</td><td>4,000 reviews over six years says almost nothing about this month.</td><td>ranks only</td></tr>
-          <tr><td><span class="chip chip--todo">unknown</span></td><td>Nothing</td><td>No listing, or a listing with no signal.</td><td>no</td></tr>
+          <tr><td>Per shipment</td><td>LTL freight, customs entry, pallet</td><td>Split across units <code>per_unit</code> / <code>by_weight</code> / <code>by_cube</code> — freight is billed by weight, so a heavy SKU and a light one in the same truck must not split it evenly</td></tr>
+          <tr><td>Per case</td><td>Inbound handling, case labels</td><td>Divided by case pack</td></tr>
+          <tr><td>Per unit</td><td>Polybag, label, prep labor, inspection, the unit's own box</td><td>Direct</td></tr>
+          <tr><td>Rate on goods</td><td>Duty / tariff, payment or FX fee</td><td>Multiplied against invoice value — real cash out</td></tr>
+          <tr><td>Reserve</td><td>Shrink, unsellable returns</td><td><strong>Divides</strong>, doesn't add — see below</td></tr>
         </tbody>
       </table>
     </div>
 
-    <p><strong>Unit share</strong> converts market demand into <em>your</em> demand: <code>estimated_monthly_sales ÷ (seller_count + 1)</code>. The <code>+1</code> is you joining the listing. Five sellers on a 300-unit/month item is 50 units each and a real business; five sellers on a 40-unit/month item is a price war with extra steps.</p>
-
-    <div class="note">
-      <p><strong>The moat is a table that has to start filling before it's worth anything.</strong> Review velocity requires longitudinal data that cannot be bought or backfilled — you cannot go back and observe last month's review count. <code>listing_snapshots</code> is written on every live match, not only by the cron, so the dataset starts accumulating from a user's very first crunch. Cached matches are deliberately skipped: re-storing identical numbers under a new timestamp would fabricate a flat price history and make a volatile item look stable.</p>
-      <p>This is also the honest limitation. For roughly the first two weeks, the tool is a very good fee calculator with a demand column that says "not yet". That's not a flaw in the plan — it <em>is</em> the plan, and it's the part a competitor launching later cannot shortcut.</p>
+    <div class="note note--warn">
+      <p><strong>Reserves divide, they don't add.</strong> You don't pay shrink and returns per unit — you <em>lose that fraction of units</em>, and the survivors have to carry the cost of all of them. A 3% shrink and 5% return rate means 92 units carry the cost of 100, which is an 8.7% cost increase, not 8%. Adding the rates instead of dividing by the survival rate understates the hit at exactly the rates that matter.</p>
     </div>
 
-    <p><strong>Price stability</strong> comes from the same table: coefficient of variation (σ/μ) over the observed window, which is scale-free so 5% movement means the same thing on a $12 item and a $400 one. Fewer than three observations returns <em>stable</em> rather than <em>volatile</em> — "we haven't watched long enough" must not read as a red flag, or every new list would fail the stability gate on its first crunch.</p>
+    <p>Every component is optional and defaults to zero, with an <code>assumptions</code> flag recording what was left unspecified — an invented freight number that happens to be wrong is worse than a visible gap, because it looks like it was measured. A <code>LandedCost</code> carrying nothing but <code>invoice_cost</code> behaves exactly like the raw-cost path.</p>
+
+    <div class="term">
+      <div class="term__bar">landed cost — real output, freight at $0.42/lb + $0.83 prep/pack/QC + 3% shrink + 5% returns</div>
+<pre>  Stainless Steel French Press 34oz   invoice $  12.00 -> landed $  14.88 <b>(+24.0%)</b>
+     freight $0.88 | prep $0.55 | pack $0.18 | QC $0.10 | survives 92%
+  Bluetooth Earbuds Pro              invoice $  40.00 -> landed $  44.58 <b>(+11.4%)</b>
+     freight $0.25 | prep $0.55 | pack $0.18 | QC $0.10 | survives 92%
+  Dog Chew Toy Variety 5-pack        invoice $   4.00 -> landed $   5.24 <b>(+31.0%)</b>
+     freight $0.00 | prep $0.55 | pack $0.18 | QC $0.10 | survives 92%
+  Air Purifier HEPA Medium Room      invoice $ 180.00 -> landed $ 202.62 <b>(+12.6%)</b>
+     freight $5.88 | prep $0.55 | pack $0.18 | QC $0.10 | survives 92%</pre>
+    </div>
+
+    <p>The uplift ranges from <strong>11.4% to 31.0%</strong> across four rows of the same list. That spread is the entire argument: a flat "add 20% for costs" rule would have made the earbuds look worse than they are and the dog toys look better. And the air purifier — which passed every profit gate at invoice cost — turns <span class="chip chip--fail">fail</span> once $5.88 of freight lands on it. It was never a winner; it just looked like one.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s6c">
+    <span class="sheetnum">Sheet S-06c</span>
+    <h2>Selling plans and subscriptions</h2>
+
+    <p>A monthly subscription is a <strong>fixed</strong> cost, and the instinct — take Amazon's $39.99, divide by expected units, add it to every row — is a real and expensive mistake in both directions.</p>
+
+    <ul>
+      <li><strong>If you already pay it,</strong> it's sunk for the next SKU decision. Loading a share onto every candidate makes marginal-but-real winners look like losers, and you decline orders that would have made money.</li>
+      <li><strong>If you don't yet pay it,</strong> it isn't per-unit at all — it's a threshold question, and "does this plan pay for itself" has a volume answer, not a per-unit one.</li>
+    </ul>
+
+    <p>So the module does two separate things and never mixes them. <strong>Marginal rates</strong> — an eBay Store's FVF cut, Amazon Individual's $0.99/item — are genuinely per-unit and flow into the fee engine. <strong>Fixed fees</strong> are reported once per channel as a breakeven volume.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Plan</th><th class="num">Monthly</th><th class="num">Per item</th><th class="num">Fee cut</th><th>Effect on a row</th></tr></thead>
+        <tbody>
+          <tr><td>eBay — no store</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td>13.6% FVF + $0.40</td></tr>
+          <tr><td>eBay Starter</td><td class="num">$4.95</td><td class="num">—</td><td class="num">—</td><td>Listings only, no fee change</td></tr>
+          <tr><td>eBay Basic</td><td class="num">$21.95</td><td class="num">—</td><td class="num">0.9pp</td><td>$5.78 → $5.40 on a $42.50 sale</td></tr>
+          <tr><td>eBay Premium</td><td class="num">$74.95</td><td class="num">—</td><td class="num">0.9pp</td><td>Same rate, more listings</td></tr>
+          <tr><td>eBay Anchor</td><td class="num">$299.95</td><td class="num">—</td><td class="num">0.9pp</td><td>Same rate, more listings</td></tr>
+          <tr><td>Amazon Individual</td><td class="num">—</td><td class="num">$0.99</td><td class="num">—</td><td>Adds $0.99 to every unit's fees</td></tr>
+          <tr><td>Amazon Professional</td><td class="num">$39.99</td><td class="num">—</td><td class="num">—</td><td>Removes the per-item fee</td></tr>
+          <tr><td>Walmart Marketplace</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td>No subscription at all</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="term">
+      <div class="term__bar">plan breakeven — computed, not hardcoded</div>
+<pre>  ebay: holding 'basic' | at 124 units/mo the cheapest plan is <b>'basic'</b>
+     none -> starter: No marginal saving — the upgrade buys listings, not fees.
+     none -> basic:   Pays off above ~$2,438.89 monthly sales (~57 units at $42.50).
+     none -> premium: Pays off above ~$8,327.78 monthly sales (~196 units).
+     none -> anchor:  Pays off above ~$33,327.78 monthly sales (~784 units).
+  amazon: holding 'professional' | at 124 units/mo the cheapest plan is <b>'professional'</b>
+     individual -> professional: Pays off above <b>~40 units/month</b> (saves $0.99/item).</pre>
+    </div>
+
+    <p>The Amazon crossover lands on the well-known ~40 units/month, which is a useful check that the model is right — but it's <em>derived</em> from the two plans' fee structures rather than written down, so when Amazon changes either number the answer moves on its own.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s07">
+    <span class="sheetnum">Sheet S-07</span>
+    <h2>Popularity — the 99% of the battle</h2>
+
+    <p>Margins are arithmetic. Whether the thing sells is the actual question, and every marketplace is deliberately unhelpful about it. So the engine ranks its signals by how close each one is to <em>counting units</em>, and carries that ranking all the way to the screen. A verdict built on observed stock movement and one built on a lifetime review total must not look the same.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Tier</th><th>Signal</th><th>Source</th><th>How close to truth</th></tr></thead>
+        <tbody>
+          <tr><td><span class="chip chip--pass">observed</span></td><td>Inventory depletion</td><td>Walmart · Amazon · eBay</td><td><strong>Counts units.</strong> ~87% of actual on items with visible stock. Measures <em>one seller's</em> movement.</td></tr>
+          <tr><td><span class="chip chip--pass">direct</span></td><td>Exact sold count</td><td>eBay Terapeak / Product Research</td><td><strong>Is the number.</strong> Not an estimate.</td></tr>
+          <tr><td><span class="chip chip--pass">rank</span></td><td>Best Sellers Rank</td><td>Amazon</td><td>20–40% of actual under rank 50k; per-category curves; degrades on the long tail.</td></tr>
+          <tr><td><span class="chip chip--watch">velocity</span></td><td>Review delta</td><td>All three</td><td>Rests entirely on the ~2% review-rate constant — the softest number in the system.</td></tr>
+          <tr><td><span class="chip chip--watch">badge</span></td><td>"500+ bought yesterday"</td><td>Walmart, intermittently</td><td>A floor, not an estimate. But it's same-day truth.</td></tr>
+          <tr><td><span class="chip chip--fail">heuristic</span></td><td>Lifetime reviews ÷ age</td><td>All three</td><td>4,000 reviews over six years says nothing about this month. Ranks; never decides.</td></tr>
+          <tr><td><span class="chip chip--todo">unknown</span></td><td>Nothing</td><td>—</td><td>Cannot be <span class="chip chip--pass">pass</span>.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Inventory depletion — the definitive method</h3>
+
+    <p>This is the answer to "is there something better than review velocity", and it is a large step up. Poll a listing's purchasable quantity, walk the observations in time order, and sum the <em>decreases</em>. An increase is a restock — reset the baseline and count nothing. That sum is units sold: not modelled, observed.</p>
+
+    <p>Two properties make it the best signal available:</p>
+
+    <ul>
+      <li><strong>It measures a specific seller, not the listing.</strong> Every other signal describes the whole listing and then has to be divided by a guessed seller count. Depletion already <em>is</em> the per-offer number, so the engine skips the unit-share division entirely for it — dividing again would understate a good row by a factor of five.</li>
+      <li><strong>It works on all three channels</strong>, with no API approval, no subscription, and no dependence on buyer behavior.</li>
+    </ul>
+
+    <div class="note note--warn">
+      <p><strong>The guard that makes it usable.</strong> A listing reporting 400 units on Monday and 0 on Tuesday almost certainly went out of stock or had a feed error — it did not sell 400 units in a day. Any single-interval drop exceeding 75% of the running baseline is discarded as a correction. Without that guard, one bad observation produces a phantom top-ranked row, which on a velocity-first ranking is the worst failure the system can have.</p>
+      <p>The cost: one probe per SKU per day, and cart-level probing is heavier than a page read. This should run against the <strong>shortlist</strong> — rows that already cleared the fee gates — not against all 3,000 rows of every list. Roughly 50–200 SKUs polled daily, not 3,000.</p>
+    </div>
+
+    <h3>What changed on eBay</h3>
+
+    <div class="note">
+      <p>The original plan routed exact sold-counts through eBay's Marketplace Insights API. As of mid-2026 that is a Limited Release effectively closed to anyone who isn't a major partner — developers report being denied outright. <strong>Terapeak / Product Research inside Seller Hub is the real path:</strong> free with a seller account, gives exact units sold over a window, and is an authenticated page rather than an API. So it's an import/session-scrape, not an API call. <code>sold_count_window_days</code> is carried explicitly on the snapshot so a 30-day Product Research export isn't silently divided by three like a 90-day one.</p>
+    </div>
+
+    <p>Where a channel gives nothing better, <strong>unit share</strong> still converts listing-wide demand into your demand: <code>estimated_monthly_sales ÷ (seller_count + 1)</code>. The <code>+1</code> is you. Five sellers on a 300-unit/month item is 50 each and a real business; five on a 40-unit/month item is a price war with extra steps.</p>
+
+    <div class="note">
+      <p><strong>The moat is a table that has to start filling before it's worth anything.</strong> Depletion and review velocity both require longitudinal data that cannot be bought or backfilled — you cannot go back and observe last Tuesday's stock count. <code>listing_snapshots</code> is written on every live match, not only by the cron, so it accumulates from the first crunch. Cached matches are deliberately skipped: re-storing identical numbers under a new timestamp would fabricate a flat history and make a volatile item look stable.</p>
+    </div>
+
+    <p><strong>Price stability</strong> comes from the same table: coefficient of variation (σ/μ), scale-free so 5% movement means the same thing on a $12 item and a $400 one. Fewer than three observations returns <em>stable</em> rather than <em>volatile</em> — "we haven't watched long enough" must not read as a red flag.</p>
   </section>
 
   <!-- ────────────────────────────────────────────────────────── -->
@@ -691,26 +803,37 @@ flowchart TD
 
     <p>Three outcomes rather than two, because a binary pass/fail throws away the most interesting rows. Something that clears every profit threshold but has unknown demand isn't a failure — it's a row where the snapshot database hasn't run long enough yet, and it should come back next week. <span class="chip chip--watch">watch</span> is also the queue that tells the snapshot worker which listings are worth polling.</p>
 
+    <h3>Ranking: velocity beats margin</h3>
+
+    <p>Rows sort by <strong>annualized ROI</strong> — not margin, not raw monthly profit. For a capital-constrained buyer the scarce resource is cash, and what matters is how many times a year that cash comes back with a profit attached.</p>
+
+    <div class="note">
+      <p style="font-family: var(--mono); font-size: 14px; color: var(--ink);">annualized_roi&nbsp;=&nbsp;roi_pct&nbsp;×&nbsp;365&nbsp;÷&nbsp;(days_to_sell_through&nbsp;+&nbsp;reorder_lead_time)</p>
+      <p>A 60% margin turning over twice a year is a worse use of a purchase order than 22% turning over eleven times. The second earns more on the same dollar, with less shelf risk, less price-war exposure, and less chance of holding dead stock into Q4 storage rates.</p>
+    </div>
+
+    <p><strong>Lead time in the denominator is not a detail.</strong> Capital doesn't redeploy when the last unit ships — it redeploys when the next case lands. An item that clears in six days on a three-week reorder cycle turns over about 14 times a year, not 60. Building the metric without lead time produced four-figure percentages on every fast mover in testing and reordered the whole list on an artifact of the formula.</p>
+
     <h3>Default thresholds</h3>
 
     <div class="scroll">
       <table>
         <thead><tr><th>Gate</th><th class="num">Default</th><th>Kind</th><th>Rationale</th></tr></thead>
         <tbody>
+          <tr><td>Days to sell through</td><td class="num">≤ 90</td><td>hard</td><td><strong>The velocity gate.</strong> Fails regardless of margin</td></tr>
+          <tr><td>Annualized ROI</td><td class="num">150%</td><td>hard</td><td>25% ROI on a 90-day turn is ~101% annualized — so clearing the per-order bar is necessary but not sufficient when the item is slow</td></tr>
+          <tr><td>Reorder lead time</td><td class="num">14 days</td><td>input</td><td>Part of the turn cycle. Overseas sourcing is 45–90</td></tr>
           <tr><td>Net profit / unit</td><td class="num">$3.00</td><td>hard</td><td>Below this, returns and shrink eat it</td></tr>
-          <tr><td>ROI</td><td class="num">25%</td><td>hard</td><td>Absorbs the unmodelled costs</td></tr>
+          <tr><td>ROI per turn</td><td class="num">25%</td><td>hard</td><td>Absorbs the unmodelled costs</td></tr>
           <tr><td>Monthly unit share</td><td class="num">30</td><td>hard</td><td>Below this it isn't worth the SKU slot</td></tr>
           <tr><td>Price stability</td><td class="num">CV ≤ 0.15</td><td>hard</td><td>A 30% swing is a price war you'd be joining</td></tr>
           <tr><td>Capital per SKU</td><td class="num">optional</td><td>hard</td><td>A great ratio needing a $9k pallet isn't a candidate on a $5k budget</td></tr>
-          <tr><td>Max sellers</td><td class="num">optional</td><td>hard</td><td>Off by default — unit share already prices competition</td></tr>
           <tr><td>Brand access</td><td class="num">—</td><td>soft</td><td>Restricted brands are demoted, never hidden</td></tr>
         </tbody>
       </table>
     </div>
 
-    <div class="note">
-      <p><strong>Ranking is by projected monthly profit</strong> — <code>net_profit × unit_share</code> — not by margin or ROI. A 60% margin on something that sells twice a month is a worse use of a purchase order than 22% on something that moves 400 times, and sorting by margin is exactly how sourcing spreadsheets talk people into slow-moving inventory. Verdict tier is the primary sort key, so no amount of projected profit floats a <span class="chip chip--fail">fail</span> above a <span class="chip chip--pass">pass</span>.</p>
-    </div>
+    <p>Verdict tier is still the primary sort key, so no amount of annualized ROI floats a <span class="chip chip--fail">fail</span> above a <span class="chip chip--pass">pass</span>. <code>RankingPolicy</code> keeps <code>monthly_profit</code> and <code>margin</code> available for buyers optimizing something else, but <code>velocity</code> is the default and the thresholds are tuned for it.</p>
 
     <p>Each channel also reports a <strong>breakeven sale price</strong>: the lowest price that still clears zero, holding fixed fees constant. When five sellers are racing each other down, that's a far more actionable number than the current buy box.</p>
 
@@ -745,45 +868,25 @@ flowchart TD
     </div>
 
     <div class="term">
-      <div class="term__bar">verdict — ranked by projected monthly profit</div>
-<pre>  #  ITEM                           CH         COST    SELL     NET     ROI  SHARE  PROJ/MO  VERDICT
-  ────────────────────────────────────────────────────────────────────────────────────────────────
-  1  Stainless Steel French Press   ebay      12.00   42.50   15.07  125.6%    200     3014  <span class="p">PASS</span>
-  2  Bluetooth Earbuds Pro          walmart   40.00   69.99   20.86   52.1%   1040    21694  <span class="w">WATCH</span>
-  3  Dog Chew Toy Variety 5-pack    ebay       4.00   21.99    7.10  177.5%     33      236  <span class="w">WATCH</span>
-  4  Air Purifier HEPA Medium Room  walmart  180.00  249.99   22.26   12.4%    133     2967  <span class="f">FAIL</span>
-  5  Silicone Baking Mat Set        —                                                        <span class="f">FAIL</span> <span class="c">(no UPC)</span>
-  6  Discontinued - do not order    —                                                        <span class="f">FAIL</span> <span class="c">(no UPC)</span>
-  7  Ceramic Nonstick Fry Pan 10in  ebay      45.00   61.99   -3.84   -8.5%     75       -4  <span class="f">FAIL</span>
-  8  LED Desk Lamp with USB-C       walmart   23.00   26.94   -5.63  -24.5%     50       -6  <span class="f">FAIL</span>
-  9  Cordless Drill 20V Kit         walmart  330.00  379.00  -16.96   -5.1%    275      -17  <span class="f">FAIL</span></pre>
+      <div class="term__bar">verdict — landed cost, velocity-first ranking, signal tier per row</div>
+<pre>  #  ITEM                       CH          INV    LAND    SELL    NET   ROI   /MO  DAYS    ANN  SIGNAL     VERDICT
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  1  Stainless Steel French Pr  ebay      12.00   14.88   42.50  12.19   82%   124     6  1510%  <span class="p">observed</span>   <span class="p">PASS</span>
+  2  Bluetooth Earbuds Pro      walmart   40.00   44.58   69.99  16.28   37%   120     6   666%  <span class="p">observed</span>   <span class="w">WATCH</span>
+  3  Dog Chew Toy Variety 5-pa  ebay       4.00    5.24   21.99   5.86  112%     2   939    43%  <span class="c">rank</span>       <span class="f">FAIL</span>
+  4  Air Purifier HEPA Medium   walmart  180.00  202.62  249.99  -0.36   -0%     4   120    -0%  <span class="p">observed</span>   <span class="f">FAIL</span>
+  5  Silicone Baking Mat Set    —                                                                <span class="c">unknown</span>    <span class="f">FAIL</span>
+  6  Discontinued - do not ord  —                                                                <span class="c">unknown</span>    <span class="f">FAIL</span>
+  7  Ceramic Nonstick Fry Pan   walmart   45.00   51.28   54.00 -11.37  -22%     4   389   -20%  <span class="c">rank</span>       <span class="f">FAIL</span>
+  8  Cordless Drill 20V Kit     walmart  330.00  364.12  379.00 -51.08  -14%   275     1  -341%  <span class="c">velocity</span>   <span class="f">FAIL</span>
+  9  LED Desk Lamp with USB-C   walmart   23.00   27.14   26.94  -9.77  -36%    50     7  -620%  <span class="c">velocity</span>   <span class="f">FAIL</span></pre>
     </div>
 
-    <div class="term">
-      <div class="term__bar">why — the winner, fully attributed</div>
-<pre>  <b>Stainless Steel French Press 34oz -> ebay [PASS]</b>
-     fees: referral $5.78 | fulfil $0 | storage $0 | ship $9.25 | per-order $0.40 = $15.43
-     demand: 32 new review(s) over 30 days ÷ 2.0% review rate (velocity)
-     breakeven sale price: $25.06
-     <span class="p">PASS</span>  net profit $15.07/unit
-     <span class="p">PASS</span>  ROI 125.58%
-     <span class="p">PASS</span>  minimum order $288.00
-     <span class="p">PASS</span>  ~200.0 units/month share
-     <span class="p">PASS</span>  price stable
-     <span class="p">PASS</span>  authorized distributor on file
+    <p><strong>Row 4 is the case the whole tool exists for, and it moved.</strong> On invoice cost the air purifier showed $22.26/unit — <em>more raw profit than the winner</em> — and a margin-sorted spreadsheet puts it near the top. Costing $5.88 of freight onto a 14 lb item takes it to <strong>−$0.36</strong>. It was never a winner; at invoice cost it just looked like one, and no amount of ranking cleverness would have caught that. This is the argument for landed cost in one row.</p>
 
-  <b>Air Purifier HEPA Medium Room -> walmart [FAIL]</b>
-     fees: referral $37.50 | fulfil $10.15 | storage $0.08 | ship $0 | per-order $0 = $47.73
-     <span class="p">PASS</span>  net profit $22.26/unit
-     <span class="p">PASS</span>  ~133.3 units/month share
-     <span class="f">FLAG</span>  ROI 12.37% below 25.0% minimum
-     <span class="f">FLAG</span>  no confirmed distributor for this brand yet
-     <span class="f">FLAG</span>  fee estimate rests on assumed cubic feet</pre>
-    </div>
+    <p><strong>Row 3 is the argument for velocity-first.</strong> The dog toys have the best ROI on the board at 112% — better than the winner's 82% — and under the old profit-ranked ordering they placed second. But BSR says the item moves about 2 units/month to you, so the minimum order takes <strong>939 days</strong> to clear. Annualized, that 112% is 43%. It fails, correctly, on a threshold that raw margin cannot see.</p>
 
-    <p>Row 4 is the case the whole tool exists for. The air purifier makes <strong>more raw profit per unit</strong> than the winner — $22.26 against $15.07 — and a margin-sorted spreadsheet would put it near the top. But it ties up $180 per unit to do it, so the ROI is 12% and your capital turns over less than half as fast. The French press wins on the only metric that pays rent.</p>
-
-    <p>Row 2 shows the <span class="chip chip--watch">watch</span> tier earning its keep: the earbuds project $21,694/month, far more than anything else on the list, and the tool still refuses to call it a pass — the brand has no confirmed distributor, so the number is real but unreachable until that's resolved. Rows 5 and 6 are the Excel-mangled UPC and the "Discontinued" footer line, both correctly dropped before spending an API call.</p>
+    <p>Rows 1 and 2 both carry the <span class="chip chip--pass">observed</span> tier — real stock depletion, not a review-rate guess. The earbuds series includes a restock (180 → 60 → 140) that the estimator correctly excludes rather than counting as negative sales. Row 2 stays <span class="chip chip--watch">watch</span> despite the strongest economics on the list, because the brand has no confirmed distributor: the number is real but unreachable until that's resolved.</p>
   </section>
 
   <!-- ────────────────────────────────────────────────────────── -->
@@ -850,8 +953,15 @@ flowchart TD
           <tr><td>UPC normalization</td><td><span class="chip chip--pass">done</span></td><td>Verified against 15 dirty-input cases</td></tr>
           <tr><td>CSV / TSV ingest</td><td><span class="chip chip--pass">done</span></td><td>Header detection + column mapping verified</td></tr>
           <tr><td>XLSX ingest</td><td><span class="chip chip--watch">untested</span></td><td>Code written; needs <code>openpyxl</code> and a real workbook</td></tr>
-          <tr><td>Fee engines</td><td><span class="chip chip--pass">done</span></td><td>Rate tables need verification against current cards</td></tr>
-          <tr><td>Demand + stability</td><td><span class="chip chip--pass">done</span></td><td>Velocity, badge, heuristic tiers all live</td></tr>
+          <tr><td>Fee engines (WMT/eBay)</td><td><span class="chip chip--pass">done</span></td><td>Plan-aware. Rate tables need verification against current cards</td></tr>
+          <tr><td>Landed-cost model</td><td><span class="chip chip--pass">done</span></td><td>Freight, prep, packaging, duty, shrink, returns</td></tr>
+          <tr><td>Selling-plan model</td><td><span class="chip chip--pass">done</span></td><td>eBay Stores, Amazon plans, breakeven volumes</td></tr>
+          <tr><td>Demand + stability</td><td><span class="chip chip--pass">done</span></td><td>All 7 tiers incl. depletion + BSR</td></tr>
+          <tr><td>Velocity-first scoring</td><td><span class="chip chip--pass">done</span></td><td>Annualized ROI w/ lead time; sell-through gate</td></tr>
+          <tr><td>Depletion <em>collector</em></td><td><span class="chip chip--todo">not built</span></td><td>The estimator reads it; nothing writes it yet — this is the highest-value next build</td></tr>
+          <tr><td>Terapeak import</td><td><span class="chip chip--todo">not built</span></td><td>Schema field exists; authenticated session path not written</td></tr>
+          <tr><td>Amazon channel adapter</td><td><span class="chip chip--todo">not built</span></td><td>BSR curves + normalization done; no fetch path</td></tr>
+          <tr><td>Amazon fee tables</td><td><span class="chip chip--todo">not built</span></td><td>Referral + FBA tiers still to encode</td></tr>
           <tr><td>Verdict scoring + ranking</td><td><span class="chip chip--pass">done</span></td><td>Demonstrated end to end</td></tr>
           <tr><td>Inquiry drafts</td><td><span class="chip chip--pass">done</span></td><td>Template, no LLM</td></tr>
           <tr><td>Walmart.io adapter</td><td><span class="chip chip--watch">unverified</span></td><td>Signing logic written; never run against live credentials</td></tr>
@@ -891,7 +1001,10 @@ flowchart TD
       <table>
         <thead><tr><th>Question</th><th>Why it matters</th></tr></thead>
         <tbody>
-          <tr><td>Do you have Walmart.io credentials, or should the Walmart leg default to the residential-proxy scrape?</td><td>The scrape is the only path that returns review counts and the "bought yesterday" badge — which are two of the four demand signals. If the API is the only path, demand estimation is thinner than designed.</td></tr>
+          <tr><td>Do you have Walmart.io credentials, or should the Walmart leg default to the residential-proxy scrape?</td><td>The scrape is the only path that returns review counts, the "bought yesterday" badge, <em>and</em> the cart quantity that feeds depletion. If the API is the only path, the best signal is unavailable on Walmart.</td></tr>
+          <tr><td>Your real cost inputs: freight $/lb into your prep centre, prep + polybag per unit, and your actual return rate?</td><td>These are the numbers the demo currently guesses at, and they move verdicts more than anything else on the sheet. The air purifier flipped sign on one of them.</td></tr>
+          <tr><td>Your reorder lead time, per supplier if it varies?</td><td>It's the denominator of the ranking metric. Two weeks vs. eight weeks changes the order of the whole list.</td></tr>
+          <tr><td>Which plans do you hold today — eBay Store tier, Amazon Individual or Professional?</td><td>Changes the marginal fee on every eBay and Amazon row, and determines whether the fixed fee is sunk or a live decision.</td></tr>
           <tr><td>Is Amazon a third channel?</td><td>Keepa is already on the Phase 4 roadmap. Adding it later is a new adapter plus a fee table; designing for it now costs nothing.</td></tr>
           <tr><td>Single seller, or multi-tenant?</td><td><code>brand_access</code> is currently scoped per user. Thresholds are per list. Both assumptions get expensive to change after data exists.</td></tr>
           <tr><td>Web dashboard or iOS?</td><td>A 3,000-row ranked table wants a wide screen and CSV export. The existing iOS app is the wrong shape for this workflow — the phone is for the store aisle, not the price list.</td></tr>

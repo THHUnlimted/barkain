@@ -23,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from m15_sourcing import demand as demand_mod  # noqa: E402
 from m15_sourcing import fees as fees_mod  # noqa: E402
+from m15_sourcing import landed_cost as landed_mod  # noqa: E402
+from m15_sourcing import plans as plans_mod  # noqa: E402
 from m15_sourcing import scoring as scoring_mod  # noqa: E402
 from m15_sourcing.ingest import ingest  # noqa: E402
 from m15_sourcing.inquiry import SellerProfile, build_inquiry  # noqa: E402
@@ -97,6 +99,19 @@ _FAKE_REVIEW_HISTORY: dict[str, list[int]] = {
     "10195949036320": [318, 330, 340],
     "00036000291452": [140, 148, 156],
 }
+# Observed purchasable-quantity history — the depletion signal. Note the
+# restock in the earbuds series (60 -> 140): the estimator resets its baseline
+# there rather than counting it as negative sales.
+_FAKE_STOCK_HISTORY: dict[str, list[int]] = {
+    "00195949036323": [220, 148, 96],
+    "00883816756817": [180, 60, 140],
+    "00036000291452": [40, 38, 36],
+}
+# Amazon Best Sellers Rank, where we have it.
+_FAKE_BSR: dict[str, tuple[int, str]] = {
+    "00812345678901": (18_400, "Home & Kitchen"),
+    "00049000006346": (52_000, "Pet Supplies"),
+}
 _FAKE_PRICE_HISTORY: dict[str, list[float]] = {
     "00195949036323": [39.98, 39.98, 39.98],
     "00812345678901": [58.00, 49.00, 54.00],  # volatile — a price war
@@ -111,6 +126,8 @@ _FAKE_PRICE_HISTORY: dict[str, list[float]] = {
 def _snapshots(gtin14: str) -> list[demand_mod.Snapshot]:
     reviews = _FAKE_REVIEW_HISTORY.get(gtin14)
     prices = _FAKE_PRICE_HISTORY.get(gtin14)
+    stock = _FAKE_STOCK_HISTORY.get(gtin14)
+    bsr = _FAKE_BSR.get(gtin14)
     if not reviews:
         return []
     out = []
@@ -120,6 +137,9 @@ def _snapshots(gtin14: str) -> list[demand_mod.Snapshot]:
                 captured_at=NOW - timedelta(days=30 - i * 15),
                 price=Decimal(str(prices[i])) if prices else None,
                 review_count=review_count,
+                available_quantity=stock[i] if stock else None,
+                sales_rank=bsr[0] if bsr else None,
+                sales_rank_category=bsr[1] if bsr else None,
             )
         )
     return out
@@ -134,6 +154,24 @@ def main() -> int:
         min_roi_pct=Decimal("25.0"),
         min_monthly_unit_share=30.0,
         max_capital_per_sku=Decimal("5000"),
+        max_days_to_sell_through=90.0,
+        min_annualized_roi_pct=Decimal("150.0"),
+        ranking_policy=scoring_mod.RANK_BY_VELOCITY,
+    )
+    # A realistic small-seller cost profile: freight billed by weight into a
+    # prep centre, a polybag and a label on every unit, a 3% damage reserve and
+    # a 5% return reserve.
+    cost_profile = landed_mod.CostProfile(
+        inbound_freight_per_lb=Decimal("0.42"),
+        prep_per_unit=Decimal("0.55"),
+        packaging_per_unit=Decimal("0.18"),
+        inspection_per_unit=Decimal("0.10"),
+        shrink_rate=Decimal("0.03"),
+        return_rate=Decimal("0.05"),
+    )
+    plan_selection = plans_mod.PlanSelection(
+        ebay="basic", amazon="professional", walmart="standard",
+        already_subscribed=True,
     )
 
     print("=" * 78)
@@ -184,9 +222,17 @@ def main() -> int:
         snaps = _snapshots(gtin14)
         walmart = match.get("walmart") or {}
         ebay = match.get("ebay") or {}
-        dims = fees_mod.ItemDimensions(
-            weight_lb=Decimal(str(walmart["weight_lb"])) if walmart.get("weight_lb") else None
+        weight = Decimal(str(walmart["weight_lb"])) if walmart.get("weight_lb") else None
+        dims = fees_mod.ItemDimensions(weight_lb=weight)
+
+        landed = landed_mod.build_landed_cost(
+            invoice_cost=unit_cost,
+            profile=cost_profile,
+            weight_lb=weight,
+            case_pack=row.case_pack,
         )
+        scored.landed_cost = landed
+        unit_cost = landed.total
 
         if walmart.get("found"):
             scored.channels["walmart"] = scoring_mod.score_channel(
@@ -201,6 +247,7 @@ def main() -> int:
                 seller_count=walmart.get("seller_count"),
                 thresholds=thresholds,
                 minimum_buy_cost=row.minimum_buy_cost,
+                minimum_buy_units=row.minimum_buy_units,
                 brand_status=scored.brand_status,
             )
         if ebay.get("found"):
@@ -215,38 +262,43 @@ def main() -> int:
                 seller_count=ebay.get("total_active_listings"),
                 thresholds=thresholds,
                 minimum_buy_cost=row.minimum_buy_cost,
+                minimum_buy_units=row.minimum_buy_units,
                 brand_status=scored.brand_status,
             )
         scored_rows.append(scored)
 
-    ranked = scoring_mod.rank(scored_rows)
+    ranked = scoring_mod.rank(scored_rows, thresholds.ranking_policy)
 
     print()
     print("=" * 78)
     print("VERDICT  (ranked by projected monthly profit)")
     print("=" * 78)
     header = (
-        f"  {'#':<3}{'ITEM':30}{'CH':<9}{'COST':>8}{'SELL':>9}"
-        f"{'NET':>8}{'ROI':>8}{'SHARE':>8}{'PROJ/MO':>10}  VERDICT"
+        f"  {'#':<3}{'ITEM':27}{'CH':<8}{'INV':>7}{'LAND':>8}{'SELL':>8}"
+        f"{'NET':>7}{'ROI':>6}{'/MO':>6}{'DAYS':>6}{'ANN':>7}  SIGNAL     VERDICT"
     )
     print(header)
     print("  " + "-" * (len(header) - 2))
     for i, row in enumerate(ranked, 1):
         best = row.best_channel
         if best is None:
-            blanks = f"{'':>8}{'':>9}{'':>8}{'':>8}{'':>8}{'':>10}"
+            blanks = f"{'':>7}{'':>8}{'':>8}{'':>7}{'':>6}{'':>6}{'':>6}{'':>7}"
             print(
-                f"  {i:<3}{(row.description or '?')[:28]:30}{'-':<9}{blanks}  "
-                "FAIL (no match)"
+                f"  {i:<3}{(row.description or '?')[:25]:27}{'-':<8}{blanks}  "
+                "unknown    FAIL"
             )
             continue
         eco = best.economics
+        invoice = float(row.landed_cost.invoice_cost) if row.landed_cost else 0.0
+        days, ann = best.days_to_sell_through, best.annualized_roi_pct
         print(
-            f"  {i:<3}{(row.description or '?')[:28]:30}{eco.channel:<9}"
-            f"{float(eco.unit_cost):>8.2f}{float(eco.sale_price):>9.2f}"
-            f"{float(eco.net_profit):>8.2f}{float(eco.roi_pct):>7.1f}%"
-            f"{(best.unit_share or 0):>8.0f}{best.projected_monthly_profit or 0:>10.0f}  "
-            f"{row.verdict.value.upper()}"
+            f"  {i:<3}{(row.description or '?')[:25]:27}{eco.channel:<8}"
+            f"{invoice:>7.2f}{float(eco.unit_cost):>8.2f}{float(eco.sale_price):>8.2f}"
+            f"{float(eco.net_profit):>7.2f}{float(eco.roi_pct):>5.0f}%"
+            f"{(best.unit_share or 0):>6.0f}"
+            f"{(f'{days:.0f}' if days else '-'):>6}"
+            f"{(f'{ann:.0f}%' if ann else '-'):>7}  "
+            f"{best.demand.confidence.value:<10} {row.verdict.value.upper()}"
         )
 
     print()
@@ -275,6 +327,50 @@ def main() -> int:
             print(f"     FLAG  {reason}")
         print()
 
+    print("=" * 78)
+    print("LANDED COST  (the invoice price is not what a unit costs you)")
+    print("=" * 78)
+    for row in ranked[:4]:
+        lc = row.landed_cost
+        if lc is None:
+            continue
+        print(
+            f"  {(row.description or '?')[:32]:34} "
+            f"invoice ${float(lc.invoice_cost):>7.2f} -> landed ${float(lc.total):>7.2f} "
+            f"(+{float(lc.uplift_pct):.1f}%)"
+        )
+        print(
+            f"     freight ${float(lc.inbound_freight_per_unit):.2f} | "
+            f"prep ${float(lc.prep_per_unit):.2f} | pack ${float(lc.packaging_per_unit):.2f} | "
+            f"QC ${float(lc.inspection_per_unit):.2f} | "
+            f"survives {float(lc.survival_rate) * 100:.0f}%"
+        )
+
+    print()
+    print("=" * 78)
+    print("SELLING PLANS  (fixed fees are never amortized into unit margin)")
+    print("=" * 78)
+    passing = [r for r in ranked if r.verdict == scoring_mod.Verdict.PASS]
+    avg_price = (
+        sum((r.best_channel.economics.sale_price for r in passing), Decimal("0"))
+        / len(passing)
+        if passing
+        else Decimal("30")
+    )
+    monthly_units = sum((r.best_channel.unit_share or 0) for r in passing)
+    for channel in ("ebay", "amazon"):
+        current = getattr(plan_selection, channel)
+        best_plan, comparisons = plans_mod.recommend_plan(
+            channel, monthly_units=monthly_units, avg_sale_price=avg_price
+        )
+        print(
+            f"  {channel}: holding '{current}' | at {monthly_units:.0f} units/mo "
+            f"the cheapest plan is '{best_plan.key}'"
+        )
+        for comparison in comparisons:
+            print(f"     {comparison.from_plan} -> {comparison.to_plan}: {comparison.note}")
+
+    print()
     print("=" * 78)
     print("SUMMARY")
     print("=" * 78)

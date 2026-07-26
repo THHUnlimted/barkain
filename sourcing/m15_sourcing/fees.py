@@ -43,6 +43,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
+from m15_sourcing.plans import SellingPlan, effective_fee_rate, get_plan
+
 FEE_SCHEDULE_VERSION = "2026-07-26"
 
 _CENT = Decimal("0.01")
@@ -393,7 +395,10 @@ def ebay_shipping_estimate(dims: ItemDimensions) -> tuple[Decimal, list[str]]:
 
 
 def ebay_final_value_fee(
-    sale_price: Decimal, shipping_charged: Decimal = _ZERO, category: str | None = None
+    sale_price: Decimal,
+    shipping_charged: Decimal = _ZERO,
+    category: str | None = None,
+    plan: SellingPlan | None = None,
 ) -> Decimal:
     """eBay final value fee on the **total amount of the sale**.
 
@@ -401,7 +406,8 @@ def ebay_final_value_fee(
     shipping — free shipping doesn't dodge the fee, it just moves the money. The
     per-order fixed fee is added once.
     """
-    rate = EBAY_FVF_RATES.get(category or "default", EBAY_DEFAULT_FVF_RATE)
+    base = EBAY_FVF_RATES.get(category or "default", EBAY_DEFAULT_FVF_RATE)
+    rate = effective_fee_rate(base, plan) if plan else base
     total = sale_price + shipping_charged
     if total <= _EBAY_HIGH_VALUE_THRESHOLD:
         variable = total * rate
@@ -538,12 +544,19 @@ def walmart_economics(
     days_on_hand: int = 60,
     q4_storage: bool = False,
     seller_shipping_cost: Decimal | None = None,
+    plan: SellingPlan | None = None,
 ) -> ChannelEconomics:
-    """Per-unit economics for a Walmart Marketplace listing."""
+    """Per-unit economics for a Walmart Marketplace listing.
+
+    ``plan`` exists for symmetry with the other channels — Walmart charges no
+    subscription and no per-item plan fee, so it currently only affects the
+    breakdown's ``other_fees`` if a future plan introduces one.
+    """
     dims = dims or ItemDimensions()
     assumptions: list[str] = []
+    plan = plan or get_plan("walmart")
 
-    rate = walmart_referral_rate(category, sale_price)
+    rate = effective_fee_rate(walmart_referral_rate(category, sale_price), plan)
     referral = _money(sale_price * rate)
     if resolve_category(category) == "default" and category not in WALMART_REFERRAL_RATES:
         assumptions.append("default_referral_rate")
@@ -575,6 +588,7 @@ def walmart_economics(
             fulfillment_fee=fulfillment,
             storage_fee=storage,
             shipping_cost=shipping,
+            other_fees=plan.per_item_fee,
         ),
         fulfillment_model=model,
         assumptions=tuple(dict.fromkeys(assumptions)),
@@ -590,6 +604,7 @@ def ebay_economics(
     shipping_charged: Decimal = _ZERO,
     seller_shipping_cost: Decimal | None = None,
     ad_rate: Decimal = _ZERO,
+    plan: SellingPlan | None = None,
 ) -> ChannelEconomics:
     """Per-unit economics for an eBay listing.
 
@@ -600,6 +615,7 @@ def ebay_economics(
     """
     dims = dims or ItemDimensions()
     assumptions: list[str] = []
+    plan = plan or get_plan("ebay")
 
     if seller_shipping_cost is None:
         ship_cost, notes = ebay_shipping_estimate(dims)
@@ -608,7 +624,11 @@ def ebay_economics(
     else:
         ship_cost = _money(seller_shipping_cost)
 
-    fvf_total = ebay_final_value_fee(sale_price, shipping_charged, category)
+    fvf_total = ebay_final_value_fee(
+        sale_price, shipping_charged, category, plan=plan
+    )
+    if plan.fvf_discount > 0:
+        assumptions.append(f"{plan.key}_store_fvf_discount")
     # Split the fixed per-order component back out so the breakdown reads the
     # way a seller's statement does.
     variable = _money(fvf_total - EBAY_PER_ORDER_FEE)

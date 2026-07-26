@@ -1,6 +1,7 @@
 # Wholesale Sourcing Scanner — Capability Canvas + Build Plan
 
-> **Status:** M15 module scaffolded (Weekend 1 + Weekend 2 core + Week 3 schema).
+> **Status:** M15 core complete, unwired. Rev B — landed cost, selling plans,
+> velocity-first ranking, 7-tier popularity engine.
 > **Last updated:** 2026-07-26
 
 ---
@@ -65,7 +66,8 @@ already exist and are battle-tested against live retailers.
 - **Fee engine** (`fees.py`) — Walmart referral by category + WFS by weight/dims
   + storage; eBay FVF + per-order + shipping estimate.
 - **Verdict scoring** (`scoring.py`) — thresholds → PASS / WATCH / FAIL + rank.
-- **Demand estimation** (`demand.py`) — the hard part. See §5.
+- **Popularity engine** (`demand.py`) — the hard part, and 99% of the battle.
+  Seven confidence tiers topped by observed inventory depletion. See §5.
 - **Snapshot store** (`listing_snapshots`) — the proprietary dataset. See §6.
 - **Brand access ledger** (`brand_access`) — the part software can't fully
   automate. See §7.
@@ -132,36 +134,79 @@ round-trips every input without loss. `upc12` / `ean13` are derived views.
 
 ---
 
-## 5. Demand estimation — the hard part
+## 5. Popularity — the part that actually decides
 
-Walmart doesn't publish sales figures, so everything here is a proxy. In
-descending order of signal quality:
+Margins are arithmetic. Whether the thing *sells* is the real question, and
+every marketplace is deliberately unhelpful about it. Signals are ranked by how
+close each one is to counting units, and that ranking is carried all the way to
+the interface — a verdict built on observed stock movement and one built on a
+lifetime review total must not look the same on screen.
 
-| Tier | Signal | How | Confidence |
+| Tier | Signal | Source | How close to truth |
 |---|---|---|---|
-| 1 | **eBay sold count (90 d)** | Marketplace Insights API — direct demand data, no estimation. Requires approval; Terapeak in Seller Hub is the free manual equivalent. | `direct` |
-| 2 | **Review velocity** | `Δreview_count ÷ Δdays × 30 ÷ REVIEW_RATE`. Industry rule of thumb is ~2% of buyers leave a review, so 6 new reviews in 30 days ≈ 300 units/month. Needs **≥2 snapshots ≥7 days apart**. | `velocity` |
-| 3 | **"X+ bought since yesterday" badge** | Scraped from the Walmart product page (the affiliate API doesn't expose it). Coarse buckets — 50+, 100+, 1000+ — but it's a floor, not an estimate. | `badge` |
-| 4 | **Rating-count heuristic** | Single snapshot only: `review_count ÷ listing_age_months ÷ REVIEW_RATE`. Wildly noisy on old listings. Used to rank, never to decide. | `heuristic` |
-| — | Nothing | No listing, or listing with zero reviews and no badge | `unknown` |
+| `observed` | **Inventory depletion** | Walmart · Amazon · eBay | **Counts units.** ~87% of actual on items with visible stock. Measures *one seller's* movement, not the listing's. |
+| `direct` | Exact sold count | eBay Terapeak / Product Research | **Is the number.** Not an estimate. |
+| `rank` | Best Sellers Rank | Amazon | 20–40% of actual under rank 50k, per-category curves, degrades on the long tail. |
+| `velocity` | Review delta | All three | Rests entirely on the ~2% review-rate constant — the softest number in the system. |
+| `badge` | "500+ bought yesterday" | Walmart, intermittently | A floor, not an estimate. But it's same-day truth. |
+| `heuristic` | Lifetime reviews ÷ age | All three | 4,000 reviews over six years says nothing about this month. Ranks; never decides. |
+| `unknown` | Nothing | — | Can never be `PASS`. |
 
-Tier 2 is why the snapshot database exists, and why **the app has to run for a
-few weeks before it's smarter than a spreadsheet**. That's not a flaw in the
-plan — it *is* the plan. Review velocity requires longitudinal data nobody can
-buy, which means the dataset compounds and can't be cloned by a competitor who
-launches later.
+### 5.1 Inventory depletion — the definitive method
 
-**Unit share** is what converts demand into your demand:
+Poll a listing's purchasable quantity, walk the observations in time order, sum
+the **decreases**. An increase is a restock — reset the baseline, count nothing.
+That sum is units sold: not modelled, observed.
+
+Two properties make it the best signal available:
+
+- **It measures a specific seller, not the listing.** Every other signal
+  describes the whole listing and then has to be divided by a guessed seller
+  count. Depletion already *is* the per-offer number, so `unit_share()` skips
+  the division entirely for it — dividing again would understate a good row by
+  a factor of five.
+- **It works on all three channels**, with no API approval, no subscription,
+  and no dependence on buyer behavior.
+
+**The guard that makes it usable:** a listing reporting 400 units on Monday and
+0 on Tuesday almost certainly went out of stock or had a feed error — it did not
+sell 400 units in a day. Any single-interval drop exceeding 75% of the running
+baseline is discarded as a correction. Without that guard one bad observation
+produces a phantom top-ranked row, which on a velocity-first ranking is the
+worst failure the system can have.
+
+**The cost:** one probe per SKU per day, and cart-level probing is heavier than
+a page read. Run it against the **shortlist** — rows that already cleared the
+fee gates — not against all 3,000 rows of every list. Roughly 50–200 SKUs
+polled daily.
+
+### 5.2 What changed on eBay
+
+The original plan routed exact sold-counts through eBay's Marketplace Insights
+API. As of mid-2026 that is a Limited Release effectively closed to anyone who
+isn't a major partner. **Terapeak / Product Research inside Seller Hub is the
+real path:** free with a seller account, exact units sold over a window, and an
+authenticated page rather than an API — so it's an import or session-scrape.
+`sold_count_window_days` is carried explicitly on the snapshot so a 30-day
+Product Research export isn't silently divided by three like a 90-day one.
+
+### 5.3 Amazon BSR
+
+Per-category power-law curves, `monthly_units ≈ a × rank^-b`, with 14 category
+keys plus a default. Treat the coefficients exactly like the fee tables:
+configuration to re-verify against real data, not constants.
+
+### 5.4 Unit share
+
+Where a channel gives nothing better, listing-wide demand still converts to
+your demand:
 
 ```
 unit_share = est_monthly_sales ÷ (seller_count + 1)
 ```
 
-The `+1` is you. Five sellers all holding stock on a 300 unit/month item means
-50 units each — which is a real business. Five sellers on a 40 unit/month item
-means everyone's racing to the bottom.
-
----
+The `+1` is you. Five sellers on a 300 unit/month item is 50 each and a real
+business; five on a 40 unit/month item is a price war with extra steps.
 
 ## 6. The snapshot database — the moat
 
@@ -180,6 +225,73 @@ seller count, stock state, and sold-count when available.
 This is the step that turns the product from a calculator into an intelligence
 tool, and it's the reason to start snapshotting on day one even before the
 demand math is wired up — you cannot backfill time.
+
+---
+
+## 6b. Landed cost and selling plans
+
+### Landed cost
+
+The price-list number is the *invoice* cost. A sellable unit has also absorbed
+freight, prep, packaging, duty, payment fees, and a share of the units that
+arrived broken or came back. Scoring on invoice cost overstates margin
+**unevenly** — a 14 lb air purifier absorbs far more freight per unit than a
+4 oz phone case at the same invoice price — which means it doesn't shift rows,
+it *reorders* them.
+
+Measured on the sample list, the uplift ranges from **+11.4% to +31.0%** across
+four rows. A flat "add 20% for costs" rule would be wrong in both directions.
+
+**Reserves divide, they don't add.** You don't pay shrink and returns per unit —
+you lose that fraction of units, and the survivors carry the cost of all of
+them. 3% shrink + 5% returns means 92 units carry the cost of 100: an 8.7% cost
+increase, not 8%.
+
+Every component defaults to zero with an `assumptions` flag recording what was
+left unspecified. An invented freight number that happens to be wrong is worse
+than a visible gap, because it looks like it was measured.
+
+### Selling plans
+
+A monthly subscription is a **fixed** cost, and amortizing it into per-unit
+margin is wrong in both directions: if you already pay it, it's sunk for the
+next SKU decision; if you don't, it's a threshold question with a volume answer.
+
+So `plans.py` does two things and never mixes them:
+
+1. **Marginal rates** — an eBay Store's FVF cut, Amazon Individual's $0.99/item.
+   Genuinely per-unit; flows into the fee engine.
+2. **Breakeven volume** — the fixed fee reported once per channel as the volume
+   at which the plan pays for itself.
+
+The Amazon Individual→Professional crossover comes out at ~40 units/month, which
+is the well-known number — but it's *derived* from the two fee structures rather
+than written down, so it moves on its own when Amazon changes either.
+
+---
+
+## 6c. Ranking: velocity beats margin
+
+Rows sort by **annualized ROI**, not margin and not raw monthly profit:
+
+```
+annualized_roi = roi_pct × 365 ÷ (days_to_sell_through + reorder_lead_time)
+```
+
+For a capital-constrained buyer the scarce resource is cash, and what matters is
+how many times a year it comes back with a profit attached. A 60% margin turning
+over twice a year is a worse purchase order than 22% turning over eleven times.
+
+**Lead time in the denominator is not a detail.** Capital redeploys when the next
+case lands, not when the last unit ships. An item clearing in six days on a
+three-week reorder cycle turns over ~14×/year, not 60×. Building the metric
+without lead time produced four-figure percentages on every fast mover in
+testing and reordered the whole list on an artifact of the formula.
+
+Two hard gates enforce the preference rather than leaving it to sort order:
+`max_days_to_sell_through` (default 90) and `min_annualized_roi_pct`
+(default 150%). `RankingPolicy` keeps `monthly_profit` and `margin` available,
+but `velocity` is the default and the thresholds are tuned for it.
 
 ---
 
