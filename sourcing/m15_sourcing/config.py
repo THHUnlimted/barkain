@@ -40,12 +40,16 @@ class SourcingSettings(BaseSettings):
     WALMART_IO_KEY_VERSION: str = "1"
 
     # Adapter swap, same pattern as WALMART_ADAPTER / MISC_RETAILER_ADAPTER:
-    #   "walmart_io"   — signed affiliate/search API (primary)
-    #   "walmart_http" — Decodo residential-proxy scrape (fallback; the only
-    #                    path that yields review counts and the
-    #                    "N+ bought since yesterday" badge)
+    #   "walmart_http" — Decodo residential-proxy scrape. THE DEFAULT, because
+    #                    Walmart.io affiliate access isn't available on this
+    #                    account and because it's the only path that yields
+    #                    review counts, the "N+ bought since yesterday" badge,
+    #                    and the cart quantity that feeds inventory-depletion
+    #                    demand estimation. Seller-Center access is a separate
+    #                    thing and doesn't grant the affiliate product API.
+    #   "walmart_io"   — signed affiliate/search API, if access is granted later
     #   "disabled"     — skip the Walmart leg entirely
-    WALMART_SOURCING_ADAPTER: str = "walmart_io"
+    WALMART_SOURCING_ADAPTER: str = "walmart_http"
 
     # ── eBay ──────────────────────────────────────────────────────────
     # Browse credentials are shared with M2; repeated here so the module can

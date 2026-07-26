@@ -80,6 +80,10 @@ COLUMN_SYNONYMS: dict[str, tuple[str, ...]] = {
     "brand": ("brand", "manufacturer", "mfr", "mfg", "vendor", "supplier", "make"),
     "sku": ("sku", "item number", "item #", "item no", "part number", "part #",
             "model", "mpn", "manufacturer part", "vendor sku"),
+    "lead_time_days": (
+        "lead time", "leadtime", "lead days", "ship time", "ships in",
+        "restock days", "replenishment", "eta days",
+    ),
     "quantity_available": (
         "qty available", "available", "on hand", "stock", "inventory",
         "qty on hand", "avail",
@@ -91,7 +95,7 @@ COLUMN_SYNONYMS: dict[str, tuple[str, ...]] = {
 # `unit_cost`. This ordering is load-bearing — see `_map_columns`.
 _RESOLUTION_ORDER: tuple[str, ...] = (
     "upc", "case_pack", "case_cost", "unit_cost", "moq", "msrp",
-    "brand", "sku", "quantity_available", "description",
+    "lead_time_days", "brand", "sku", "quantity_available", "description",
 )
 
 _HEADER_SCAN_ROWS = 15
@@ -268,6 +272,10 @@ class IngestedRow:
     moq: int | None = None
     msrp: Decimal | None = None
     quantity_available: int | None = None
+    # Per-product reorder lead time. Supplied by the buyer, either as a column
+    # on the price list or set per row afterwards — it varies by supplier far
+    # too much for a single global default to be honest.
+    lead_time_days: int | None = None
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -514,6 +522,7 @@ def ingest(
             moq=parse_int(mapping.get("moq", raw_row)),
             msrp=parse_money(mapping.get("msrp", raw_row)),
             quantity_available=parse_int(mapping.get("quantity_available", raw_row)),
+            lead_time_days=parse_int(mapping.get("lead_time_days", raw_row)),
         )
 
         # A row with neither a usable UPC nor a description is noise — a footer,

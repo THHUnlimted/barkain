@@ -158,20 +158,20 @@ def main() -> int:
         min_annualized_roi_pct=Decimal("150.0"),
         ranking_policy=scoring_mod.RANK_BY_VELOCITY,
     )
-    # A realistic small-seller cost profile: freight billed by weight into a
-    # prep centre, a polybag and a label on every unit, a 3% damage reserve and
-    # a 5% return reserve.
+    # Freight is estimated from item weight, per the operator's stated method.
+    # Returns measured under 1% but reserved at 3% as a deliberate cushion.
     cost_profile = landed_mod.CostProfile(
         inbound_freight_per_lb=Decimal("0.42"),
         prep_per_unit=Decimal("0.55"),
         packaging_per_unit=Decimal("0.18"),
         inspection_per_unit=Decimal("0.10"),
-        shrink_rate=Decimal("0.03"),
-        return_rate=Decimal("0.05"),
+        return_rate=Decimal("0.03"),
     )
+    # No subscriptions held today. `already_subscribed=False` means the plan
+    # breakevens below are a live decision, not a sunk cost.
     plan_selection = plans_mod.PlanSelection(
-        ebay="basic", amazon="professional", walmart="standard",
-        already_subscribed=True,
+        ebay="none", amazon="individual", walmart="standard",
+        already_subscribed=False,
     )
 
     print("=" * 78)
@@ -267,7 +267,9 @@ def main() -> int:
             )
         scored_rows.append(scored)
 
-    ranked = scoring_mod.rank(scored_rows, thresholds.ranking_policy)
+    ranked = scoring_mod.rank(
+        scored_rows, thresholds.ranking_policy, velocity_bias=thresholds.velocity_bias
+    )
 
     print()
     print("=" * 78)
@@ -327,6 +329,20 @@ def main() -> int:
             print(f"     FLAG  {reason}")
         print()
 
+    print("=" * 78)
+    print("THE SLIDER  (velocity_bias: 0.0 = fattest margin, 1.0 = fastest turn)")
+    print("=" * 78)
+    for bias in (0.0, 0.5, 1.0):
+        ordered = scoring_mod.rank(scored_rows, velocity_bias=bias)
+        top = [
+            f"{(r.description or '?')[:22]}"
+            for r in ordered
+            if r.verdict != scoring_mod.Verdict.FAIL
+        ][:3]
+        label = {0.0: "margin", 0.5: "balanced", 1.0: "velocity"}[bias]
+        print(f"  bias {bias:<4} ({label:8}) -> " + "  |  ".join(top))
+
+    print()
     print("=" * 78)
     print("LANDED COST  (the invoice price is not what a unit costs you)")
     print("=" * 78)

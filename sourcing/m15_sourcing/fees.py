@@ -346,10 +346,43 @@ def wfs_storage_fee(
 # with the percentage dropping above a portion threshold in some categories.
 
 EBAY_DEFAULT_FVF_RATE = Decimal("0.136")
+
+# The per-order fixed fee is tiered on ORDER TOTAL, not item price. Confirmed
+# from a real fee-detail screen: "Per order fixed amount · Order total $10.01+"
+# charged $0.40. Below that threshold it's $0.30. On a $9 item that difference
+# is 1.1% of revenue, which is the kind of thing that decides a marginal row.
 EBAY_PER_ORDER_FEE = Decimal("0.40")
+EBAY_PER_ORDER_FEE_LOW = Decimal("0.30")
+EBAY_PER_ORDER_FEE_THRESHOLD = Decimal("10.00")
+
+# eBay charges its percentage on the **total amount of the sale, including the
+# sales tax it collects and remits on your behalf**. This is counter-intuitive
+# and it is not how Walmart works — see `walmart_economics`. Verified against a
+# real order:
+#
+#     item $26.50 + shipping $0.00 + sales tax $1.86 = $28.36
+#     $28.36 x 13.6% = $3.86   <- eBay's own arithmetic, from the fee detail
+#
+# Computing the fee on the item price alone understates it by ~7% of the fee.
+# Since we're scoring before a sale exists, the buyer's tax rate is unknown, so
+# we estimate it. 7.0% is close to the US average and matched the sample order
+# to the cent (1.86 / 26.50 = 7.02%).
+EBAY_ASSUMED_SALES_TAX_RATE = Decimal("0.07")
+
+
+def ebay_per_order_fee(order_total: Decimal) -> Decimal:
+    """The tiered per-order fixed fee. Threshold is on order total, not item price."""
+    return (
+        EBAY_PER_ORDER_FEE
+        if order_total > EBAY_PER_ORDER_FEE_THRESHOLD
+        else EBAY_PER_ORDER_FEE_LOW
+    )
 
 EBAY_FVF_RATES: dict[str, Decimal] = {
     "default": Decimal("0.136"),
+    # Confirmed 13.6% against a real order in this category (fee detail read
+    # "Variable percentage · Business & Industrial category").
+    "business_industrial": Decimal("0.136"),
     "books_movies_music": Decimal("0.1535"),
     "clothing_shoes_accessories": Decimal("0.135"),
     "coins_paper_money": Decimal("0.09"),
@@ -399,16 +432,26 @@ def ebay_final_value_fee(
     shipping_charged: Decimal = _ZERO,
     category: str | None = None,
     plan: SellingPlan | None = None,
+    sales_tax: Decimal | None = None,
 ) -> Decimal:
     """eBay final value fee on the **total amount of the sale**.
 
-    eBay charges the percentage on item price *plus* whatever the buyer paid for
-    shipping — free shipping doesn't dodge the fee, it just moves the money. The
-    per-order fixed fee is added once.
+    "Total amount of the sale" means item price **plus buyer-paid shipping plus
+    the sales tax eBay collects**. Free shipping doesn't dodge the fee, it just
+    moves the money — and neither does tax, even though the tax is remitted to a
+    state and never touches your account.
+
+    Verified end to end against a real order: $26.50 item + $0.00 shipping +
+    $1.86 tax = $28.36 base, x 13.6% = $3.86, + $0.40 = $4.26 total fees.
     """
-    base = EBAY_FVF_RATES.get(category or "default", EBAY_DEFAULT_FVF_RATE)
-    rate = effective_fee_rate(base, plan) if plan else base
-    total = sale_price + shipping_charged
+    base_rate = EBAY_FVF_RATES.get(category or "default", EBAY_DEFAULT_FVF_RATE)
+    rate = effective_fee_rate(base_rate, plan) if plan else base_rate
+
+    tax = sales_tax if sales_tax is not None else (
+        sale_price * EBAY_ASSUMED_SALES_TAX_RATE
+    )
+    total = sale_price + shipping_charged + tax
+
     if total <= _EBAY_HIGH_VALUE_THRESHOLD:
         variable = total * rate
     else:
@@ -416,7 +459,7 @@ def ebay_final_value_fee(
             _EBAY_HIGH_VALUE_THRESHOLD * rate
             + (total - _EBAY_HIGH_VALUE_THRESHOLD) * _EBAY_HIGH_VALUE_RATE
         )
-    return _money(variable + EBAY_PER_ORDER_FEE)
+    return _money(variable + ebay_per_order_fee(total))
 
 
 # MARK: - Unified breakdown
@@ -545,8 +588,22 @@ def walmart_economics(
     q4_storage: bool = False,
     seller_shipping_cost: Decimal | None = None,
     plan: SellingPlan | None = None,
+    calibration: object | None = None,
+    sku: str | None = None,
+    product_type: str | None = None,
 ) -> ChannelEconomics:
     """Per-unit economics for a Walmart Marketplace listing.
+
+    **Walmart's commission base excludes sales tax** — the opposite of eBay.
+    Verified from a reconciliation report: an $8.99 item in Automotive &
+    Powersports was charged $1.08 commission (12.00% of $8.99 exactly), while
+    the $0.69 tax was collected and withheld as a pass-through that never
+    entered the base. Passing a tax-inclusive price here would overstate the
+    fee on every row.
+
+    ``calibration`` is a ``recon.FeeCalibration``. When supplied, an *observed*
+    commission rate or fulfillment fee from your own settlements overrides the
+    published tables — see recon.py for why that ordering is the right one.
 
     ``plan`` exists for symmetry with the other channels — Walmart charges no
     subscription and no per-item plan fee, so it currently only affects the
@@ -556,16 +613,43 @@ def walmart_economics(
     assumptions: list[str] = []
     plan = plan or get_plan("walmart")
 
-    rate = effective_fee_rate(walmart_referral_rate(category, sale_price), plan)
+    observed_rate = None
+    if calibration is not None and hasattr(calibration, "commission_rate"):
+        observed_rate = calibration.commission_rate(category)
+    if observed_rate is not None:
+        rate = effective_fee_rate(observed_rate, plan)
+        assumptions.append("commission_rate_from_your_settlements")
+    else:
+        rate = effective_fee_rate(walmart_referral_rate(category, sale_price), plan)
     referral = _money(sale_price * rate)
     if resolve_category(category) == "default" and category not in WALMART_REFERRAL_RATES:
         assumptions.append("default_referral_rate")
 
     if use_wfs:
-        fulfillment, notes = wfs_fulfillment_fee(dims)
-        assumptions.extend(notes)
-        storage, storage_notes = wfs_storage_fee(dims, days_on_hand, q4_storage)
-        assumptions.extend(storage_notes)
+        observed_fee, basis = (None, "published_rate_card")
+        if calibration is not None and hasattr(calibration, "fulfillment_fee"):
+            observed_fee, basis = calibration.fulfillment_fee(
+                sku=sku, product_type=product_type
+            )
+        if observed_fee is not None:
+            # Your actual WFS charge beats the published tier table, which has
+            # already been shown to disagree: a 16 oz item billed at $4.45 sits
+            # between the published 0-1 lb ($3.45) and 1-2 lb ($4.95) tiers.
+            fulfillment = observed_fee
+            assumptions.append(f"wfs_fee_{basis}")
+        else:
+            fulfillment, notes = wfs_fulfillment_fee(dims)
+            assumptions.extend(notes)
+
+        observed_storage = None
+        if calibration is not None and hasattr(calibration, "storage_fee"):
+            observed_storage = calibration.storage_fee(sku)
+        if observed_storage is not None:
+            storage = observed_storage
+            assumptions.append("storage_fee_from_your_settlements")
+        else:
+            storage, storage_notes = wfs_storage_fee(dims, days_on_hand, q4_storage)
+            assumptions.extend(storage_notes)
         shipping = _ZERO
         model = "wfs"
     else:
@@ -605,6 +689,7 @@ def ebay_economics(
     seller_shipping_cost: Decimal | None = None,
     ad_rate: Decimal = _ZERO,
     plan: SellingPlan | None = None,
+    sales_tax_rate: Decimal | None = None,
 ) -> ChannelEconomics:
     """Per-unit economics for an eBay listing.
 
@@ -624,15 +709,28 @@ def ebay_economics(
     else:
         ship_cost = _money(seller_shipping_cost)
 
-    fvf_total = ebay_final_value_fee(
-        sale_price, shipping_charged, category, plan=plan
+    tax_rate = (
+        sales_tax_rate if sales_tax_rate is not None else EBAY_ASSUMED_SALES_TAX_RATE
     )
+    sales_tax = _money(sale_price * tax_rate)
+    fee_base = sale_price + shipping_charged + sales_tax
+
+    fvf_total = ebay_final_value_fee(
+        sale_price, shipping_charged, category, plan=plan, sales_tax=sales_tax
+    )
+    if tax_rate > 0:
+        assumptions.append("fvf_charged_on_estimated_sales_tax")
     if plan.fvf_discount > 0:
         assumptions.append(f"{plan.key}_store_fvf_discount")
     # Split the fixed per-order component back out so the breakdown reads the
     # way a seller's statement does.
-    variable = _money(fvf_total - EBAY_PER_ORDER_FEE)
-    ad_fee = _money((sale_price + shipping_charged) * ad_rate) if ad_rate else _ZERO
+    fixed = ebay_per_order_fee(fee_base)
+    variable = _money(fvf_total - fixed)
+    # Promoted Listings General is charged on the same base as the FVF —
+    # confirmed against a real order: $2.55 ad fee / $28.36 base = 9.0%, the
+    # seller's set ad rate. Computing it on the item price alone would imply a
+    # nonsense 9.62%.
+    ad_fee = _money(fee_base * ad_rate) if ad_rate else _ZERO
 
     return ChannelEconomics(
         channel="ebay",
@@ -643,9 +741,10 @@ def ebay_economics(
         unit_cost=_money(unit_cost),
         fees=FeeBreakdown(
             referral_fee=variable,
-            per_order_fee=EBAY_PER_ORDER_FEE,
+            per_order_fee=fixed,
             shipping_cost=ship_cost,
             ad_fee=ad_fee,
+            other_fees=plan.per_item_fee,
         ),
         fulfillment_model="seller_fulfilled",
         assumptions=tuple(dict.fromkeys(assumptions)),

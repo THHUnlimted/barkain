@@ -72,6 +72,28 @@ RANK_BY_VELOCITY = "velocity"
 RANK_BY_MONTHLY_PROFIT = "monthly_profit"
 RANK_BY_MARGIN = "margin"
 
+# ── The slider ────────────────────────────────────────────────────────
+#
+# `velocity_bias` is a continuous 0.0–1.0 dial, not a mode switch:
+#
+#     0.0  pure margin      — rank by profit per unit, ignore how long it sits
+#     0.5  balanced         — geometric mean of the two
+#     1.0  pure velocity    — rank by annualized ROI, ignore absolute dollars
+#
+# The blend is a weighted **geometric** mean rather than arithmetic. Arithmetic
+# lets one axis rescue a zero on the other — a 900%-annualized row making $0.02
+# a unit would still place well at bias 0.5, which is not what "balanced" means
+# to anyone. Geometric requires a row to be decent on *both* axes to score in
+# the middle, which is the intuition the slider is supposed to express.
+#
+# Both axes are normalized against the visible list before blending, so the
+# dial behaves the same on a list of $4 consumables and a list of $400 tools.
+VELOCITY_BIAS_DEFAULT = 0.75
+
+# Normalization floor. Rows at or below zero on an axis get this instead, so a
+# money-losing row can't produce a negative that inverts the geometric mean.
+_NORM_FLOOR = 0.001
+
 # Cap on annualized ROI so a row estimated to clear in half a day doesn't
 # produce a five-figure percentage and dominate the sort on what is really
 # estimator noise. Anything at the cap is "as fast as we can tell", and the
@@ -113,6 +135,9 @@ class Thresholds:
     # a common domestic-distributor default; overseas sourcing is 45-90.
     reorder_lead_time_days: float = 14.0
     ranking_policy: str = "velocity"
+    # The slider. 0.0 = rank by dollars per unit, 1.0 = rank by annualized ROI.
+    # Continuous, not a mode switch — see VELOCITY_BIAS_DEFAULT.
+    velocity_bias: float = VELOCITY_BIAS_DEFAULT
     # Cash you're willing to tie up in one SKU's minimum order. A row that
     # passes every ratio but needs a $9,000 pallet is not a candidate for a
     # buyer with a $5,000 budget, and it should say so rather than rank first.
@@ -135,7 +160,7 @@ class Thresholds:
                     pass
         for name in (
             "min_monthly_unit_share", "max_days_to_sell_through",
-            "reorder_lead_time_days",
+            "reorder_lead_time_days", "velocity_bias",
         ):
             if data.get(name) is not None:
                 try:
@@ -172,6 +197,7 @@ class Thresholds:
             else None,
             "max_days_to_sell_through": self.max_days_to_sell_through,
             "reorder_lead_time_days": self.reorder_lead_time_days,
+            "velocity_bias": self.velocity_bias,
             "min_annualized_roi_pct": float(self.min_annualized_roi_pct)
             if self.min_annualized_roi_pct is not None
             else None,
@@ -275,6 +301,7 @@ def score_channel(
     listing_exists: bool = True,
     minimum_buy_cost: Decimal | None = None,
     minimum_buy_units: int | None = None,
+    lead_time_days: float | None = None,
     brand_status: str = BRAND_UNKNOWN,
 ) -> ScoredChannel:
     """Apply thresholds to one channel's economics and return a verdict.
@@ -364,11 +391,17 @@ def score_channel(
     # ── Velocity ─────────────────────────────────────────────────────
     # The preference the whole tool is tuned for: how fast the money comes
     # back, not how much of it comes back per unit.
-    days_to_clear = sell_through_days(minimum_buy_units, unit_share)
-    annualized = annualized_roi(roi, days_to_clear, thresholds.reorder_lead_time_days)
-    cycle_days = (
-        days_to_clear + thresholds.reorder_lead_time_days if days_to_clear else None
+    # Lead time is per-product: the supplier who ships a case of polish in four
+    # days is not the supplier who takes nine weeks on a container, and using one
+    # global number flattens exactly the difference that decides which of two
+    # equally profitable rows to buy. Row-level value wins; the threshold
+    # default is the fallback for rows that haven't been told.
+    lead_time = (
+        lead_time_days if lead_time_days is not None else thresholds.reorder_lead_time_days
     )
+    days_to_clear = sell_through_days(minimum_buy_units, unit_share)
+    annualized = annualized_roi(roi, days_to_clear, lead_time)
+    cycle_days = days_to_clear + lead_time if days_to_clear else None
     turns = round(365.0 / cycle_days, 1) if cycle_days else None
 
     if days_to_clear is None:
@@ -383,7 +416,7 @@ def score_channel(
             else:
                 passed.append(
                     f"clears in ~{days_to_clear:.0f} days "
-                    f"({turns} turns/yr incl. {thresholds.reorder_lead_time_days:.0f}d lead time)"
+                    f"({turns} turns/yr incl. {lead_time:.0f}d lead time)"
                 )
 
         if thresholds.min_annualized_roi_pct is not None and annualized is not None:
@@ -472,6 +505,8 @@ class ScoredRow:
     landed_cost: object | None = None
 
     ranking_policy: str = RANK_BY_VELOCITY
+    # Set by `rank()` when the slider is in use. 0-1, list-relative.
+    blended_score: float | None = None
 
     @property
     def best_channel(self) -> ScoredChannel | None:
@@ -530,13 +565,14 @@ class ScoredRow:
             "projected_monthly_profit": self.projected_monthly_profit,
             "days_to_sell_through": self.days_to_sell_through,
             "annualized_roi_pct": self.annualized_roi_pct,
+            "blended_score": self.blended_score,
             "channels": {name: ch.as_dict() for name, ch in self.channels.items()},
             "errors": self.errors,
         }
 
 
 def _sort_key(channel: ScoredChannel, policy: str) -> tuple[float, float]:
-    """Sort key for one channel under a ranking policy.
+    """Sort key for one channel under a named policy (used for best-channel picks).
 
     Always a pair, so every policy has a defined tiebreak. Under ``velocity``
     the tiebreak is projected monthly profit, which is what separates two rows
@@ -553,26 +589,97 @@ def _sort_key(channel: ScoredChannel, policy: str) -> tuple[float, float]:
     return (channel.annualized_roi_pct or -1.0, projected)
 
 
-def rank(rows: list[ScoredRow], policy: str = RANK_BY_VELOCITY) -> list[ScoredRow]:
+def _normalize(values: list[float]) -> dict[int, float]:
+    """Scale a list of axis values into 0–1 by its own max.
+
+    Normalizing against the visible list rather than an absolute scale is what
+    makes the slider behave identically on a list of $4 consumables and a list
+    of $400 tools. Max-scaling (not min-max) keeps zero meaning zero, so a
+    worthless row stays worthless instead of being stretched up to 0.0 floor by
+    having the worst neighbour.
+    """
+    positives = [v for v in values if v > 0]
+    ceiling = max(positives) if positives else 1.0
+    return {i: max(v / ceiling, _NORM_FLOOR) if v > 0 else _NORM_FLOOR
+            for i, v in enumerate(values)}
+
+
+def blend_score(velocity_norm: float, margin_norm: float, velocity_bias: float) -> float:
+    """Weighted geometric mean of the two normalized axes.
+
+    ``velocity_bias`` 0.0 → pure margin, 1.0 → pure velocity, 0.5 → balanced.
+    Geometric rather than arithmetic so a row has to be decent on both axes to
+    land in the middle — see the note at ``VELOCITY_BIAS_DEFAULT``.
+    """
+    bias = min(max(velocity_bias, 0.0), 1.0)
+    v = max(velocity_norm, _NORM_FLOOR)
+    m = max(margin_norm, _NORM_FLOOR)
+    return (v ** bias) * (m ** (1.0 - bias))
+
+
+def rank(
+    rows: list[ScoredRow],
+    policy: str = RANK_BY_VELOCITY,
+    velocity_bias: float | None = None,
+) -> list[ScoredRow]:
     """Sort rows the way a capital-constrained buyer works a list.
 
-    Verdict tier is the primary key so no amount of projected profit floats a
-    FAIL above a PASS — the ranking's job is to put the rows you can act on at
-    the top, not to be a leaderboard of theoretical maxima. Within a tier the
-    policy decides, and the default is velocity: annualized ROI, tiebroken by
-    absolute monthly dollars.
+    Verdict tier is always the primary key, so no amount of score floats a FAIL
+    above a PASS — the ranking's job is to put rows you can act on at the top,
+    not to be a leaderboard of theoretical maxima.
+
+    Within a tier, ``velocity_bias`` slides continuously between the two things
+    a buyer might mean by "best":
+
+        0.0  net profit per unit          (fat)
+        1.0  annualized ROI               (fast)
+
+    Passing ``velocity_bias=None`` falls back to the named ``policy``, which is
+    what the per-row ``best_channel`` pick uses. The slider is a list-level
+    concern because normalization needs the whole list to scale against.
     """
     tier = {Verdict.PASS: 2, Verdict.WATCH: 1, Verdict.FAIL: 0}
 
-    def key(row: ScoredRow) -> tuple[float, float, float]:
+    if velocity_bias is None:
+        def key(row: ScoredRow) -> tuple[float, float, float]:
+            row.ranking_policy = policy
+            best = row.best_channel
+            if best is None:
+                return (float(tier[row.verdict]), -1.0, 0.0)
+            primary, secondary = _sort_key(best, policy)
+            return (float(tier[row.verdict]), primary, secondary)
+
+        return sorted(rows, key=key, reverse=True)
+
+    # Slider mode. Compute both axes for every row first, normalize across the
+    # list, then blend.
+    velocity_axis: list[float] = []
+    margin_axis: list[float] = []
+    for row in rows:
         row.ranking_policy = policy
         best = row.best_channel
         if best is None:
-            return (float(tier[row.verdict]), -1.0, 0.0)
-        primary, secondary = _sort_key(best, policy)
-        return (float(tier[row.verdict]), primary, secondary)
+            velocity_axis.append(0.0)
+            margin_axis.append(0.0)
+            continue
+        velocity_axis.append(max(best.annualized_roi_pct or 0.0, 0.0))
+        # The margin axis is absolute dollars per unit, not margin percent.
+        # Percent is scale-free in the wrong way here: a 90% margin on a $2
+        # item is not what someone dragging the slider toward "margin" is
+        # asking for — they want the rows that put real money on each sale.
+        margin_axis.append(max(float(best.economics.net_profit), 0.0))
 
-    return sorted(rows, key=key, reverse=True)
+    v_norm = _normalize(velocity_axis)
+    m_norm = _normalize(margin_axis)
+
+    scored = []
+    for i, row in enumerate(rows):
+        score = blend_score(v_norm[i], m_norm[i], velocity_bias)
+        row.blended_score = round(score, 4)
+        scored.append((float(tier[row.verdict]), score, row))
+
+    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [row for _, _, row in scored]
 
 
 def summarize(rows: list[ScoredRow]) -> dict[str, object]:

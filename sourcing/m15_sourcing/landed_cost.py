@@ -245,7 +245,13 @@ class CostProfile:
     duty_rate: Decimal = _ZERO
     payment_fee_rate: Decimal = _ZERO
     shrink_rate: Decimal = _ZERO
-    return_rate: Decimal = _ZERO
+    # Returns cushion. Measured returns run under 1%, but the reserve is set at
+    # 3% deliberately: it's cheap insurance in a go/no-go tool, it absorbs the
+    # damage and shrink we don't separately measure, and being wrong in this
+    # direction costs a marginal row while being wrong the other way costs a
+    # pallet. Drop it to the measured rate once there's enough history to
+    # trust it per-category.
+    return_rate: Decimal = Decimal("0.03")
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "CostProfile":
