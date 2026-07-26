@@ -168,6 +168,68 @@ def upgrade() -> None:
         """
     )
 
+    # ── forecast vs actual ────────────────────────────────────────────
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sourcing_forecasts (
+            id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id                  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            row_id                   UUID REFERENCES sourcing_rows(id) ON DELETE SET NULL,
+            sku                      TEXT NOT NULL,
+            gtin14                   TEXT,
+            channel                  TEXT NOT NULL,
+            category                 TEXT,
+            predicted_monthly_units  NUMERIC,
+            predicted_net_per_unit   NUMERIC,
+            signal_tier              TEXT,
+            fee_schedule_version     TEXT,
+            thresholds               JSONB,
+            predicted_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT chk_forecast_channel
+                CHECK (channel IN ('walmart', 'ebay', 'amazon'))
+        )
+        """
+    )
+    op.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_sourcing_forecasts_sku
+            ON sourcing_forecasts (user_id, sku, channel, predicted_at DESC)
+        """
+    )
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sourcing_actuals (
+            id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            sku              TEXT NOT NULL,
+            gtin14           TEXT,
+            channel          TEXT NOT NULL,
+            window_start     TIMESTAMPTZ NOT NULL,
+            window_end       TIMESTAMPTZ NOT NULL,
+            units_sold       INTEGER NOT NULL DEFAULT 0,
+            gross_revenue    NUMERIC,
+            total_fees       NUMERIC,
+            net_proceeds     NUMERIC,
+            impressions      INTEGER,
+            listing_views    INTEGER,
+            conversion_rate  NUMERIC,
+            source           TEXT,
+            raw              JSONB,
+            created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT chk_actual_channel
+                CHECK (channel IN ('walmart', 'ebay', 'amazon')),
+            CONSTRAINT uq_sourcing_actual_window
+                UNIQUE (user_id, sku, channel, window_start, window_end)
+        )
+        """
+    )
+    op.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_sourcing_actuals_sku
+            ON sourcing_actuals (user_id, sku, channel, window_end DESC)
+        """
+    )
+
     op.execute(
         """
         CREATE TABLE IF NOT EXISTS brand_access (
@@ -193,6 +255,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("DROP TABLE IF EXISTS brand_access")
+    op.execute("DROP TABLE IF EXISTS sourcing_actuals")
+    op.execute("DROP TABLE IF EXISTS sourcing_forecasts")
     op.execute("DROP TABLE IF EXISTS listing_snapshots")
     op.execute("DROP TABLE IF EXISTS sourcing_rows")
     op.execute("DROP TABLE IF EXISTS sourcing_lists")

@@ -234,6 +234,105 @@ class ListingSnapshot(Base):
     )
 
 
+class SourcingForecast(Base):
+    """A prediction, written when a recommended row is actually purchased.
+
+    Only purchased rows are recorded. A forecast for something never bought has
+    no actual to compare against, so storing it would add noise to the accuracy
+    numbers without adding information.
+    """
+
+    __tablename__ = "sourcing_forecasts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    user_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    row_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sourcing_rows.id", ondelete="SET NULL"), nullable=True
+    )
+    sku: Mapped[str] = mapped_column(Text, nullable=False)
+    gtin14: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    channel: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    predicted_monthly_units: Mapped[Optional[float]] = mapped_column(Numeric, nullable=True)
+    predicted_net_per_unit: Mapped[Optional[float]] = mapped_column(Numeric, nullable=True)
+    signal_tier: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Which rate tables and thresholds produced this number. Without these a
+    # stale forecast gets compared against actuals generated under a different
+    # fee schedule and the bias estimate silently learns the wrong lesson.
+    fee_schedule_version: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    thresholds: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    predicted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("NOW()")
+    )
+
+    __table_args__ = (
+        CheckConstraint("channel IN ('walmart', 'ebay', 'amazon')", name="chk_forecast_channel"),
+        Index(
+            "idx_sourcing_forecasts_sku",
+            "user_id", "sku", "channel", text("predicted_at DESC"),
+        ),
+    )
+
+
+class SourcingActual(Base):
+    """Realized units and proceeds for one SKU over one window.
+
+    Fed from the Walmart Orders/Reports APIs and eBay Sell Fulfillment/Finances,
+    plus the reconciliation CSVs ``recon.py`` already parses. The eBay Analytics
+    traffic report contributes impressions and conversion rate, which explain a
+    miss in a way a units number alone can't.
+    """
+
+    __tablename__ = "sourcing_actuals"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    user_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    sku: Mapped[str] = mapped_column(Text, nullable=False)
+    gtin14: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    channel: Mapped[str] = mapped_column(Text, nullable=False)
+
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    units_sold: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    gross_revenue: Mapped[Optional[float]] = mapped_column(Numeric, nullable=True)
+    total_fees: Mapped[Optional[float]] = mapped_column(Numeric, nullable=True)
+    net_proceeds: Mapped[Optional[float]] = mapped_column(Numeric, nullable=True)
+    impressions: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    listing_views: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    conversion_rate: Mapped[Optional[float]] = mapped_column(Numeric, nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    raw: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("NOW()")
+    )
+
+    __table_args__ = (
+        CheckConstraint("channel IN ('walmart', 'ebay', 'amazon')", name="chk_actual_channel"),
+        # One row per SKU per channel per window — re-importing the same report
+        # must update rather than duplicate, or every re-sync doubles the
+        # sample count and fakes confidence in the bias estimates.
+        UniqueConstraint(
+            "user_id", "sku", "channel", "window_start", "window_end",
+            name="uq_sourcing_actual_window",
+        ),
+        Index(
+            "idx_sourcing_actuals_sku",
+            "user_id", "sku", "channel", text("window_end DESC"),
+        ),
+    )
+
+
 class BrandAccess(Base):
     """Per-brand distributor + gating ledger.
 

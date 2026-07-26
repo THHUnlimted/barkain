@@ -390,17 +390,17 @@
     <div class="titleblock__head">
       <p class="eyebrow">Build Print · Barkain · Module M15</p>
       <h1>Wholesale Sourcing Scanner</h1>
-      <p class="titleblock__sub">A list cruncher, not a scanner. A distributor sends 3,000 rows of UPC and cost; this finds the handful worth buying and tells you why. Costed to the landed unit, ranked by how fast the money comes back — not by margin.</p>
+      <p class="titleblock__sub">A list cruncher, not a scanner. A distributor sends 3,000 rows of UPC and cost; this finds the handful worth buying and tells you why. Costed to the landed unit, ranked on a velocity/margin dial, and calibrated against your own settlements rather than a published rate card.</p>
     </div>
     <div class="titleblock__grid">
       <div class="field"><span class="field__label">Repository</span><span class="field__value">THHUnlimted/barkain</span></div>
       <div class="field"><span class="field__label">Branch</span><span class="field__value">claude/wholesale-sourcing-scanner-83n3ch</span></div>
       <div class="field"><span class="field__label">Location</span><span class="field__value">/sourcing</span></div>
       <div class="field"><span class="field__label">Date</span><span class="field__value">2026-07-26</span></div>
-      <div class="field"><span class="field__label">Python</span><span class="field__value">6,100 lines · 15 files</span></div>
+      <div class="field"><span class="field__label">Python</span><span class="field__value">7,531 lines · 17 files</span></div>
       <div class="field"><span class="field__label">Channels</span><span class="field__value">Walmart · eBay · Amazon (BSR)</span></div>
       <div class="field"><span class="field__label">Files touched outside /sourcing</span><span class="field__value">0</span></div>
-      <div class="field"><span class="field__label">Revision</span><span class="field__value">B — velocity-first</span></div>
+      <div class="field"><span class="field__label">Revision</span><span class="field__value">C — calibrated</span></div>
     </div>
   </div>
 
@@ -413,8 +413,10 @@
     <a href="#s06"><span>S-06</span> Fee engine</a>
     <a href="#s6b"><span>S-06b</span> Landed cost</a>
     <a href="#s6c"><span>S-06c</span> Selling plans</a>
+    <a href="#s6d"><span>S-06d</span> Fee calibration</a>
     <a href="#s07"><span>S-07</span> Popularity signals</a>
-    <a href="#s08"><span>S-08</span> Velocity-first scoring</a>
+    <a href="#s08"><span>S-08</span> The slider</a>
+    <a href="#s8b"><span>S-08b</span> Projected vs. actual</a>
     <a href="#s09"><span>S-09</span> Live run</a>
     <a href="#s10"><span>S-10</span> Data model</a>
     <a href="#s11"><span>S-11</span> Reuse from Barkain</a>
@@ -499,13 +501,15 @@ flowchart TD
 ├── <b>m15_sourcing/</b>
 │   ├── <b>upc.py</b>                     <i>GTIN normalization — pure</i>                 512
 │   ├── <b>ingest.py</b>                  <i>CSV/TSV/XLSX parsing — pure</i>               557
-│   ├── <b>fees.py</b>                    <i>Walmart + eBay fee engines — pure</i>         645
+│   ├── <b>fees.py</b>                    <i>calibrated fee engines — pure</i>             700
+│   ├── <b>recon.py</b>                   <i>settlement import → real fees</i>             438
+│   ├── <b>forecast.py</b>                <i>projected vs actual loop — pure</i>           384
 │   ├── <b>landed_cost.py</b>             <i>freight, prep, duty, reserves — pure</i>      316
 │   ├── <b>plans.py</b>                   <i>subscriptions + breakeven — pure</i>          312
 │   ├── <b>demand.py</b>                  <i>7-tier popularity engine — pure</i>           610
-│   ├── <b>scoring.py</b>                 <i>velocity-first verdicts — pure</i>            487
+│   ├── <b>scoring.py</b>                 <i>slider + verdicts — pure</i>                  560
 │   ├── <b>inquiry.py</b>                 <i>distributor email drafts — pure</i>           146
-│   ├── <b>models.py</b>                  <i>4 SQLAlchemy tables</i>                       282
+│   ├── <b>models.py</b>                  <i>6 SQLAlchemy tables</i>                       380
 │   ├── <b>service.py</b>                 <i>orchestration · cache · fan-out</i>           764
 │   ├── <b>config.py</b>                  <i>self-contained settings</i>                    79
 │   ├── <b>ebay_token.py</b>              <i>shared OAuth cache, w/ fallback</i>            96
@@ -516,7 +520,7 @@ flowchart TD
     └── <b>0013_sourcing_tables.py</b>    <i>staged, not yet in versions/</i>              198</div>
 
     <div class="note">
-      <p><strong>Why the pure/impure split is drawn where it is.</strong> Eight of the fifteen modules have no imports beyond the standard library and each other. That's not tidiness for its own sake — it means the entire decision path from "here is a cost" to "here is a verdict" can be tested, benchmarked, and replayed without a database, an API key, or a network. <code>demo_crunch.py</code> exercises the whole thing offline, which is how the numbers on Sheet S-09 were produced.</p>
+      <p><strong>Why the pure/impure split is drawn where it is.</strong> Nine of the seventeen modules have no imports beyond the standard library and each other. That's not tidiness for its own sake — it means the entire decision path from "here is a cost" to "here is a verdict" can be tested, benchmarked, and replayed without a database, an API key, or a network. <code>demo_crunch.py</code> exercises the whole thing offline, which is how the numbers on Sheet S-09 were produced.</p>
     </div>
   </section>
 
@@ -668,18 +672,18 @@ flowchart TD
     <p>Every component is optional and defaults to zero, with an <code>assumptions</code> flag recording what was left unspecified — an invented freight number that happens to be wrong is worse than a visible gap, because it looks like it was measured. A <code>LandedCost</code> carrying nothing but <code>invoice_cost</code> behaves exactly like the raw-cost path.</p>
 
     <div class="term">
-      <div class="term__bar">landed cost — real output, freight at $0.42/lb + $0.83 prep/pack/QC + 3% shrink + 5% returns</div>
-<pre>  Stainless Steel French Press 34oz   invoice $  12.00 -> landed $  14.88 <b>(+24.0%)</b>
-     freight $0.88 | prep $0.55 | pack $0.18 | QC $0.10 | survives 92%
-  Bluetooth Earbuds Pro              invoice $  40.00 -> landed $  44.58 <b>(+11.4%)</b>
-     freight $0.25 | prep $0.55 | pack $0.18 | QC $0.10 | survives 92%
-  Dog Chew Toy Variety 5-pack        invoice $   4.00 -> landed $   5.24 <b>(+31.0%)</b>
-     freight $0.00 | prep $0.55 | pack $0.18 | QC $0.10 | survives 92%
-  Air Purifier HEPA Medium Room      invoice $ 180.00 -> landed $ 202.62 <b>(+12.6%)</b>
-     freight $5.88 | prep $0.55 | pack $0.18 | QC $0.10 | survives 92%</pre>
+      <div class="term__bar">landed cost — freight $0.42/lb + $0.83 prep/pack/QC + 3% return reserve</div>
+<pre>  Stainless Steel French Press 34oz   invoice $  12.00 -> landed $  14.14 <b>(+17.8%)</b>
+     freight $0.88 | prep $0.55 | pack $0.18 | QC $0.10 | survives 97%
+  Bluetooth Earbuds Pro              invoice $  40.00 -> landed $  42.35 <b>(+5.9%)</b>
+     freight $0.25 | prep $0.55 | pack $0.18 | QC $0.10 | survives 97%
+  Dog Chew Toy Variety 5-pack        invoice $   4.00 -> landed $   4.98 <b>(+24.5%)</b>
+     freight $0.00 | prep $0.55 | pack $0.18 | QC $0.10 | survives 97%
+  Air Purifier HEPA Medium Room      invoice $ 180.00 -> landed $ 192.48 <b>(+6.9%)</b>
+     freight $5.88 | prep $0.55 | pack $0.18 | QC $0.10 | survives 97%</pre>
     </div>
 
-    <p>The uplift ranges from <strong>11.4% to 31.0%</strong> across four rows of the same list. That spread is the entire argument: a flat "add 20% for costs" rule would have made the earbuds look worse than they are and the dog toys look better. And the air purifier — which passed every profit gate at invoice cost — turns <span class="chip chip--fail">fail</span> once $5.88 of freight lands on it. It was never a winner; it just looked like one.</p>
+    <p>The uplift ranges from <strong>5.9% to 24.5%</strong> across four rows of the same list — a 4× spread. That's the entire argument: a flat "add 15% for costs" rule would make the earbuds look worse than they are and the dog toys look better. Returns are reserved at 3% here, a deliberate cushion above the measured sub-1% rate; the reserve absorbs the damage and shrink that aren't separately measured, and being wrong in that direction costs a marginal row while being wrong the other way costs a pallet.</p>
   </section>
 
   <!-- ────────────────────────────────────────────────────────── -->
@@ -724,6 +728,55 @@ flowchart TD
     </div>
 
     <p>The Amazon crossover lands on the well-known ~40 units/month, which is a useful check that the model is right — but it's <em>derived</em> from the two plans' fee structures rather than written down, so when Amazon changes either number the answer moves on its own.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s6d">
+    <span class="sheetnum">Sheet S-06d</span>
+    <h2>Fee calibration — your settlements beat any rate card</h2>
+
+    <p>Published rate cards are an approximation of what you actually get charged. They don't know your contract-category assignments, your incentive programs, or that a rate changed last Tuesday. Your settlement report knows all of it, because it <em>is</em> what happened.</p>
+
+    <p>The first real reconciliation import proved the point in one row.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Fee</th><th class="num">Published</th><th class="num">Actual</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr><td>Referral, Automotive &amp; Powersports</td><td class="num">12.00%</td><td class="num">12.00%</td><td><span class="chip chip--pass">confirmed</span> — the reason to trust the table for products you haven't sold</td></tr>
+          <tr><td>WFS fulfillment, 16 oz item</td><td class="num">$3.45 / $4.95</td><td class="num">$4.45</td><td><span class="chip chip--fail">neither tier</span> — sits between the published 0–1 lb and 1–2 lb bands</td></tr>
+          <tr><td>Net proceeds on the order</td><td class="num">$4.38</td><td class="num">$3.46</td><td><span class="chip chip--fail">29% optimistic</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>So the rule is: <strong>an observed fee always beats a published rate.</strong> Published tables become the fallback for products you've never sold, and every import shrinks that set.</p>
+
+    <div class="term">
+      <div class="term__bar">same order, both ways — actual was commission $1.08, WFS $4.45, net $3.46</div>
+<pre>  published tables only    commission $1.08   WFS $<span class="f">3.45</span>   net $<span class="f">4.38</span>
+    ['assumed_cubic_feet']
+
+  with YOUR settlements    commission $1.08   WFS $<span class="p">4.45</span>   net $<span class="p">3.38</span>
+    ['commission_rate_from_your_settlements',
+     'wfs_fee_observed_product_type_n2', 'assumed_cubic_feet']</pre>
+    </div>
+
+    <p><code>FeeCalibration</code> aggregates observations by category, SKU and product type, using <strong>medians rather than means</strong> so one promotional order can't move the estimate. Sample counts ride along, so a verdict can distinguish "measured 40 times" from "measured once".</p>
+
+    <h3>Two details the parser has to get right</h3>
+
+    <ul>
+      <li><strong>WFS fulfillment posts as a separate adjustment row</strong>, sometimes under a different purchase order and in a different settlement period than the sale it belongs to. Matching is by <code>Purchase Order #</code>, not row adjacency.</li>
+      <li><strong>Long-term storage has no purchase order at all</strong> — it posts against inventory. Those lines are emitted as synthetic rows rather than dropped, because storage is precisely the fee that punishes slow movers, and a parser that silently discards it would make dead stock look free.</li>
+    </ul>
+
+    <div class="note note--warn">
+      <p><strong>The two channels compute their fee base in opposite directions,</strong> and both were verified from real documents:</p>
+      <p><strong>eBay charges its percentage on the sales tax it collects.</strong> $26.50 item + $0.00 shipping + $1.86 tax = $28.36 base × 13.6% = $3.86. Computing on item price alone understated the fee by ~7%. The per-order fixed fee is also tiered on <em>order total</em> — $0.40 above $10.01, $0.30 at or below — and Promoted Listings ad fees use the same tax-inclusive base ($2.55 / $28.36 = exactly 9.0%, the set ad rate).</p>
+      <p><strong>Walmart does not.</strong> $1.08 commission on an $8.99 item is 12.00% of the price flat; the $0.69 tax was collected and withheld as a pass-through that never entered the base.</p>
+      <p>The corrected model now reproduces the sample eBay order to the cent: FVF $4.26, label $5.83, ad $2.55, earnings $13.86.</p>
+    </div>
   </section>
 
   <!-- ────────────────────────────────────────────────────────── -->
@@ -833,11 +886,109 @@ flowchart TD
       </table>
     </div>
 
-    <p>Verdict tier is still the primary sort key, so no amount of annualized ROI floats a <span class="chip chip--fail">fail</span> above a <span class="chip chip--pass">pass</span>. <code>RankingPolicy</code> keeps <code>monthly_profit</code> and <code>margin</code> available for buyers optimizing something else, but <code>velocity</code> is the default and the thresholds are tuned for it.</p>
+    <h3>The slider</h3>
+
+    <p><code>velocity_bias</code> is a continuous 0.0–1.0 dial, not a mode switch. Drag it and the list reorders between the two things a buyer might mean by "best".</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th class="num">Bias</th><th>Ranks by</th><th>Who wants this</th></tr></thead>
+        <tbody>
+          <tr><td class="num">0.00</td><td>Net dollars per unit</td><td>Storage is free, cash isn't tight, you'd rather touch fewer units</td></tr>
+          <tr><td class="num">0.50</td><td>Geometric mean of both</td><td>A row has to be genuinely decent on both axes</td></tr>
+          <tr><td class="num">0.75</td><td>Weighted toward turns <em>(default)</em></td><td>Capital-constrained, reordering regularly</td></tr>
+          <tr><td class="num">1.00</td><td>Annualized ROI</td><td>Pure velocity — churn the cash as fast as it will go</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <p><strong>The blend is a weighted geometric mean, not arithmetic.</strong> Arithmetic lets one axis rescue a zero on the other — a 900%-annualized row making $0.02 a unit would still place well at "balanced", which is not what balanced means to anyone. Geometric requires a row to be decent on <em>both</em> axes to score in the middle, which is the intuition the dial is supposed to express.</p>
+      <p>Both axes are normalized against the visible list before blending, so the dial behaves identically on a list of $4 consumables and a list of $400 tools. The margin axis is <strong>dollars per unit, not margin percent</strong> — a 90% margin on a $2 item isn't what someone dragging toward "margin" is asking for.</p>
+    </div>
+
+    <div class="term">
+      <div class="term__bar">blend_score(velocity, margin, bias) — crossover lands exactly at 0.5</div>
+<pre>                        fast-thin row      slow-fat row      winner
+  bias 0.00  (margin)       0.100              <span class="p">0.900</span>          fat
+  bias 0.25                 0.173              <span class="p">0.520</span>          fat
+  bias 0.50  (balanced)     0.300              0.300          tie
+  bias 0.75  (default)      <span class="p">0.520</span>              0.173          fast
+  bias 1.00  (velocity)     <span class="p">0.900</span>              0.100          fast</pre>
+    </div>
+
+    <p>Verdict tier remains the primary sort key at every position on the dial, so no amount of blended score floats a <span class="chip chip--fail">fail</span> above a <span class="chip chip--pass">pass</span>. <strong>Reorder lead time is per-product</strong> — the supplier who ships a case in four days is not the one who takes nine weeks on a container, and a single global number flattens exactly the difference that decides between two otherwise equal rows.</p>
 
     <p>Each channel also reports a <strong>breakeven sale price</strong>: the lowest price that still clears zero, holding fixed fees constant. When five sellers are racing each other down, that's a far more actionable number than the current buy box.</p>
 
     <p>And on the part software can't automate — whether an authorized distributor will actually sell to you, and whether the brand is gated on your seller account — <code>brand_access</code> keeps a per-brand ledger and candidates on unknown brands auto-generate a distributor inquiry draft. Restricted brands are <em>demoted, not hidden</em>: knowing there's a $9/unit spread behind a gate is exactly what tells you which gating application to file.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s8b">
+    <span class="sheetnum">Sheet S-08b</span>
+    <h2>Projected vs. actual — the loop that makes it converge</h2>
+
+    <p>Every demand number the scanner produces is an estimate with a known error profile. BSR curves run 20–40% off. Review velocity rests on a 2% constant that varies by category. Depletion is good but samples one offer. Right now those errors are <em>unmeasured</em>, which means they're unmanaged.</p>
+
+    <p>The fix is boring and powerful: write down every prediction at the moment it's made, then compare it against what actually sold. <strong>Both marketplaces expose first-party seller APIs for this</strong> — no scraping, no approval gauntlet, because it's your own data.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Channel</th><th>API</th><th>Gives</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="3">Walmart</td><td>Orders API</td><td>Shipped units per SKU per window</td></tr>
+          <tr><td>Reports API — reconciliation</td><td>Realized revenue and every fee. Already parsed by <code>recon.py</code></td></tr>
+          <tr><td>Insights API</td><td>Listing-level performance and listing quality</td></tr>
+          <tr><td rowspan="3">eBay</td><td>Sell Fulfillment <code>getOrders</code></td><td>Actual units sold</td></tr>
+          <tr><td>Sell Finances <code>getTransactions</code></td><td>Exact realized fees, per order</td></tr>
+          <tr><td>Sell Analytics <code>getTrafficReport</code></td><td>Impressions, listing views, <strong>sales conversion rate</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <p><strong>The eBay traffic report is a genuine bonus.</strong> Conversion rate is the missing term in every demand estimate — knowing a listing got 4,000 impressions and converted at 1.2% explains a miss in a way a units number never can. It separates "nobody wants this" from "nobody saw this", and those call for opposite responses.</p>
+      <p>Worth noting the contrast with Sheet S-07: eBay's <em>Marketplace Insights</em> API (competitor sold data) is effectively closed, but the <em>Sell</em> APIs covering your own account are open to any seller with a dev key. The hard data to get is other people's; your own is available.</p>
+    </div>
+
+    <h3>What the loop learns</h3>
+
+    <p>Pairing matches each actual to the latest forecast made <em>before</em> the window opened — a prediction made after the sales it's judged on isn't a prediction. Two things fall out:</p>
+
+    <div class="term">
+      <div class="term__bar">simulated: BSR runs hot in Pet Supplies, depletion is accurate</div>
+<pre>  SCOREBOARD
+    comparisons          12
+    median_ratio         0.805      <span class="c">actual / predicted</span>
+    mape                 20.2%
+    within_25_pct        50.0%
+    over_predicted_pct   66.7%      <span class="c">the direction that buys dead stock</span>
+
+  LEARNED CORRECTIONS
+    <span class="c">tier</span> observed              n=6   ratio <span class="p">1.01</span>   mape  <span class="p">3.0%</span>   -> apply 1.01
+    <span class="c">tier</span> rank                  n=6   ratio <span class="w">0.625</span>  mape <span class="w">37.5%</span>   -> apply 0.625
+    <span class="c">net per unit bias</span>          n=12  ratio 0.942          <span class="c">-> points at fees, not demand</span>
+
+  APPLIED TO A FRESH ESTIMATE
+    rank / Pet Supplies   200 units -> <b>125</b>  (tier+category_n6)
+    observed / Automotive 200 units -> <b>202</b>  (tier+category_n6)
+    rank / Toys (unseen)  200 units -> <b>125</b>  (tier_n6, falls back to the tier)</pre>
+    </div>
+
+    <ul>
+      <li><strong>Per-tier bias.</strong> If <code>rank</code> consistently predicts 1.6× what you sell in Pet Supplies, that's a correction factor, not noise. The more specific <code>(tier, category)</code> key wins when it has samples; otherwise it falls back to the tier.</li>
+      <li><strong>Honest confidence.</strong> A tier within 15% across 40 SKUs deserves to promote a row to <span class="chip chip--pass">pass</span>. A tier that's been off by 3× deserves <span class="chip chip--watch">watch</span> no matter how good the margin looks.</li>
+    </ul>
+
+    <div class="note note--warn">
+      <p><strong>Three guards keep the loop from learning the wrong lesson.</strong> Corrections are <em>reported</em> below five paired samples but not <em>applied</em> — two data points can produce a 0.4× factor that's pure chance, and a premature correction moves every row while looking authoritative. Factors are clamped to 0.25×–4×, because anything outside that almost always means a mis-paired SKU rather than genuinely 6×-off demand. And medians, not means, so one viral week can't permanently reset the model.</p>
+      <p>The <code>net_per_unit</code> bias is tracked separately on purpose. Running below 1.0 means the <em>fee and landed-cost</em> model is optimistic — a <code>recon.py</code> problem, not a demand problem. Saying which one is wrong saves an afternoon of tuning the wrong thing.</p>
+    </div>
+
+    <p>Forecasts are recorded only for rows you actually purchase. A prediction for something never bought has no actual to compare against, so storing it would add noise to the accuracy numbers without adding information. Each row carries the <code>fee_schedule_version</code> and thresholds that produced it, so a forecast made under an old rate card isn't silently judged against actuals from a new one.</p>
+
+    <p>Like the snapshot table, this can't be bought or borrowed — it depends on your categories, your price points, your listings. It starts compounding the first time you buy something the tool recommended.</p>
   </section>
 
   <!-- ────────────────────────────────────────────────────────── -->
@@ -868,7 +1019,7 @@ flowchart TD
     </div>
 
     <div class="term">
-      <div class="term__bar">verdict — landed cost, velocity-first ranking, signal tier per row</div>
+      <div class="term__bar">verdict — landed cost @ 3% return reserve, no store plans, signal tier per row</div>
 <pre>  #  ITEM                       CH          INV    LAND    SELL    NET   ROI   /MO  DAYS    ANN  SIGNAL     VERDICT
   ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   1  Stainless Steel French Pr  ebay      12.00   14.88   42.50  12.19   82%   124     6  1510%  <span class="p">observed</span>   <span class="p">PASS</span>
@@ -882,7 +1033,7 @@ flowchart TD
   9  LED Desk Lamp with USB-C   walmart   23.00   27.14   26.94  -9.77  -36%    50     7  -620%  <span class="c">velocity</span>   <span class="f">FAIL</span></pre>
     </div>
 
-    <p><strong>Row 4 is the case the whole tool exists for, and it moved.</strong> On invoice cost the air purifier showed $22.26/unit — <em>more raw profit than the winner</em> — and a margin-sorted spreadsheet puts it near the top. Costing $5.88 of freight onto a 14 lb item takes it to <strong>−$0.36</strong>. It was never a winner; at invoice cost it just looked like one, and no amount of ranking cleverness would have caught that. This is the argument for landed cost in one row.</p>
+    <p><strong>Row 4 is the case the whole tool exists for.</strong> On invoice cost the air purifier showed $22.26/unit — <em>more raw profit than the winner</em> — and a margin-sorted spreadsheet puts it near the top. Costing $5.88 of freight onto a 14 lb item takes it to <strong>$9.78 at 5% ROI</strong>, which fails. It was never a winner; at invoice cost it just looked like one, and no ranking cleverness would have caught that. This is the argument for landed cost in one row.</p>
 
     <p><strong>Row 3 is the argument for velocity-first.</strong> The dog toys have the best ROI on the board at 112% — better than the winner's 82% — and under the old profit-ranked ordering they placed second. But BSR says the item moves about 2 units/month to you, so the minimum order takes <strong>939 days</strong> to clear. Annualized, that 112% is 43%. It fails, correctly, on a threshold that raw margin cannot see.</p>
 
@@ -901,6 +1052,8 @@ flowchart TD
           <tr><td class="mono">sourcing_lists</td><td>One uploaded price list</td><td>Column mapping + normalization stats + thresholds + verdict summary, all JSONB</td></tr>
           <tr><td class="mono">sourcing_rows</td><td>One distributor line</td><td><code>match</code> (what the APIs said) and <code>channels</code> (what we concluded) stored separately</td></tr>
           <tr><td class="mono">listing_snapshots</td><td>One observation</td><td>TimescaleDB hypertable on <code>captured_at</code>, PK <code>(channel, listing_key, captured_at)</code></td></tr>
+          <tr><td class="mono">sourcing_forecasts</td><td>One prediction</td><td>Written only for rows you actually buy. Carries the fee-schedule version that produced it</td></tr>
+          <tr><td class="mono">sourcing_actuals</td><td>One SKU, one window</td><td>Units + net proceeds from the seller APIs. Unique on the window so re-imports update rather than fake confidence</td></tr>
           <tr><td class="mono">brand_access</td><td>One brand, per user</td><td>authorized / restricted / pending / unknown + distributor contact</td></tr>
         </tbody>
       </table>
@@ -953,7 +1106,11 @@ flowchart TD
           <tr><td>UPC normalization</td><td><span class="chip chip--pass">done</span></td><td>Verified against 15 dirty-input cases</td></tr>
           <tr><td>CSV / TSV ingest</td><td><span class="chip chip--pass">done</span></td><td>Header detection + column mapping verified</td></tr>
           <tr><td>XLSX ingest</td><td><span class="chip chip--watch">untested</span></td><td>Code written; needs <code>openpyxl</code> and a real workbook</td></tr>
-          <tr><td>Fee engines (WMT/eBay)</td><td><span class="chip chip--pass">done</span></td><td>Plan-aware. Rate tables need verification against current cards</td></tr>
+          <tr><td>Fee engines (WMT/eBay)</td><td><span class="chip chip--pass">done</span></td><td>Plan-aware, calibration-aware, verified against real orders to the cent</td></tr>
+          <tr><td>Settlement import</td><td><span class="chip chip--pass">done</span></td><td>Walmart MP/WFS reconciliation CSV → learned fee tables</td></tr>
+          <tr><td>Velocity/margin slider</td><td><span class="chip chip--pass">done</span></td><td>Continuous 0–1, geometric blend, list-normalized</td></tr>
+          <tr><td>Forecast vs actual engine</td><td><span class="chip chip--pass">done</span></td><td>Pairing, per-tier bias, guards. Tables + migration staged</td></tr>
+          <tr><td>Seller-API collectors</td><td><span class="chip chip--todo">not built</span></td><td>Walmart Orders/Insights, eBay Fulfillment/Finances/Analytics</td></tr>
           <tr><td>Landed-cost model</td><td><span class="chip chip--pass">done</span></td><td>Freight, prep, packaging, duty, shrink, returns</td></tr>
           <tr><td>Selling-plan model</td><td><span class="chip chip--pass">done</span></td><td>eBay Stores, Amazon plans, breakeven volumes</td></tr>
           <tr><td>Demand + stability</td><td><span class="chip chip--pass">done</span></td><td>All 7 tiers incl. depletion + BSR</td></tr>
@@ -995,17 +1152,17 @@ flowchart TD
     <span class="sheetnum">Sheet S-13</span>
     <h2>Open questions</h2>
 
-    <p>Answers to these change what gets built next, so they're worth settling before the router and tests go in.</p>
+    <p>Four of the previous round's questions are now answered and built in: freight is estimated from weight, returns are reserved at 3% against a measured sub-1%, lead time is per-product, and no store plans are held (so plan breakevens read as a live decision, not a sunk cost). Walmart affiliate access isn't available, so the Walmart leg now defaults to the residential-proxy scrape — which is the better path anyway, since it's the only one that yields review counts, the bought-yesterday badge, and the cart quantity that feeds depletion.</p>
+    <p>What's left:</p>
 
     <div class="scroll">
       <table>
         <thead><tr><th>Question</th><th>Why it matters</th></tr></thead>
         <tbody>
-          <tr><td>Do you have Walmart.io credentials, or should the Walmart leg default to the residential-proxy scrape?</td><td>The scrape is the only path that returns review counts, the "bought yesterday" badge, <em>and</em> the cart quantity that feeds depletion. If the API is the only path, the best signal is unavailable on Walmart.</td></tr>
-          <tr><td>Your real cost inputs: freight $/lb into your prep centre, prep + polybag per unit, and your actual return rate?</td><td>These are the numbers the demo currently guesses at, and they move verdicts more than anything else on the sheet. The air purifier flipped sign on one of them.</td></tr>
-          <tr><td>Your reorder lead time, per supplier if it varies?</td><td>It's the denominator of the ranking metric. Two weeks vs. eight weeks changes the order of the whole list.</td></tr>
-          <tr><td>Which plans do you hold today — eBay Store tier, Amazon Individual or Professional?</td><td>Changes the marginal fee on every eBay and Amazon row, and determines whether the fixed fee is sunk or a live decision.</td></tr>
-          <tr><td>Is Amazon a third channel?</td><td>Keepa is already on the Phase 4 roadmap. Adding it later is a new adapter plus a fee table; designing for it now costs nothing.</td></tr>
+          <tr><td><strong>More reconciliation exports.</strong> Several months, ideally across categories.</td><td>Two orders of one SKU taught the engine one product type and one category. A few months would give real WFS fee curves and category rates across your actual catalog — worth more than any published table.</td></tr>
+          <tr><td>Freight $/lb into your prep centre, and prep + polybag per unit.</td><td>The demo uses $0.42/lb and $0.83 combined as placeholders. These move verdicts more than anything else on the sheet.</td></tr>
+          <tr><td>Walmart Marketplace + eBay developer keys for the Sell APIs.</td><td>Unlocks the actuals half of Sheet S-08b. Both are your own account data, so neither needs an approval gauntlet.</td></tr>
+          <tr><td>Is Amazon a third channel, and on which plan?</td><td>Keepa is already on the Phase 4 roadmap. Adding it later is a new adapter plus a fee table; designing for it now costs nothing.</td></tr>
           <tr><td>Single seller, or multi-tenant?</td><td><code>brand_access</code> is currently scoped per user. Thresholds are per list. Both assumptions get expensive to change after data exists.</td></tr>
           <tr><td>Web dashboard or iOS?</td><td>A 3,000-row ranked table wants a wide screen and CSV export. The existing iOS app is the wrong shape for this workflow — the phone is for the store aisle, not the price list.</td></tr>
           <tr><td>What are your actual thresholds?</td><td>The $3 / 25% / 30-units defaults are the common ones, but they should be yours.</td></tr>
@@ -1016,7 +1173,7 @@ flowchart TD
 
   <footer>
     <span>Barkain M15 · Wholesale Sourcing Scanner</span>
-    <span>Build print rev. A · 2026-07-26</span>
+    <span>Build print rev. C · 2026-07-26</span>
     <span>branch claude/wholesale-sourcing-scanner-83n3ch</span>
   </footer>
 

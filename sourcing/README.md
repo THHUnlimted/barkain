@@ -1,7 +1,7 @@
 # Wholesale Sourcing Scanner — Capability Canvas + Build Plan
 
-> **Status:** M15 core complete, unwired. Rev B — landed cost, selling plans,
-> velocity-first ranking, 7-tier popularity engine.
+> **Status:** M15 core complete, unwired. Rev C — fee calibration from real
+> settlements, velocity/margin slider, projected-vs-actual feedback loop.
 > **Last updated:** 2026-07-26
 
 ---
@@ -195,6 +195,41 @@ Product Research export isn't silently divided by three like a 90-day one.
 Per-category power-law curves, `monthly_units ≈ a × rank^-b`, with 14 category
 keys plus a default. Treat the coefficients exactly like the fee tables:
 configuration to re-verify against real data, not constants.
+
+### 5.5 Projected vs. actual
+
+Every demand tier has a known error profile, and right now those errors are
+unmeasured. `forecast.py` closes the loop: record the prediction, compare to
+what actually sold, learn the bias.
+
+Actuals come from first-party seller APIs — your own data, no approval needed:
+
+| Channel | API | Gives |
+|---|---|---|
+| Walmart | Orders API | Shipped units per SKU per window |
+| Walmart | Reports API (reconciliation) | Realized revenue + every fee (already parsed by `recon.py`) |
+| Walmart | Insights API | Listing performance and quality |
+| eBay | Sell Fulfillment `getOrders` | Actual units sold |
+| eBay | Sell Finances `getTransactions` | Exact realized fees |
+| eBay | Sell Analytics `getTrafficReport` | Impressions, views, **sales conversion rate** |
+
+Note the contrast with §5.2: eBay's *Marketplace Insights* API (competitor sold
+data) is effectively closed, but the *Sell* APIs covering your own account are
+open to any seller with a dev key. Other people's data is hard to get; yours
+isn't.
+
+The traffic report is the sleeper. Conversion rate is the missing term in every
+demand estimate — it separates "nobody wants this" from "nobody saw this", and
+those call for opposite responses.
+
+**Three guards** keep the loop from learning the wrong lesson: corrections are
+reported below 5 paired samples but not applied; factors are clamped to
+0.25×–4× (anything outside almost always means a mis-paired SKU); and medians
+rather than means, so one viral week can't reset the model.
+
+`net_per_unit` bias is tracked separately on purpose — running below 1.0 means
+the *fee and cost* model is optimistic, which is a `recon.py` problem rather
+than a demand problem.
 
 ### 5.4 Unit share
 
