@@ -48,12 +48,20 @@ barkain/
 │                              # fb_marketplace/, template/
 ├── infrastructure/migrations/ # Alembic
 ├── scripts/                   # run_worker.py, run_watchdog.py, seed_*, ec2_*, bench_*, demo_*
+├── sourcing/                  # M15 wholesale sourcing scanner — SELF-CONTAINED + INERT.
+│                              # m15_sourcing/ (upc, ingest, fees, landed_cost, plans,
+│                              # demand, scoring, forecast, inquiry, recon, service,
+│                              # models, adapters/), tests/ (291), demo_crunch.py,
+│                              # migrations/0013 staged OUTSIDE alembic. Nothing in
+│                              # backend/ imports it; no router registered. See
+│                              # sourcing/README.md for the 4-step activation.
 ├── prototype/
 └── docs/                      # ARCHITECTURE, CHANGELOG (full per-step history),
                                # PHASES, FEATURES, COMPONENT_MAP, DATA_MODEL,
                                # DEPLOYMENT, TESTING, AUTH_SECURITY,
                                # CARD_REWARDS, IDENTITY_DISCOUNTS,
                                # SEARCH_STRATEGY, SCRAPING_AGENT_ARCHITECTURE,
+                               # LOOSE_ENDS (unwired/expired/unflipped inventory),
                                # BENCH_VENDOR_COMPARE, BENCH_VENDOR_COMPARE_V2
 ```
 
@@ -198,7 +206,7 @@ Two-tier AI workflow: **Planner** (Claude Opus via claude.ai) authors prompt pac
 | feat/provisional-resolve | Dark-launched fallback in `/resolve-from-search`: when Gemini + UPCitemdb both null, persist a Product w/ `upc=NULL`, `source='provisional'`, `source_raw['provisional']=True` + `['search_query']`. New `Product.match_quality` `@property` (`exact`/`provisional`) on `ProductResponse`. M2 `get_prices`/`stream_prices` auto-inject `query_override = product.name` for provisional rows so the bare-name cache scope wins; M6 `_write_cache` skipped (renamed log to `recommendation_skip_cache_write`, covers both inflight + provisional). 7-day dedup on `(name, brand, source='provisional')`. iOS `RecommendationHero` adds banner + downgraded eyebrow when `product.isProvisional`; `SearchView` skips provisional from Recently Sniffed; `query: String?` threaded through `Endpoint`/`APIClientProtocol`/`MockAPIClient`/`BarePreviewAPIClient`. `PROVISIONAL_RESOLVE_ENABLED: bool = False` flag. Live-verified Festool 577419 → provisional row → FB Marketplace $700 used listing | +9 BE | +6 iOS | TBD |
 | fix/3o-C-L1-token-overlap-gate | Closes `3o-C-L1-fabricated-upc-tap`. `_resolved_matches_query` (post-resolve relevance gate) gains a 3rd check on top of brand + strict-spec: when query has ≥2 meaningful tokens (≥3 chars, not in `_RELEVANCE_STOPWORDS`), require ≥2 to substring-match the resolved haystack. Defends against in-brand cross-category drift the brand-keyword check alone misses (`Apple Watch Ultra 2 49mm Natural Titanium GPS Cellular` → Gemini-picked MacBook Air UPC; "apple" matches both haystacks but watch/49mm/titanium/gps/cellular don't). Falls back to gates 1+2 only when query has <2 meaningful tokens (`iPhone 16 Pro` → `["iphone"]`) to avoid penalizing single-iconic-name resolves. Reuses `_meaningful_query_tokens` from `search_service.py`. Live-verified: same Apple Watch Ultra 2 query that returned MacBook Air rows pre-fix now (a) cache-hit branch invalidates bad UPC + raises 404, (b) fresh-upstream branch falls to provisional → 4 real Apple Watch rows in M2 + 3 in M14 misc | +2 BE | 0 | TBD |
 
-**Test totals:** 817 backend passed + 8 skipped (825 collected) + 216 iOS unit + 6 iOS UI (experiment flags off). Recent deltas: fix/3o-C-L1-token-overlap-gate +2 BE (815→817); feat/provisional-resolve +9 BE (806→815) + 1 iOS hero snapshot (215→216); feat/search-thumbnail-fallback +7 BE (799→806); fix/dark-mode-contrast 0 (cosmetic); triage-4 +8 iOS (207→215); triage-3 +10 BE (789→799); triage-2 +6 BE (784→790); triage-1 +1 BE; 3o-C +8 BE; 3o-B +19 BE. `ruff check` + `xcodebuild` clean. (Pre-existing iOS snapshot flakes on `StackingReceiptViewSnapshotTests`, `UnresolvedProductViewSnapshotTests`, `ConfirmationPromptViewSnapshotTests`, `ProfileViewSnapshotTests` and 2 `AutocompleteServiceTests` cases reproduce on `main` — unrelated to this PR. See `SnapshotTestHelper.swift` for the iOS 26.4 environmental hang note.)
+**Test totals:** 817 backend passed + 8 skipped (825 collected) + **291 M15 sourcing** + 216 iOS unit + 6 iOS UI (experiment flags off). The sourcing suite runs from `sourcing/` with no DB or network (~0.1s) and is a separate CI step from the backend run — see `.github/workflows/backend-tests.yml`. Recent deltas: test/m15-sourcing-suite +291 sourcing, 0 BE (PR #98 fixed 2 date-expired `test_m5_cards` fixtures rather than adding cases); fix/3o-C-L1-token-overlap-gate +2 BE (815→817); feat/provisional-resolve +9 BE (806→815) + 1 iOS hero snapshot (215→216); feat/search-thumbnail-fallback +7 BE (799→806); fix/dark-mode-contrast 0 (cosmetic); triage-4 +8 iOS (207→215); triage-3 +10 BE (789→799); triage-2 +6 BE (784→790); triage-1 +1 BE; 3o-C +8 BE; 3o-B +19 BE. `ruff check` + `xcodebuild` clean. (Pre-existing iOS snapshot flakes on `StackingReceiptViewSnapshotTests`, `UnresolvedProductViewSnapshotTests`, `ConfirmationPromptViewSnapshotTests`, `ProfileViewSnapshotTests` and 2 `AutocompleteServiceTests` cases reproduce on `main` — unrelated to this PR. See `SnapshotTestHelper.swift` for the iOS 26.4 environmental hang note.)
 
 **Migrations:** 0001 (initial, 21 tables) → 0002 (price_history composite PK) → 0003 (is_government) → 0004 (card catalog unique index) → 0005 (portal bonus upsert + failure counter) → 0006 (`chk_subscription_tier` CHECK) → 0007 (pg_trgm + trgm GIN idx) → 0008 (`affiliate_clicks.metadata` JSONB) → 0009 (`discount_programs.scope` — product / membership_fee / shipping) → 0010 (`is_young_adult` on `user_discount_profiles`) → 0011 (`fb_marketplace_locations` — city→FB Page ID cache w/ tombstoning) → 0012 (`portal_configs` — display + signup-promo + alerting state for shopping portals). Drift marker in `tests/conftest.py::_ensure_schema` checks `portal_configs`.
 
@@ -209,10 +217,13 @@ Two-tier AI workflow: **Planner** (Claude Opus via claude.ai) authors prompt pac
 ## Known Issues
 
 > Full history in `docs/CHANGELOG.md`. Only items affecting active development are listed here.
+> **This table tracks code defects only.** For things that are wired but switched off, credentials never obtained, or catalog data that has aged out, see **`docs/LOOSE_ENDS.md`** (audited 2026-07-27).
 
 | ID | Severity | Issue | Owner |
 |----|----------|-------|-------|
 | 2i-d-L4 | MEDIUM | Watchdog heal at `workers/watchdog.py:251` passes `page_html=error_details`; needs browser fetch in heal path | Phase 3 |
+| rotating-cat-expiry | **HIGH** | `scripts/seed_rotating_categories.py` seeds only `2026-Q2` (`effective_until=2026-06-30`). Since 2026-07-01 every rotating 5x bonus silently returns the card's base rate — `card_service.py:331` filters on `date.today()`. Needs Q3 category lists from Chase + Discover. See `docs/LOOSE_ENDS.md` §P0 | Phase 3 |
+| env-example-drift | LOW | `.env.example` documents 37 of 63 settings in `app/config.py`. Notably absent: `DECODO_SCRAPER_API_AUTH` — a fresh env built from it loses Amazon pricing with no error | Phase 3 |
 
 > **Recently closed** (kept here as a marker for one cycle, then drop):
 > **2026-05-01 (this session):**
