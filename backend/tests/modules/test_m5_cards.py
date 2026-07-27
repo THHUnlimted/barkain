@@ -11,6 +11,7 @@ from sqlalchemy import select, text
 from app.core_models import Retailer
 from modules.m1_product.models import Product
 from modules.m2_prices.models import Price
+from modules.m5_identity.card_service import _quarter_to_dates
 from modules.m5_identity.models import (
     CardRewardProgram,
     RotatingCategory,
@@ -76,18 +77,47 @@ async def _seed_card(
     return card
 
 
+def _current_quarter() -> str:
+    """The quarter we're in right now, e.g. ``'2026-Q3'``.
+
+    `CardService._recommendations` filters rotating rows and user category
+    selections on ``effective_from <= date.today() <= effective_until``. Any
+    fixture that hardcodes a quarter therefore stops matching the moment that
+    quarter ends, and the test starts asserting the *absence* of the bonus it
+    was written to prove.
+
+    That is exactly what happened: these fixtures were pinned to ``2026-Q2``,
+    which expired 2026-06-30, and the two rotating/user-selected tests went red
+    on 2026-07-01. Nothing caught it for four weeks because no backend-touching
+    PR ran CI in that window. Deriving the quarter from today keeps the
+    fixtures aligned with the service's own clock.
+
+    Tests that want an *expired* window still pass explicit dates — see
+    ``test_recommendations_expired_rotating_ignored``, which anchors them to
+    ``date.today()`` and so has never been time-dependent.
+    """
+    today = date.today()
+    return f"{today.year}-Q{(today.month - 1) // 3 + 1}"
+
+
 async def _seed_rotating(
     db_session,
     card_program_id,
     *,
     categories: list[str],
     bonus_rate: float,
-    quarter: str = "2026-Q2",
-    effective_from: date = date(2026, 4, 1),
-    effective_until: date = date(2026, 6, 30),
+    quarter: str | None = None,
+    effective_from: date | None = None,
+    effective_until: date | None = None,
     activation_required: bool = True,
     activation_url: str | None = "https://example.com/activate",
 ) -> RotatingCategory:
+    quarter = quarter or _current_quarter()
+    if effective_from is None or effective_until is None:
+        # Reuse the service's own mapping so the fixture can't drift from it.
+        derived_from, derived_until = _quarter_to_dates(quarter)
+        effective_from = effective_from or derived_from
+        effective_until = effective_until or derived_until
     row = RotatingCategory(
         card_program_id=card_program_id,
         quarter=quarter,
@@ -420,7 +450,9 @@ async def test_recommendations_user_selected_wins(client, db_session):
     )
     await client.post(
         f"/api/v1/cards/my-cards/{cash_id}/categories",
-        json={"categories": ["electronics_stores"], "quarter": "2026-Q2"},
+        # Must be the CURRENT quarter — the recommendation query only matches
+        # selections whose window contains today. See `_current_quarter`.
+        json={"categories": ["electronics_stores"], "quarter": _current_quarter()},
     )
     product = await _seed_product_with_prices(db_session, {"best_buy": 400.0})
 
