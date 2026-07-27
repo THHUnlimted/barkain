@@ -133,5 +133,12 @@ jobs:
 
       - name: Lint
         run: |
-          pip install ruff
+          # PINNED deliberately. `pip install ruff` resolves to whatever is
+          # newest at job time, so a ruff release that widens the default rule
+          # set turns the entire repo red on a PR that changed none of it —
+          # which is exactly what 0.16.0 did here: 313 findings in `backend/`
+          # and 94 in `scripts/`, neither touched, purely from new defaults.
+          # A linter is a policy, and the policy has to change on purpose.
+          # Bump this pin in its own PR, with the resulting fixes.
+          pip install ruff==0.15.9
           ruff check backend/ scripts/ sourcing/
