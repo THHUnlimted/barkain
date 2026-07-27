@@ -5,7 +5,12 @@ on:
     paths:
       - 'backend/**'
       - 'containers/**'
+      - 'sourcing/**'
       - '.github/workflows/backend-tests.yml'
+      # Editing the no-op companion runs the REAL suite. Paired with that file
+      # ignoring itself, this keeps exactly one `test` check reporting on a
+      # PR that only touches the companion.
+      - '.github/workflows/backend-tests-docs-skip.yml'
   push:
     branches: [main]
 
@@ -79,7 +84,54 @@ jobs:
         run: |
           python -m pytest --tb=short -q
 
+      # ── M15 sourcing (PR #97) ────────────────────────────────────────
+      # `sourcing/` is self-contained and unwired — it has no router, isn't
+      # imported by the backend, and its migration 0013 is staged outside
+      # infrastructure/migrations/versions/. So it gets its own steps rather
+      # than riding the backend pytest run above.
+      #
+      # Every third-party import under sourcing/ (sqlalchemy, pydantic-settings,
+      # httpx, redis) is already covered by backend/requirements.txt, installed
+      # above. openpyxl is an optional soft-dep with a graceful error path, so
+      # XLSX ingest stays uncovered here by design — CSV/TSV is the tested path.
+      - name: Sourcing (M15) offline smoke
+        working-directory: sourcing
+        run: |
+          # demo_crunch.py runs the whole decision path — ingest → UPC
+          # normalize → landed cost → fees → demand → scoring → inquiry — with
+          # no network and no database. Until the test suite lands this is the
+          # only regression signal on 9.8K lines, so it is NOT optional.
+          python demo_crunch.py
+
+      - name: Sourcing (M15) unit tests
+        working-directory: sourcing
+        env:
+          # Both entries are explicit: `sourcing/` resolves `from m15_sourcing.X`,
+          # `backend/` resolves `from app.database import Base` in models.py —
+          # the module's one cross-boundary import. cwd alone would cover the
+          # first under `working-directory: sourcing`, but pytest's import modes
+          # make implicit-cwd-on-path fragile, so neither is left to chance.
+          PYTHONPATH: ${{ github.workspace }}/sourcing:${{ github.workspace }}/backend
+          TEST_DATABASE_URL: postgresql+asyncpg://app:test@localhost:5433/barkain_test
+          DATABASE_URL: postgresql+asyncpg://app:test@localhost:5433/barkain_test
+          REDIS_URL: redis://localhost:6379/0
+          ENVIRONMENT: test
+          GEMINI_API_KEY: test-key-not-real
+          ANTHROPIC_API_KEY: test-key-not-real
+          CLERK_SECRET_KEY: test-key-not-real
+          CLERK_PUBLISHABLE_KEY: test-key-not-real
+          UPCITEMDB_API_KEY: ""
+          FIRECRAWL_API_KEY: ""
+        run: |
+          if [ -d tests ]; then
+            python -m pytest --tb=short -q
+          else
+            echo "::warning title=M15 sourcing has no tests::sourcing/tests/ does not exist. \
+          9,851 lines (upc, fees, ingest, scoring, demand, landed_cost, plans, forecast) \
+          are pure functions with zero unit coverage — only the offline smoke above guards them."
+          fi
+
       - name: Lint
         run: |
           pip install ruff
-          ruff check backend/ scripts/
+          ruff check backend/ scripts/ sourcing/

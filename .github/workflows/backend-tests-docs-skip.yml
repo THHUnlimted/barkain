@@ -1,11 +1,21 @@
 # Companion to backend-tests.yml that satisfies the required `test` status
 # check for docs-only PRs. The real test workflow is path-filtered to
-# `backend/**` + `containers/**` and never runs on docs-only changes —
-# without this no-op the required check is never reported and branch
+# `backend/**` + `containers/**` + `sourcing/**` and never runs on docs-only
+# changes — without this no-op the required check is never reported and branch
 # protection blocks the merge indefinitely.
 #
 # Mirrors the real workflow's job name (`test`) so the same check context
 # satisfies branch protection.
+#
+# IMPORTANT: `paths-ignore` here MUST mirror `paths` in backend-tests.yml
+# exactly. If a path is added there but not here, BOTH workflows fire and the
+# no-op can report `test` success alongside (or ahead of) the real run — which
+# is how PR #97 merged 9,851 lines of `sourcing/` on a 3-second green check.
+#
+# The last entry is this file itself: without it, a PR editing only the no-op
+# would trigger both workflows (the real one lists this path, and this one
+# wouldn't be ignoring itself). Self-ignoring is safe precisely because the
+# real workflow claims this path — so exactly one `test` check still reports.
 name: Backend Tests (docs skip)
 
 on:
@@ -13,7 +23,9 @@ on:
     paths-ignore:
       - 'backend/**'
       - 'containers/**'
+      - 'sourcing/**'
       - '.github/workflows/backend-tests.yml'
+      - '.github/workflows/backend-tests-docs-skip.yml'
 
 jobs:
   test:
