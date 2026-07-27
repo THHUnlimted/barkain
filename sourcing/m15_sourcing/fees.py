@@ -311,6 +311,21 @@ DEFAULT_ASSUMED_WEIGHT_LB = Decimal("1.5")
 _WFS_UNDER_10_THRESHOLD = Decimal("10.00")
 _WFS_UNDER_10_FEE = Decimal("4.45")
 
+# Confirmed at two separate price points ($5.93 and $8.99, 17 units across two
+# reporting periods) — the rate is flat across the band, not scaled within it.
+#
+# The first over-$10 observation is $5.75/unit on a $10.63 item (23 lines),
+# which happens to match the published 3–20 lb tier base exactly. One SKU isn't
+# enough to conclude the weight tiers govern above $10, so the published table
+# still drives that side and this stays a note rather than a constant.
+
+# WFS charges the seller for the return trip when a customer sends an item back.
+# This is NOT the same as the return *reserve* in landed_cost.py, which covers
+# the value of goods that come back unsellable — you pay this freight whether or
+# not the unit is resellable, so both apply and neither substitutes for the
+# other. Observed at $7.00 on one return out of 24 units.
+WFS_RETURN_SHIPPING_FEE = Decimal("7.00")
+
 
 def wfs_fulfillment_fee(
     dims: ItemDimensions, sale_price: Decimal | None = None
@@ -625,6 +640,7 @@ def walmart_economics(
     calibration: object | None = None,
     sku: str | None = None,
     product_type: str | None = None,
+    return_rate: Decimal = _ZERO,
 ) -> ChannelEconomics:
     """Per-unit economics for a Walmart Marketplace listing.
 
@@ -697,6 +713,14 @@ def walmart_economics(
             shipping = _money(seller_shipping_cost)
         model = "seller_fulfilled"
 
+    # Expected return-shipping cost per unit sold. A 3% return rate on a $7.00
+    # return trip is $0.21/unit — small, but it lands on exactly the sub-$10
+    # rows where $0.21 is a tenth of the margin.
+    expected_return_shipping = _ZERO
+    if use_wfs and return_rate > 0:
+        expected_return_shipping = _money(WFS_RETURN_SHIPPING_FEE * return_rate)
+        assumptions.append("expected_return_shipping")
+
     return ChannelEconomics(
         channel="walmart",
         sale_price=_money(sale_price),
@@ -706,7 +730,7 @@ def walmart_economics(
             fulfillment_fee=fulfillment,
             storage_fee=storage,
             shipping_cost=shipping,
-            other_fees=plan.per_item_fee,
+            other_fees=plan.per_item_fee + expected_return_shipping,
         ),
         fulfillment_model=model,
         assumptions=tuple(dict.fromkeys(assumptions)),

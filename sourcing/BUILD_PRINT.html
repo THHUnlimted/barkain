@@ -400,7 +400,7 @@
       <div class="field"><span class="field__label">Python</span><span class="field__value">8,240 lines · 17 files</span></div>
       <div class="field"><span class="field__label">Channels</span><span class="field__value">Walmart · eBay · Amazon (BSR)</span></div>
       <div class="field"><span class="field__label">Files touched outside /sourcing</span><span class="field__value">0</span></div>
-      <div class="field"><span class="field__label">Revision</span><span class="field__value">D — first-party</span></div>
+      <div class="field"><span class="field__label">Revision</span><span class="field__value">E — validated</span></div>
     </div>
   </div>
 
@@ -766,6 +766,31 @@ flowchart TD
     <p><strong>WFS prices items under $10 on a separate flat schedule, not on the weight tiers at all.</strong> That's why $4.45 sat between the published 0–1 lb ($3.45) and 1–2 lb ($4.95) bands — it was never being priced by weight. It's the kind of rule that's easy to miss on a rate card and impossible to miss in a settlement, and it matters disproportionately for wholesale: sub-$10 items are exactly where thin margins live, so mispricing their fulfillment by a dollar decides the whole category.</p>
 
     <p>With the rule encoded, the engine reproduces the real order exactly: <strong>commission $1.08, WFS $4.45, net $3.46.</strong></p>
+
+    <h3>Validation across four SKUs and three categories</h3>
+
+    <p>A second reconciliation export from an earlier period covered four SKUs across three categories and both fulfillment types. Every published referral rate held to the basis point:</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Category</th><th class="num">Observed</th><th class="num">Published</th><th class="num">Samples</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>Home &amp; Garden</td><td class="num">15.00%</td><td class="num">15%</td><td class="num">23</td><td><span class="chip chip--pass">match</span></td></tr>
+          <tr><td>Tools &amp; Home Improvement</td><td class="num">15.00%</td><td class="num">15%</td><td class="num">2</td><td><span class="chip chip--pass">match</span></td></tr>
+          <tr><td>Automotive &amp; Powersports</td><td class="num">12.00%</td><td class="num">12%</td><td class="num">3</td><td><span class="chip chip--pass">match</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>That's the answer to the question the WFS mismatch raised: <strong>the referral table is trustworthy; it was only the fulfillment side that was wrong.</strong> Worth knowing, because it means the published rates can be relied on for categories you haven't sold in yet.</p>
+
+    <p>The Under-$10 schedule also held at a second price point — the same SKU at <strong>$5.93</strong> in the earlier period was charged the same flat $4.45 as at $8.99. Flat across the band, not scaled within it. The first over-$10 observation is $5.75/unit on a $10.63 item across 23 lines, which happens to match the published 3–20 lb tier base exactly; one SKU isn't enough to conclude the weight tiers govern above $10, so that stays a note rather than a constant.</p>
+
+    <div class="note note--warn">
+      <p><strong>Two costs the model was missing entirely,</strong> both found by splitting fee lines on their description rather than lumping anything WFS-shaped into "fulfillment":</p>
+      <p><strong>WFS Return Shipping fee — $7.00.</strong> Charged when a customer sends an item back. This is <em>not</em> the same as the return reserve in landed cost, which covers the value of goods that come back unsellable: you pay this freight whether or not the unit is resellable, so both apply. At a 3% return rate that's $0.21/unit — small, until you notice it lands on exactly the sub-$10 rows where $0.21 is a tenth of the margin.</p>
+      <p><strong>Walmart Shipping Label Service Charge</strong> — $7.69 on an $11.00 item, $5.95 on a $14.99 item. The seller-fulfilled equivalent, and real observed label costs where the model was estimating from weight.</p>
+    </div>
 
     <div class="note note--warn">
       <p><strong>Two traps in the same file.</strong> One order billed $2.95 rather than $4.45 — a $1.50 discount — followed by a separate <code>DiscountAdjustment</code> line recouping it, because "a discount was applied in error." Calibrating on net payable would have taught a fulfillment fee that isn't real; the parser uses the pre-discount amount and reports clawbacks separately.</p>
@@ -1229,7 +1254,7 @@ flowchart TD
 
   <footer>
     <span>Barkain M15 · Wholesale Sourcing Scanner</span>
-    <span>Build print rev. D · 2026-07-26</span>
+    <span>Build print rev. E · 2026-07-26</span>
     <span>branch claude/wholesale-sourcing-scanner-83n3ch</span>
   </footer>
 

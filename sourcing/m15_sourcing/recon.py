@@ -87,6 +87,11 @@ class ObservedOrder:
     fulfillment_fee: Decimal = _ZERO
     storage_fee: Decimal = _ZERO
     shipping_label: Decimal = _ZERO
+    # Charged when a customer sends a WFS item back. Distinct from the return
+    # *reserve* in landed_cost.py, which covers the value of goods that come
+    # back unsellable — this is the freight on the return trip, and you pay it
+    # whether or not the unit is resellable.
+    return_shipping_fee: Decimal = _ZERO
     ad_fee: Decimal = _ZERO
     other_fees: Decimal = _ZERO
     quantity: int = 1
@@ -98,6 +103,7 @@ class ObservedOrder:
             + self.fulfillment_fee
             + self.storage_fee
             + self.shipping_label
+            + self.return_shipping_fee
             + self.ad_fee
             + self.other_fees
         )
@@ -140,6 +146,7 @@ class ObservedOrder:
             "fulfillment_fee": float(self.fulfillment_fee),
             "storage_fee": float(self.storage_fee),
             "shipping_label": float(self.shipping_label),
+            "return_shipping_fee": float(self.return_shipping_fee),
             "ad_fee": float(self.ad_fee),
             "total_fees": float(self.total_fees),
             "net_proceeds": float(self.net_proceeds),
@@ -184,8 +191,26 @@ def parse_walmart_reconciliation(data: bytes | str) -> list[ObservedOrder]:
         if amount is None:
             continue
 
-        # ── WFS adjustments: fulfillment and storage ──────────────────
-        if "fulfillment fee" in description.lower():
+        # ── WFS adjustments: fulfillment, returns, labels, storage ─────
+        # Order matters: "WFS Return Shipping fee" must be tested before the
+        # generic fulfillment match, and a seller-fulfilled "Walmart Shipping
+        # Label Service Charge" is a different cost again. Lumping all three
+        # into `fulfillment_fee` inflates it and teaches the calibration a
+        # per-unit charge that includes an occasional one-off return.
+        lowered = description.lower()
+        if "return shipping" in lowered:
+            if po and po in orders:
+                orders[po].return_shipping_fee += abs(amount)
+            elif po:
+                orphan_fees[po] += abs(amount)
+            continue
+        if "shipping label service" in lowered:
+            if po and po in orders:
+                orders[po].shipping_label += abs(amount)
+            elif po:
+                orphan_fees[po] += abs(amount)
+            continue
+        if "fulfillment fee" in lowered:
             if po and po in orders:
                 orders[po].fulfillment_fee += abs(amount)
             elif po:

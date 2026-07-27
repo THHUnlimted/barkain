@@ -1,7 +1,7 @@
 # Wholesale Sourcing Scanner — Capability Canvas + Build Plan
 
-> **Status:** M15 core complete, unwired. Rev C — fee calibration from real
-> settlements, velocity/margin slider, projected-vs-actual feedback loop.
+> **Status:** M15 core complete, unwired. Rev E — fee engine validated against
+> real settlements across 4 SKUs / 3 categories / both fulfillment types.
 > **Last updated:** 2026-07-26
 
 ---
