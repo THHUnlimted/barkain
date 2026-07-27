@@ -279,8 +279,11 @@ four rows. A flat "add 20% for costs" rule would be wrong in both directions.
 
 **Reserves divide, they don't add.** You don't pay shrink and returns per unit —
 you lose that fraction of units, and the survivors carry the cost of all of
-them. 3% shrink + 5% returns means 92 units carry the cost of 100: an 8.7% cost
-increase, not 8%.
+them. The rates also *compound* rather than sum: shrink removes units in
+transit, and the return rate then applies to whatever actually sold. 3% shrink
++ 5% returns leaves a survival rate of `0.97 × 0.95 = 0.9215`, so the sellable
+units carry `1 / 0.9215` — an **8.52%** cost increase, not the 8% an additive
+fee model implies.
 
 Every component defaults to zero with an `assumptions` flag recording what was
 left unspecified. An invented freight number that happens to be wrong is worse
@@ -433,24 +436,56 @@ SOURCING_REVIEW_RATE=0.02                # share of buyers who leave a review
 
 ## 12. Module map
 
+The module lives at the repo root under `sourcing/`, not inside `backend/`.
+That's what keeps it inert: nothing in `backend/` imports it, no router is
+registered, and migration `0013` is staged under `sourcing/migrations/` rather
+than `infrastructure/migrations/versions/`. Activation moves it; until then the
+separation is the safety property.
+
 ```
-backend/modules/m15_sourcing/
-├── upc.py        # normalization — pure, no I/O, fully unit-tested
-├── ingest.py     # CSV/TSV/XLSX → SourcingRow drafts, header auto-detect
-├── fees.py       # Walmart + eBay fee engines, versioned rate tables
-├── demand.py     # snapshot → estimated monthly sales + confidence tier
-├── scoring.py    # thresholds → verdict + projected monthly profit
-├── models.py     # sourcing_lists, sourcing_rows, listing_snapshots, brand_access
-├── schemas.py    # Pydantic wire contracts
-├── service.py    # orchestration + Redis match cache + concurrency bounds
-├── router.py     # /api/v1/sourcing
-├── inquiry.py    # distributor inquiry email draft
-└── adapters/
-    ├── walmart_io.py      # signed Walmart.io affiliate/search client
-    └── ebay_sourcing.py   # Browse gtin= search + competition count
+sourcing/
+├── demo_crunch.py          # offline end-to-end run — no network, no database
+├── sample_price_list.csv   # the fixture demo_crunch and the tests both use
+├── migrations/
+│   └── 0013_sourcing_tables.py   # staged OUTSIDE alembic until activation
+├── tests/                  # pure-module unit suite
+└── m15_sourcing/
+    ├── upc.py          # normalization — pure, no I/O
+    ├── ingest.py       # CSV/TSV/XLSX → SourcingRow drafts, header auto-detect
+    ├── fees.py         # Walmart + eBay fee engines, versioned rate tables
+    ├── landed_cost.py  # freight, prep, duty, and reserves that divide
+    ├── plans.py        # selling plans as marginal rates + breakeven volume
+    ├── demand.py       # snapshot → estimated monthly sales + confidence tier
+    ├── scoring.py      # thresholds → verdict + projected monthly profit
+    ├── forecast.py     # projected-vs-actual calibration loop
+    ├── inquiry.py      # distributor inquiry email draft
+    ├── recon.py        # settlement / inventory / orders import
+    ├── models.py       # sourcing_lists, sourcing_rows, listing_snapshots, brand_access
+    ├── config.py       # self-contained settings object
+    ├── service.py      # orchestration + Redis match cache + concurrency bounds
+    ├── ebay_token.py   # OAuth client_credentials cache
+    └── adapters/
+        ├── walmart_io.py      # signed Walmart.io affiliate/search client
+        └── ebay_sourcing.py   # Browse gtin= search + competition count
 ```
 
-`upc.py`, `ingest.py`, `fees.py`, `demand.py`, `scoring.py`, `inquiry.py` are
-**pure** — no DB, no network, no settings reads at import time. They're the
-parts worth the most tests and the parts most likely to be reused if this ever
-splits into its own service.
+**Not yet written:** `schemas.py` (Pydantic wire contracts) and `router.py`
+(`/api/v1/sourcing`). The API surface in §8 is the design for those, not a
+description of shipped code.
+
+`upc.py`, `ingest.py`, `fees.py`, `landed_cost.py`, `plans.py`, `demand.py`,
+`scoring.py`, `forecast.py` and `inquiry.py` are **pure** — no DB, no network,
+no settings reads at import time. They're the parts worth the most tests and the
+parts most likely to be reused if this ever splits into its own service.
+`models.py` is the one exception in the package: it imports
+`app.database.Base`, so it needs `backend/` on the path.
+
+### Running the tests
+
+```bash
+cd sourcing && pytest              # 291 tests, no DB or network needed
+python demo_crunch.py              # end-to-end smoke over the sample list
+```
+
+Both run in CI on any change under `sourcing/**` — see
+`.github/workflows/backend-tests.yml`.

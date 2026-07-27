@@ -60,6 +60,11 @@ COLUMN_SYNONYMS: dict[str, tuple[str, ...]] = {
         "dealer cost", "wholesale price", "wholesale cost", "wholesale", "wsp",
         "net price", "net cost", "each cost", "cost each", "ea cost",
         "unit price", "invoice cost", "buy price", "cost",
+        # A bare "Price" on a *distributor* list is the wholesale cost — retail
+        # columns on these lists are spelled MSRP / Retail / List. This is the
+        # weakest synonym in the set and the reason `msrp` has to resolve first;
+        # see `_RESOLUTION_ORDER`.
+        "price",
     ),
     "case_pack": (
         "case pack", "casepack", "pack size", "units per case", "qty per case",
@@ -93,8 +98,16 @@ COLUMN_SYNONYMS: dict[str, tuple[str, ...]] = {
 # Column order to resolve in. More specific targets claim their header first so
 # a "Case Cost" header can't be swallowed by the generic "cost" synonym under
 # `unit_cost`. This ordering is load-bearing — see `_map_columns`.
+#
+# `msrp` sits ahead of `unit_cost` for the same reason `case_cost` does. Every
+# msrp synonym is a specific retail term ("retail price", "list price", "srp");
+# `unit_cost`'s weakest synonym is a bare "price", which substring-matches
+# "Retail Price" at 505 and would claim that column before `msrp` — scoring
+# 1012 on an exact match — ever got to look at it. Resolving msrp first means
+# the retail columns are spoken for and a leftover bare "Price" lands on cost,
+# which is what it means on a distributor list.
 _RESOLUTION_ORDER: tuple[str, ...] = (
-    "upc", "case_pack", "case_cost", "unit_cost", "moq", "msrp",
+    "upc", "case_pack", "case_cost", "msrp", "unit_cost", "moq",
     "lead_time_days", "brand", "sku", "quantity_available", "description",
 )
 
