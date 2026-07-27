@@ -1,0 +1,1261 @@
+<title>Wholesale Sourcing Scanner — Build Print</title>
+
+<style>
+  :root {
+    --paper:      #F3F5F3;
+    --surface:    #FBFCFB;
+    --ink:        #13181A;
+    --ink-soft:   #4A5754;
+    --muted:      #6E7C78;
+    --rule:       #C9D2CE;
+    --rule-soft:  #DFE5E2;
+    --accent:     #0B5140;
+    --accent-dim: #0B514015;
+    --pass:       #0B5140;
+    --pass-bg:    #0B514014;
+    --watch:      #7E5B0E;
+    --watch-bg:   #7E5B0E14;
+    --fail:       #8E2F26;
+    --fail-bg:    #8E2F2614;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:      #0D1211;
+      --surface:    #141A18;
+      --ink:        #E4EAE7;
+      --ink-soft:   #A9B6B2;
+      --muted:      #7E8D89;
+      --rule:       #26302D;
+      --rule-soft:  #1C2422;
+      --accent:     #54C3A3;
+      --accent-dim: #54C3A31A;
+      --pass:       #54C3A3;
+      --pass-bg:    #54C3A31A;
+      --watch:      #D3A23C;
+      --watch-bg:   #D3A23C1A;
+      --fail:       #E08078;
+      --fail-bg:    #E080781A;
+    }
+  }
+
+  :root[data-theme="light"] {
+    --paper: #F3F5F3; --surface: #FBFCFB; --ink: #13181A; --ink-soft: #4A5754;
+    --muted: #6E7C78; --rule: #C9D2CE; --rule-soft: #DFE5E2;
+    --accent: #0B5140; --accent-dim: #0B514015;
+    --pass: #0B5140; --pass-bg: #0B514014;
+    --watch: #7E5B0E; --watch-bg: #7E5B0E14;
+    --fail: #8E2F26; --fail-bg: #8E2F2614;
+  }
+
+  :root[data-theme="dark"] {
+    --paper: #0D1211; --surface: #141A18; --ink: #E4EAE7; --ink-soft: #A9B6B2;
+    --muted: #7E8D89; --rule: #26302D; --rule-soft: #1C2422;
+    --accent: #54C3A3; --accent-dim: #54C3A31A;
+    --pass: #54C3A3; --pass-bg: #54C3A31A;
+    --watch: #D3A23C; --watch-bg: #D3A23C1A;
+    --fail: #E08078; --fail-bg: #E080781A;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .sheet {
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 0 24px 96px;
+  }
+
+  /* ── Title block ─────────────────────────────────────────────── */
+
+  .titleblock {
+    border: 1.5px solid var(--ink);
+    margin: 40px 0 56px;
+    background: var(--surface);
+  }
+
+  .titleblock__head {
+    padding: 28px 28px 24px;
+    border-bottom: 1.5px solid var(--ink);
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 14px;
+  }
+
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(26px, 4.6vw, 42px);
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    font-weight: 600;
+    margin: 0 0 12px;
+    text-wrap: balance;
+  }
+
+  .titleblock__sub {
+    color: var(--ink-soft);
+    max-width: 62ch;
+    margin: 0;
+    font-size: 16.5px;
+  }
+
+  .titleblock__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+
+  .field {
+    padding: 12px 16px;
+    border-right: 1px solid var(--rule);
+    border-top: 1px solid var(--rule);
+  }
+  .field:last-child { border-right: none; }
+
+  .field__label {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 3px;
+  }
+
+  .field__value {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+
+  /* ── Sections ────────────────────────────────────────────────── */
+
+  section { margin-bottom: 64px; scroll-margin-top: 24px; }
+
+  .sheetnum {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 8px;
+  }
+
+  h2 {
+    font-family: var(--mono);
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0 0 6px;
+    padding-bottom: 12px;
+    border-bottom: 1.5px solid var(--ink);
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 32px 0 10px;
+  }
+
+  p { margin: 0 0 16px; max-width: 68ch; color: var(--ink-soft); }
+  section > p:first-of-type { margin-top: 20px; }
+  strong { color: var(--ink); font-weight: 600; }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  ul { margin: 0 0 18px; padding-left: 20px; max-width: 68ch; color: var(--ink-soft); }
+  li { margin-bottom: 7px; }
+  li::marker { color: var(--muted); }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.875em;
+    background: var(--accent-dim);
+    padding: 1px 5px;
+    color: var(--ink);
+  }
+
+  /* ── Tables ──────────────────────────────────────────────────── */
+
+  .scroll { overflow-x: auto; margin: 0 0 22px; border-bottom: 1px solid var(--rule); }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 14px;
+    min-width: 520px;
+  }
+
+  th {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    text-align: left;
+    color: var(--muted);
+    font-weight: 600;
+    padding: 9px 14px 9px 0;
+    border-bottom: 1px solid var(--ink);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 9px 14px 9px 0;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+    color: var(--ink-soft);
+  }
+
+  td:first-child { color: var(--ink); }
+  tr:last-child td { border-bottom: none; }
+
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .mono td, td.mono { font-family: var(--mono); font-size: 13px; }
+
+  /* ── Chips ───────────────────────────────────────────────────── */
+
+  .chip {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .chip--pass  { color: var(--pass);  background: var(--pass-bg); }
+  .chip--watch { color: var(--watch); background: var(--watch-bg); }
+  .chip--fail  { color: var(--fail);  background: var(--fail-bg); }
+  .chip--todo  { color: var(--muted); background: transparent; }
+
+  /* ── Callout ─────────────────────────────────────────────────── */
+
+  .note {
+    border-left: 2px solid var(--accent);
+    padding: 2px 0 2px 18px;
+    margin: 0 0 22px;
+    max-width: 68ch;
+  }
+  .note p { margin-bottom: 8px; }
+  .note p:last-child { margin-bottom: 0; }
+
+  .note--warn { border-left-color: var(--watch); }
+
+  /* ── Terminal ────────────────────────────────────────────────── */
+
+  .term {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    overflow-x: auto;
+    margin: 0 0 22px;
+  }
+
+  .term__bar {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--rule);
+    position: sticky;
+    left: 0;
+  }
+
+  pre {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.55;
+    margin: 0;
+    padding: 16px;
+    color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+    white-space: pre;
+  }
+
+  pre b { color: var(--ink); font-weight: 600; }
+  pre .p { color: var(--pass); font-weight: 600; }
+  pre .w { color: var(--watch); font-weight: 600; }
+  pre .f { color: var(--fail); }
+  pre .c { color: var(--muted); }
+
+  /* ── Tree ────────────────────────────────────────────────────── */
+
+  .tree {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.75;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    padding: 16px;
+    overflow-x: auto;
+    margin: 0 0 22px;
+    white-space: pre;
+    color: var(--ink-soft);
+  }
+  .tree b { color: var(--ink); font-weight: 600; }
+  .tree i { color: var(--muted); font-style: normal; }
+
+  /* ── Mermaid ─────────────────────────────────────────────────── */
+
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    padding: 20px;
+    overflow-x: auto;
+    margin: 0 0 22px;
+  }
+
+  /* ── Two-column ──────────────────────────────────────────────── */
+
+  .cols {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 28px;
+    margin-bottom: 22px;
+  }
+  .cols p, .cols ul { max-width: none; }
+
+  /* ── Index ───────────────────────────────────────────────────── */
+
+  .index {
+    border-top: 1.5px solid var(--ink);
+    border-bottom: 1.5px solid var(--ink);
+    padding: 18px 0;
+    margin-bottom: 56px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 4px 28px;
+  }
+
+  .index a {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    text-decoration: none;
+    color: var(--ink-soft);
+    display: flex;
+    gap: 10px;
+    padding: 3px 0;
+  }
+  .index a:hover { color: var(--accent); }
+  .index span { color: var(--muted); }
+
+  footer {
+    border-top: 1.5px solid var(--ink);
+    padding-top: 18px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 28px;
+  }
+
+  @media (max-width: 640px) {
+    body { font-size: 15px; }
+    .sheet { padding: 0 16px 64px; }
+    .titleblock__head { padding: 22px 18px 18px; }
+    .field { padding: 10px 14px; }
+  }
+</style>
+
+<div class="sheet">
+
+  <div class="titleblock">
+    <div class="titleblock__head">
+      <p class="eyebrow">Build Print · Barkain · Module M15</p>
+      <h1>Wholesale Sourcing Scanner</h1>
+      <p class="titleblock__sub">A list cruncher, not a scanner. A distributor sends 3,000 rows of UPC and cost; this finds the handful worth buying and tells you why. Costed to the landed unit, ranked on a velocity/margin dial, and calibrated against your own settlements rather than a published rate card.</p>
+    </div>
+    <div class="titleblock__grid">
+      <div class="field"><span class="field__label">Repository</span><span class="field__value">THHUnlimted/barkain</span></div>
+      <div class="field"><span class="field__label">Branch</span><span class="field__value">claude/wholesale-sourcing-scanner-83n3ch</span></div>
+      <div class="field"><span class="field__label">Location</span><span class="field__value">/sourcing</span></div>
+      <div class="field"><span class="field__label">Date</span><span class="field__value">2026-07-26</span></div>
+      <div class="field"><span class="field__label">Python</span><span class="field__value">8,240 lines · 17 files</span></div>
+      <div class="field"><span class="field__label">Channels</span><span class="field__value">Walmart · eBay · Amazon (BSR)</span></div>
+      <div class="field"><span class="field__label">Files touched outside /sourcing</span><span class="field__value">0</span></div>
+      <div class="field"><span class="field__label">Revision</span><span class="field__value">E — validated</span></div>
+    </div>
+  </div>
+
+  <nav class="index">
+    <a href="#s01"><span>S-01</span> The reframe</a>
+    <a href="#s02"><span>S-02</span> Pipeline</a>
+    <a href="#s03"><span>S-03</span> File manifest</a>
+    <a href="#s04"><span>S-04</span> UPC normalization</a>
+    <a href="#s05"><span>S-05</span> Spreadsheet ingest</a>
+    <a href="#s06"><span>S-06</span> Fee engine</a>
+    <a href="#s6b"><span>S-06b</span> Landed cost</a>
+    <a href="#s6c"><span>S-06c</span> Selling plans</a>
+    <a href="#s6d"><span>S-06d</span> Fee calibration</a>
+    <a href="#s07"><span>S-07</span> Popularity signals</a>
+    <a href="#s08"><span>S-08</span> The slider</a>
+    <a href="#s8b"><span>S-08b</span> Projected vs. actual</a>
+    <a href="#s09"><span>S-09</span> Live run</a>
+    <a href="#s10"><span>S-10</span> Data model</a>
+    <a href="#s11"><span>S-11</span> Reuse from Barkain</a>
+    <a href="#s12"><span>S-12</span> Built vs. not built</a>
+    <a href="#s13"><span>S-13</span> Open questions</a>
+  </nav>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s01">
+    <span class="sheetnum">Sheet S-01</span>
+    <h2>The reframe</h2>
+
+    <p>Retail arbitrage scans one item at a time in a store aisle. Wholesale sourcing is the opposite motion: a supplier emails a price list, and the job is to find the five winners hiding in three thousand rows. The input surface is a <strong>file upload</strong>, not a camera — and that one change cascades through every decision in the build.</p>
+
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Dimension</th><th>Barkain today</th><th>M15 Sourcing</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Input</td><td>One barcode</td><td>3,000-row CSV / XLSX</td></tr>
+          <tr><td>Question</td><td>Where do I buy this cheapest?</td><td>Which of these should I resell?</td></tr>
+          <tr><td>Optimizes</td><td>Consumer out-of-pocket</td><td>Seller net profit per unit</td></tr>
+          <tr><td>Budget</td><td>Latency — sub-3s, one product</td><td>Throughput — 3,000 rows, minutes</td></tr>
+          <tr><td>Output</td><td>"Buy here, with this card"</td><td>"These 12 rows, ranked, and why"</td></tr>
+          <tr><td>Caching</td><td>Hostile — prices move</td><td>Hungry — 12h TTL, re-crunch is free</td></tr>
+          <tr><td>Unit of work</td><td>Product</td><td>List</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <p><strong>The consequence that matters:</strong> because the unit of work is a list, the expensive resource is external API calls, not milliseconds. Every design choice downstream — the Redis match cache, the skip-before-spend gates, storing the raw match separately from the score — exists to keep a 3,000-row list from becoming 6,000 API calls every time you adjust a threshold.</p>
+    </div>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s02">
+    <span class="sheetnum">Sheet S-02</span>
+    <h2>Pipeline: UPC in, verdict out</h2>
+
+    <p>Six stages. The first two and the last three are pure functions — no network, no database, fully reproducible. Only stage three touches the outside world, and it's the one wrapped in a cache and a semaphore.</p>
+
+    <div class="diagram">
+<pre class="mermaid">
+flowchart TD
+    A["distributor.csv / .xlsx"] --> B["1 · INGEST<br/>header detection<br/>column mapping<br/>case-pack math"]
+    B --> C["2 · NORMALIZE<br/>scientific notation<br/>stripped zeros<br/>UPC-E · case codes"]
+    C --> D{usable GTIN?}
+    D -->|no| X["skip — no API spend"]
+    D -->|yes| E["Redis match cache"]
+    E -->|hit| H
+    E -->|miss| F["3 · MATCH"]
+    F --> G1["Walmart.io<br/>price · reviews · weight"]
+    F --> G2["eBay Browse<br/>price band · competition"]
+    G1 --> H["4 · DEMAND<br/>review velocity<br/>sold count · badges"]
+    G2 --> H
+    H --> I["5 · FEES<br/>referral · WFS · storage<br/>FVF · shipping"]
+    I --> J["6 · VERDICT<br/>net · ROI · unit share<br/>price stability"]
+    J --> K["ranked candidates"]
+    K --> L["distributor inquiry draft"]
+    G1 -.-> S[("listing_snapshots<br/>the dataset")]
+    G2 -.-> S
+    S -.-> H
+</pre>
+    </div>
+
+    <p>Both channels are scored independently and the row keeps both results. Some items are Walmart winners and some are eBay winners; you cannot tell which from the cost column, which is the entire reason for running both legs rather than picking one.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s03">
+    <span class="sheetnum">Sheet S-03</span>
+    <h2>File manifest</h2>
+
+    <p>Everything lives under <code>/sourcing</code>. Nothing outside that directory was modified — no edits to <code>backend/app/config.py</code>, no new rows in <code>app/models.py</code>, no router registration. The module carries its own settings object so it stays self-contained until you decide to wire it in.</p>
+
+    <div class="tree"><b>sourcing/</b>
+├── <b>README.md</b>                      <i>capability canvas + build plan</i>            309
+├── <b>demo_crunch.py</b>                 <i>offline end-to-end run, no network</i>        309
+├── <b>sample_price_list.csv</b>          <i>deliberately dirty test fixture</i>            15
+├── <b>m15_sourcing/</b>
+│   ├── <b>upc.py</b>                     <i>GTIN normalization — pure</i>                 512
+│   ├── <b>ingest.py</b>                  <i>CSV/TSV/XLSX parsing — pure</i>               557
+│   ├── <b>fees.py</b>                    <i>calibrated fee engines — pure</i>             700
+│   ├── <b>recon.py</b>                   <i>settlement import → real fees</i>             438
+│   ├── <b>forecast.py</b>                <i>projected vs actual loop — pure</i>           384
+│   ├── <b>landed_cost.py</b>             <i>freight, prep, duty, reserves — pure</i>      316
+│   ├── <b>plans.py</b>                   <i>subscriptions + breakeven — pure</i>          312
+│   ├── <b>demand.py</b>                  <i>7-tier popularity engine — pure</i>           610
+│   ├── <b>scoring.py</b>                 <i>slider + verdicts — pure</i>                  560
+│   ├── <b>inquiry.py</b>                 <i>distributor email drafts — pure</i>           146
+│   ├── <b>models.py</b>                  <i>6 SQLAlchemy tables</i>                       380
+│   ├── <b>service.py</b>                 <i>orchestration · cache · fan-out</i>           764
+│   ├── <b>config.py</b>                  <i>self-contained settings</i>                    79
+│   ├── <b>ebay_token.py</b>              <i>shared OAuth cache, w/ fallback</i>            96
+│   └── <b>adapters/</b>
+│       ├── <b>walmart_io.py</b>          <i>RSA-signed affiliate API</i>                  369
+│       └── <b>ebay_sourcing.py</b>       <i>Browse gtin= search</i>                       308
+└── <b>migrations/</b>
+    └── <b>0013_sourcing_tables.py</b>    <i>staged, not yet in versions/</i>              198</div>
+
+    <div class="note">
+      <p><strong>Why the pure/impure split is drawn where it is.</strong> Nine of the seventeen modules have no imports beyond the standard library and each other. That's not tidiness for its own sake — it means the entire decision path from "here is a cost" to "here is a verdict" can be tested, benchmarked, and replayed without a database, an API key, or a network. <code>demo_crunch.py</code> exercises the whole thing offline, which is how the numbers on Sheet S-09 were produced.</p>
+    </div>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s04">
+    <span class="sheetnum">Sheet S-04</span>
+    <h2>UPC normalization</h2>
+
+    <p>A barcode scanner hands you a clean 12-digit UPC-A. A distributor spreadsheet hands you whatever survived Excel, a PDF, and three ERP exports. Every one of these failure modes produces a silent <em>lookup miss</em> rather than an error, which is the worst possible bug in a pipeline whose whole job is "did we find this item".</p>
+
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Input</th><th>Cause</th><th>Handling</th><th>Result</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="mono">195949036323</td><td>Clean UPC-A</td><td>Validate check digit</td><td><span class="chip chip--pass">ok</span></td></tr>
+          <tr><td class="mono">1.9594903632E+11</td><td>Excel float coercion</td><td>Expand, recompute lost check digit</td><td><span class="chip chip--pass">recovered</span></td></tr>
+          <tr><td class="mono">1.95949E+11</td><td>Excel, 6 digits gone</td><td>Detect precision loss, refuse</td><td><span class="chip chip--fail">dropped</span></td></tr>
+          <tr><td class="mono">12345678901</td><td>11 digits — ambiguous</td><td>Try both readings, prefer valid checksum</td><td><span class="chip chip--watch">flagged</span></td></tr>
+          <tr><td class="mono">04963406</td><td>UPC-E compressed</td><td>GS1 expansion table, verify check</td><td><span class="chip chip--pass">expanded</span></td></tr>
+          <tr><td class="mono">0195949036323</td><td>EAN-13, US prefix</td><td>Strip to UPC-A</td><td><span class="chip chip--pass">ok</span></td></tr>
+          <tr><td class="mono">10195949036320</td><td>GTIN-14 <em>case</em> code</td><td>Unwrap to the each, search that</td><td><span class="chip chip--pass">unwrapped</span></td></tr>
+          <tr><td class="mono">"8 12345 67890 1"</td><td>Human-readable spacing</td><td>Strip non-digits</td><td><span class="chip chip--pass">ok</span></td></tr>
+          <tr><td class="mono">195949036324</td><td>Typo — bad check digit</td><td>Keep digits, never "fix"</td><td><span class="chip chip--fail">flagged</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Three decisions worth defending</h3>
+
+    <p><strong>The 11-digit ambiguity is real and unresolvable from length alone.</strong> Eleven digits is either a UPC-A whose leading zero Excel ate, or a UPC-A body that never included its check digit. Both are common. We compute the check digit for each reading and prefer the one that validates; when both validate we keep the zero-padded reading and attach <code>AMBIGUOUS_11_DIGIT</code> so the interface can say so rather than pretending.</p>
+
+    <p><strong>We refuse to silently repair a bad check digit — with exactly one exception.</strong> Guessing which digit was mistyped turns one bad row into one <em>confidently</em> bad row. But scientific notation is different: float rounding eats the <em>least significant</em> digit, which is precisely the check digit. There we know which digit is untrustworthy, so recomputing is a repair, not a guess. When the mantissa lost more than that one digit, the row is failed outright rather than emitted as a well-formed wrong answer that burns an API call and may false-match.</p>
+
+    <p><strong>Case codes get unwrapped to the each.</strong> Distributor lists are full of GTIN-14 case barcodes, because the distributor sells you a case and prints the case label. But the listing you're pricing against on Walmart is the single unit. Without this derivation those rows come back as clean misses with no explanation — <code>case_gtin_to_each()</code> strips the indicator digit and recomputes the check.</p>
+
+    <p>Canonical storage is <strong>GTIN-14</strong>, because it's the only form that round-trips every input without loss. <code>upc12</code>, <code>ean13</code> and <code>search_value</code> are derived views that return <code>None</code> when the value genuinely doesn't fit — a case code has no UPC-A form, and returning a truncated 12 digits there would silently turn a case into an each.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s05">
+    <span class="sheetnum">Sheet S-05</span>
+    <h2>Spreadsheet ingest</h2>
+
+    <p>There is no standard for distributor price lists. Across a dozen suppliers the UPC column is called <code>UPC</code>, <code>GTIN</code>, <code>Barcode</code>, <code>EAN</code>, <code>U.P.C.</code> or <code>Item UPC</code>; the cost column is <code>Cost</code>, <code>Your Price</code>, <code>Dealer</code>, <code>Wholesale</code>, <code>WSP</code> or <code>Net</code>; and the whole thing sits under four rows of company letterhead.</p>
+
+    <div class="cols">
+      <div>
+        <h3>Header detection</h3>
+        <p>Scores the first 15 rows. A header row has several populated, mostly-non-numeric cells that match the synonym table. Letterhead has one populated cell; data rows are numeric-heavy.</p>
+      </div>
+      <div>
+        <h3>Column mapping</h3>
+        <p>Keyword scoring, most-specific target resolved first, each column claimed at most once. Exact match beats prefix beats substring, weighted by synonym length.</p>
+      </div>
+      <div>
+        <h3>Value parsing</h3>
+        <p><code>$1,234.56</code>, <code>(2.50)</code> accounting negatives, <code>12.5 USD</code>, <code>1,200</code>, <code>12 ea</code>, and the em-dash-for-null convention.</p>
+      </div>
+    </div>
+
+    <div class="note note--warn">
+      <p><strong>The load-bearing detail: resolution order.</strong> <code>case_cost</code> resolves before <code>unit_cost</code>. Without that ordering, a list carrying both columns has its <em>case</em> price silently mapped as the <em>unit</em> price — a 12× or 24× cost error that reads as completely plausible and turns every row into an obvious loser. This is the single most common way a hand-built sourcing spreadsheet goes wrong, and it fails quietly in both directions.</p>
+    </div>
+
+    <p>When a list gives a case cost and a case pack, unit cost is <code>case_cost ÷ case_pack</code>. When it gives both an explicit unit cost <em>and</em> a case cost that disagree by more than 1%, the explicit unit cost wins and the disagreement is recorded on the row rather than resolved silently.</p>
+
+    <p>XLSX support is an optional import — <code>openpyxl</code> in <code>read_only</code> + <code>data_only</code> mode so a 3,000-row workbook isn't fully materialized as cell objects, and so formulas arrive as computed values. If the package is absent the error tells you to export as CSV instead of stack-tracing.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s06">
+    <span class="sheetnum">Sheet S-06</span>
+    <h2>Fee engine</h2>
+
+    <p>Money is <code>Decimal</code> end to end. A fee engine that rounds through <code>float</code> disagrees with the marketplace's own settlement statement by cents per unit — and cents per unit is exactly the margin being argued about.</p>
+
+    <h3>Walmart referral rates — selected</h3>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Category</th><th class="num">Rate</th><th>Price break</th></tr></thead>
+        <tbody>
+          <tr><td>Consumer electronics</td><td class="num">8%</td><td>—</td></tr>
+          <tr><td>Cell phones · Camera</td><td class="num">8%</td><td>—</td></tr>
+          <tr><td>Electronics accessories</td><td class="num">15% / 8%</td><td>break at $100</td></tr>
+          <tr><td>Automotive · Industrial</td><td class="num">12%</td><td>—</td></tr>
+          <tr><td>Furniture</td><td class="num">15% / 10%</td><td>break at $200</td></tr>
+          <tr><td>Grocery · Beauty · Health · Baby</td><td class="num">8% / 15%</td><td>8% at or under $10</td></tr>
+          <tr><td>Jewelry</td><td class="num">20%</td><td>—</td></tr>
+          <tr><td>Watches</td><td class="num">15% / 3%</td><td>break at $1,500</td></tr>
+          <tr><td>Tires</td><td class="num">10%</td><td>—</td></tr>
+          <tr><td>Everything else (28 categories)</td><td class="num">15%</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>An unrecognized category resolves to <code>default</code> at 15% rather than being guessed into an 8% bucket. Fee <em>optimism</em> is the expensive kind of wrong: it promotes a losing row to a candidate, and you discover it after the pallet arrives.</p>
+
+    <h3>What's modelled</h3>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Channel</th><th>Components</th></tr></thead>
+        <tbody>
+          <tr><td>Walmart WFS</td><td>Referral % (tiered) + fulfillment by billable weight (6 tiers, oversize and bulky surcharges from length + girth) + storage (cu ft × rate × months, Q4 doubling)</td></tr>
+          <tr><td>Walmart seller-fulfilled</td><td>Referral % + your own shipping cost</td></tr>
+          <tr><td>eBay</td><td>Final value fee 13.6% of item + shipping charged, dropping to 2.35% above $7,500 + $0.40 per order + optional ad rate + label cost by weight</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p><strong>Billable weight</strong> is the greater of actual and dimensional weight (L×W×H ÷ 139), because that's what carriers bill on and it routinely shifts a light bulky item up a whole fee tier. <strong>eBay revenue includes buyer-paid shipping</strong> on both sides of the ledger — otherwise a $10 item with $6 shipping looks like a loser next to a $16 item with free shipping, when they are the same trade.</p>
+
+    <div class="note note--warn">
+      <p><strong>Treat every rate table as configuration, not truth.</strong> Marketplace fee schedules change on the marketplace's schedule. Each table cites its source and verification date and the module carries <code>FEE_SCHEDULE_VERSION = "2026-07-26"</code>. When a verdict looks wrong the first question is always "is the rate card current" — a stale referral rate is a silent two-point margin error across every row of every list. These are published US rates; negotiated rates, fee holidays and account-specific exceptions are not modelled. Re-derive them from your own settlement reports before running real money through this.</p>
+    </div>
+
+    <p><strong>Not modelled:</strong> returns, chargebacks, WFS inbound freight, prep and labeling, shrink, and the cost of your own time. A 25% ROI floor is doing the work of absorbing those — which is why the default threshold is 25% and not 5%.</p>
+
+    <p>When weight or dimensions are unknown, the engine substitutes a documented default and tags the result <code>assumed_weight</code> / <code>assumed_cubic_feet</code>. That flag rides all the way to the verdict, so a candidate built on a guessed weight is visibly different from one built on measured dimensions and can never reach <span class="chip chip--pass">pass</span> silently.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s6b">
+    <span class="sheetnum">Sheet S-06b</span>
+    <h2>Landed cost</h2>
+
+    <p>The number on the price list is the <em>invoice</em> cost. By the time a unit is sellable it has also absorbed freight, prep, packaging, duty, payment fees, and a share of the units that arrived broken or came back. Scoring on invoice cost overstates margin — and it overstates it <strong>unevenly</strong>, which is what makes it dangerous. It doesn't shift every row by the same amount; it reorders them.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Grain</th><th>Components</th><th>Allocation</th></tr></thead>
+        <tbody>
+          <tr><td>Per shipment</td><td>LTL freight, customs entry, pallet</td><td>Split across units <code>per_unit</code> / <code>by_weight</code> / <code>by_cube</code> — freight is billed by weight, so a heavy SKU and a light one in the same truck must not split it evenly</td></tr>
+          <tr><td>Per case</td><td>Inbound handling, case labels</td><td>Divided by case pack</td></tr>
+          <tr><td>Per unit</td><td>Polybag, label, prep labor, inspection, the unit's own box</td><td>Direct</td></tr>
+          <tr><td>Rate on goods</td><td>Duty / tariff, payment or FX fee</td><td>Multiplied against invoice value — real cash out</td></tr>
+          <tr><td>Reserve</td><td>Shrink, unsellable returns</td><td><strong>Divides</strong>, doesn't add — see below</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note note--warn">
+      <p><strong>Reserves divide, they don't add.</strong> You don't pay shrink and returns per unit — you <em>lose that fraction of units</em>, and the survivors have to carry the cost of all of them. A 3% shrink and 5% return rate means 92 units carry the cost of 100, which is an 8.7% cost increase, not 8%. Adding the rates instead of dividing by the survival rate understates the hit at exactly the rates that matter.</p>
+    </div>
+
+    <p>Every component is optional and defaults to zero, with an <code>assumptions</code> flag recording what was left unspecified — an invented freight number that happens to be wrong is worse than a visible gap, because it looks like it was measured. A <code>LandedCost</code> carrying nothing but <code>invoice_cost</code> behaves exactly like the raw-cost path.</p>
+
+    <div class="term">
+      <div class="term__bar">landed cost — freight $0.42/lb + $0.83 prep/pack/QC + 3% return reserve</div>
+<pre>  Stainless Steel French Press 34oz   invoice $  12.00 -> landed $  14.14 <b>(+17.8%)</b>
+     freight $0.88 | prep $0.55 | pack $0.18 | QC $0.10 | survives 97%
+  Bluetooth Earbuds Pro              invoice $  40.00 -> landed $  42.35 <b>(+5.9%)</b>
+     freight $0.25 | prep $0.55 | pack $0.18 | QC $0.10 | survives 97%
+  Dog Chew Toy Variety 5-pack        invoice $   4.00 -> landed $   4.98 <b>(+24.5%)</b>
+     freight $0.00 | prep $0.55 | pack $0.18 | QC $0.10 | survives 97%
+  Air Purifier HEPA Medium Room      invoice $ 180.00 -> landed $ 192.48 <b>(+6.9%)</b>
+     freight $5.88 | prep $0.55 | pack $0.18 | QC $0.10 | survives 97%</pre>
+    </div>
+
+    <p>The uplift ranges from <strong>5.9% to 24.5%</strong> across four rows of the same list — a 4× spread. That's the entire argument: a flat "add 15% for costs" rule would make the earbuds look worse than they are and the dog toys look better. Returns are reserved at 3% here, a deliberate cushion above the measured sub-1% rate; the reserve absorbs the damage and shrink that aren't separately measured, and being wrong in that direction costs a marginal row while being wrong the other way costs a pallet.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s6c">
+    <span class="sheetnum">Sheet S-06c</span>
+    <h2>Selling plans and subscriptions</h2>
+
+    <p>A monthly subscription is a <strong>fixed</strong> cost, and the instinct — take Amazon's $39.99, divide by expected units, add it to every row — is a real and expensive mistake in both directions.</p>
+
+    <ul>
+      <li><strong>If you already pay it,</strong> it's sunk for the next SKU decision. Loading a share onto every candidate makes marginal-but-real winners look like losers, and you decline orders that would have made money.</li>
+      <li><strong>If you don't yet pay it,</strong> it isn't per-unit at all — it's a threshold question, and "does this plan pay for itself" has a volume answer, not a per-unit one.</li>
+    </ul>
+
+    <p>So the module does two separate things and never mixes them. <strong>Marginal rates</strong> — an eBay Store's FVF cut, Amazon Individual's $0.99/item — are genuinely per-unit and flow into the fee engine. <strong>Fixed fees</strong> are reported once per channel as a breakeven volume.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Plan</th><th class="num">Monthly</th><th class="num">Per item</th><th class="num">Fee cut</th><th>Effect on a row</th></tr></thead>
+        <tbody>
+          <tr><td>eBay — no store</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td>13.6% FVF + $0.40</td></tr>
+          <tr><td>eBay Starter</td><td class="num">$4.95</td><td class="num">—</td><td class="num">—</td><td>Listings only, no fee change</td></tr>
+          <tr><td>eBay Basic</td><td class="num">$21.95</td><td class="num">—</td><td class="num">0.9pp</td><td>$5.78 → $5.40 on a $42.50 sale</td></tr>
+          <tr><td>eBay Premium</td><td class="num">$74.95</td><td class="num">—</td><td class="num">0.9pp</td><td>Same rate, more listings</td></tr>
+          <tr><td>eBay Anchor</td><td class="num">$299.95</td><td class="num">—</td><td class="num">0.9pp</td><td>Same rate, more listings</td></tr>
+          <tr><td>Amazon Individual</td><td class="num">—</td><td class="num">$0.99</td><td class="num">—</td><td>Adds $0.99 to every unit's fees</td></tr>
+          <tr><td>Amazon Professional</td><td class="num">$39.99</td><td class="num">—</td><td class="num">—</td><td>Removes the per-item fee</td></tr>
+          <tr><td>Walmart Marketplace</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td>No subscription at all</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="term">
+      <div class="term__bar">plan breakeven — computed, not hardcoded</div>
+<pre>  ebay: holding 'basic' | at 124 units/mo the cheapest plan is <b>'basic'</b>
+     none -> starter: No marginal saving — the upgrade buys listings, not fees.
+     none -> basic:   Pays off above ~$2,438.89 monthly sales (~57 units at $42.50).
+     none -> premium: Pays off above ~$8,327.78 monthly sales (~196 units).
+     none -> anchor:  Pays off above ~$33,327.78 monthly sales (~784 units).
+  amazon: holding 'professional' | at 124 units/mo the cheapest plan is <b>'professional'</b>
+     individual -> professional: Pays off above <b>~40 units/month</b> (saves $0.99/item).</pre>
+    </div>
+
+    <p>The Amazon crossover lands on the well-known ~40 units/month, which is a useful check that the model is right — but it's <em>derived</em> from the two plans' fee structures rather than written down, so when Amazon changes either number the answer moves on its own.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s6d">
+    <span class="sheetnum">Sheet S-06d</span>
+    <h2>Fee calibration — your settlements beat any rate card</h2>
+
+    <p>Published rate cards are an approximation of what you actually get charged. They don't know your contract-category assignments, your incentive programs, or that a rate changed last Tuesday. Your settlement report knows all of it, because it <em>is</em> what happened.</p>
+
+    <p>The first real reconciliation import proved the point in one row.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Fee</th><th class="num">Published</th><th class="num">Actual</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr><td>Referral, Automotive &amp; Powersports</td><td class="num">12.00%</td><td class="num">12.00%</td><td><span class="chip chip--pass">confirmed</span> — the reason to trust the table for products you haven't sold</td></tr>
+          <tr><td>WFS fulfillment, 16 oz item</td><td class="num">$3.45 / $4.95</td><td class="num">$4.45</td><td><span class="chip chip--fail">neither tier</span> — sits between the published 0–1 lb and 1–2 lb bands</td></tr>
+          <tr><td>Net proceeds on the order</td><td class="num">$4.38</td><td class="num">$3.46</td><td><span class="chip chip--fail">29% optimistic</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>So the rule is: <strong>an observed fee always beats a published rate.</strong> Published tables become the fallback for products you've never sold, and every import shrinks that set.</p>
+
+    <h3>Why $4.45 matched no weight tier</h3>
+
+    <p>A settlement report answered it outright. Every one of twelve <code>FulfillmentFee</code> rows for an $8.99 item carried:</p>
+
+    <div class="term">
+      <div class="term__bar">settlement.csv — the column that explained the mismatch</div>
+<pre>  Transaction Type   FulfillmentFee
+  Billing Method     <b>Under$10</b>
+  Net Payable        4.45      <span class="c">x12 lines, across three separate weeks</span></pre>
+    </div>
+
+    <p><strong>WFS prices items under $10 on a separate flat schedule, not on the weight tiers at all.</strong> That's why $4.45 sat between the published 0–1 lb ($3.45) and 1–2 lb ($4.95) bands — it was never being priced by weight. It's the kind of rule that's easy to miss on a rate card and impossible to miss in a settlement, and it matters disproportionately for wholesale: sub-$10 items are exactly where thin margins live, so mispricing their fulfillment by a dollar decides the whole category.</p>
+
+    <p>With the rule encoded, the engine reproduces the real order exactly: <strong>commission $1.08, WFS $4.45, net $3.46.</strong></p>
+
+    <h3>Validation across four SKUs and three categories</h3>
+
+    <p>A second reconciliation export from an earlier period covered four SKUs across three categories and both fulfillment types. Every published referral rate held to the basis point:</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Category</th><th class="num">Observed</th><th class="num">Published</th><th class="num">Samples</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>Home &amp; Garden</td><td class="num">15.00%</td><td class="num">15%</td><td class="num">23</td><td><span class="chip chip--pass">match</span></td></tr>
+          <tr><td>Tools &amp; Home Improvement</td><td class="num">15.00%</td><td class="num">15%</td><td class="num">2</td><td><span class="chip chip--pass">match</span></td></tr>
+          <tr><td>Automotive &amp; Powersports</td><td class="num">12.00%</td><td class="num">12%</td><td class="num">3</td><td><span class="chip chip--pass">match</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>That's the answer to the question the WFS mismatch raised: <strong>the referral table is trustworthy; it was only the fulfillment side that was wrong.</strong> Worth knowing, because it means the published rates can be relied on for categories you haven't sold in yet.</p>
+
+    <p>The Under-$10 schedule also held at a second price point — the same SKU at <strong>$5.93</strong> in the earlier period was charged the same flat $4.45 as at $8.99. Flat across the band, not scaled within it. The first over-$10 observation is $5.75/unit on a $10.63 item across 23 lines, which happens to match the published 3–20 lb tier base exactly; one SKU isn't enough to conclude the weight tiers govern above $10, so that stays a note rather than a constant.</p>
+
+    <div class="note note--warn">
+      <p><strong>Two costs the model was missing entirely,</strong> both found by splitting fee lines on their description rather than lumping anything WFS-shaped into "fulfillment":</p>
+      <p><strong>WFS Return Shipping fee — $7.00.</strong> Charged when a customer sends an item back. This is <em>not</em> the same as the return reserve in landed cost, which covers the value of goods that come back unsellable: you pay this freight whether or not the unit is resellable, so both apply. At a 3% return rate that's $0.21/unit — small, until you notice it lands on exactly the sub-$10 rows where $0.21 is a tenth of the margin.</p>
+      <p><strong>Walmart Shipping Label Service Charge</strong> — $7.69 on an $11.00 item, $5.95 on a $14.99 item. The seller-fulfilled equivalent, and real observed label costs where the model was estimating from weight.</p>
+    </div>
+
+    <div class="note note--warn">
+      <p><strong>Two traps in the same file.</strong> One order billed $2.95 rather than $4.45 — a $1.50 discount — followed by a separate <code>DiscountAdjustment</code> line recouping it, because "a discount was applied in error." Calibrating on net payable would have taught a fulfillment fee that isn't real; the parser uses the pre-discount amount and reports clawbacks separately.</p>
+      <p>And Walmart's own reports disagree on category names: the reconciliation report calls this item <em>Automotive &amp; Powersports</em>, the settlement calls it <em>Vehicles, Parts &amp; Accessories</em>. Same item, same 12%. Both spellings have to resolve to one key or the calibration splits in two and each half looks under-sampled.</p>
+    </div>
+
+    <div class="term">
+      <div class="term__bar">same order, both ways — actual was commission $1.08, WFS $4.45, net $3.46</div>
+<pre>  published tables only    commission $1.08   WFS $<span class="f">3.45</span>   net $<span class="f">4.38</span>
+    ['assumed_cubic_feet']
+
+  with YOUR settlements    commission $1.08   WFS $<span class="p">4.45</span>   net $<span class="p">3.38</span>
+    ['commission_rate_from_your_settlements',
+     'wfs_fee_observed_product_type_n2', 'assumed_cubic_feet']</pre>
+    </div>
+
+    <p><code>FeeCalibration</code> aggregates observations by category, SKU and product type, using <strong>medians rather than means</strong> so one promotional order can't move the estimate. Sample counts ride along, so a verdict can distinguish "measured 40 times" from "measured once".</p>
+
+    <h3>Two details the parser has to get right</h3>
+
+    <ul>
+      <li><strong>WFS fulfillment posts as a separate adjustment row</strong>, sometimes under a different purchase order and in a different settlement period than the sale it belongs to. Matching is by <code>Purchase Order #</code>, not row adjacency.</li>
+      <li><strong>Long-term storage has no purchase order at all</strong> — it posts against inventory. Those lines are emitted as synthetic rows rather than dropped, because storage is precisely the fee that punishes slow movers, and a parser that silently discards it would make dead stock look free.</li>
+    </ul>
+
+    <div class="note note--warn">
+      <p><strong>The two channels compute their fee base in opposite directions,</strong> and both were verified from real documents:</p>
+      <p><strong>eBay charges its percentage on the sales tax it collects.</strong> $26.50 item + $0.00 shipping + $1.86 tax = $28.36 base × 13.6% = $3.86. Computing on item price alone understated the fee by ~7%. The per-order fixed fee is also tiered on <em>order total</em> — $0.40 above $10.01, $0.30 at or below — and Promoted Listings ad fees use the same tax-inclusive base ($2.55 / $28.36 = exactly 9.0%, the set ad rate).</p>
+      <p><strong>Walmart does not.</strong> $1.08 commission on an $8.99 item is 12.00% of the price flat; the $0.69 tax was collected and withheld as a pass-through that never entered the base.</p>
+      <p>The corrected model now reproduces the sample eBay order to the cent: FVF $4.26, label $5.83, ad $2.55, earnings $13.86.</p>
+    </div>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s07">
+    <span class="sheetnum">Sheet S-07</span>
+    <h2>Popularity — the 99% of the battle</h2>
+
+    <p>Margins are arithmetic. Whether the thing sells is the actual question, and every marketplace is deliberately unhelpful about it. So the engine ranks its signals by how close each one is to <em>counting units</em>, and carries that ranking all the way to the screen. A verdict built on observed stock movement and one built on a lifetime review total must not look the same.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Tier</th><th>Signal</th><th>Source</th><th>How close to truth</th></tr></thead>
+        <tbody>
+          <tr><td><span class="chip chip--pass">observed</span></td><td>Inventory depletion</td><td>Walmart · Amazon · eBay</td><td><strong>Counts units.</strong> ~87% of actual on items with visible stock. Measures <em>one seller's</em> movement.</td></tr>
+          <tr><td><span class="chip chip--pass">direct</span></td><td>Exact sold count</td><td>eBay Terapeak / Product Research</td><td><strong>Is the number.</strong> Not an estimate.</td></tr>
+          <tr><td><span class="chip chip--pass">rank</span></td><td>Best Sellers Rank</td><td>Amazon</td><td>20–40% of actual under rank 50k; per-category curves; degrades on the long tail.</td></tr>
+          <tr><td><span class="chip chip--watch">velocity</span></td><td>Review delta</td><td>All three</td><td>Rests entirely on the ~2% review-rate constant — the softest number in the system.</td></tr>
+          <tr><td><span class="chip chip--watch">badge</span></td><td>"500+ bought yesterday"</td><td>Walmart, intermittently</td><td>A floor, not an estimate. But it's same-day truth.</td></tr>
+          <tr><td><span class="chip chip--fail">heuristic</span></td><td>Lifetime reviews ÷ age</td><td>All three</td><td>4,000 reviews over six years says nothing about this month. Ranks; never decides.</td></tr>
+          <tr><td><span class="chip chip--todo">unknown</span></td><td>Nothing</td><td>—</td><td>Cannot be <span class="chip chip--pass">pass</span>.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Inventory depletion — the definitive method</h3>
+
+    <p>This is the answer to "is there something better than review velocity", and it is a large step up. Poll a listing's purchasable quantity, walk the observations in time order, and sum the <em>decreases</em>. An increase is a restock — reset the baseline and count nothing. That sum is units sold: not modelled, observed.</p>
+
+    <p>Two properties make it the best signal available:</p>
+
+    <ul>
+      <li><strong>It measures a specific seller, not the listing.</strong> Every other signal describes the whole listing and then has to be divided by a guessed seller count. Depletion already <em>is</em> the per-offer number, so the engine skips the unit-share division entirely for it — dividing again would understate a good row by a factor of five.</li>
+      <li><strong>It works on all three channels</strong>, with no API approval, no subscription, and no dependence on buyer behavior.</li>
+    </ul>
+
+    <div class="note note--warn">
+      <p><strong>The guard that makes it usable.</strong> A listing reporting 400 units on Monday and 0 on Tuesday almost certainly went out of stock or had a feed error — it did not sell 400 units in a day. Any single-interval drop exceeding 75% of the running baseline is discarded as a correction. Without that guard, one bad observation produces a phantom top-ranked row, which on a velocity-first ranking is the worst failure the system can have.</p>
+      <p>The cost: one probe per SKU per day, and cart-level probing is heavier than a page read. This should run against the <strong>shortlist</strong> — rows that already cleared the fee gates — not against all 3,000 rows of every list. Roughly 50–200 SKUs polled daily, not 3,000.</p>
+    </div>
+
+    <h3>What changed on eBay</h3>
+
+    <div class="note">
+      <p>The original plan routed exact sold-counts through eBay's Marketplace Insights API. As of mid-2026 that is a Limited Release effectively closed to anyone who isn't a major partner — developers report being denied outright. <strong>Terapeak / Product Research inside Seller Hub is the real path:</strong> free with a seller account, gives exact units sold over a window, and is an authenticated page rather than an API. So it's an import/session-scrape, not an API call. <code>sold_count_window_days</code> is carried explicitly on the snapshot so a 30-day Product Research export isn't silently divided by three like a 90-day one.</p>
+    </div>
+
+    <p>Where a channel gives nothing better, <strong>unit share</strong> still converts listing-wide demand into your demand: <code>estimated_monthly_sales ÷ (seller_count + 1)</code>. The <code>+1</code> is you. Five sellers on a 300-unit/month item is 50 each and a real business; five on a 40-unit/month item is a price war with extra steps.</p>
+
+    <div class="note">
+      <p><strong>The moat is a table that has to start filling before it's worth anything.</strong> Depletion and review velocity both require longitudinal data that cannot be bought or backfilled — you cannot go back and observe last Tuesday's stock count. <code>listing_snapshots</code> is written on every live match, not only by the cron, so it accumulates from the first crunch. Cached matches are deliberately skipped: re-storing identical numbers under a new timestamp would fabricate a flat history and make a volatile item look stable.</p>
+    </div>
+
+    <p><strong>Price stability</strong> comes from the same table: coefficient of variation (σ/μ), scale-free so 5% movement means the same thing on a $12 item and a $400 one. Fewer than three observations returns <em>stable</em> rather than <em>volatile</em> — "we haven't watched long enough" must not read as a red flag.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s08">
+    <span class="sheetnum">Sheet S-08</span>
+    <h2>Verdict scoring</h2>
+
+    <p>Deterministic, zero LLM — per Barkain's own classification rule a profit calculator is Traditional, and an answer someone is about to spend $4,000 on should be reproducible and auditable rather than resampled.</p>
+
+    <div class="cols">
+      <div>
+        <h3><span class="chip chip--pass">pass</span></h3>
+        <p>Every hard threshold cleared and no soft flags. Act on it.</p>
+      </div>
+      <div>
+        <h3><span class="chip chip--watch">watch</span></h3>
+        <p>No hard failure, but something we can't yet tell — no demand history, no distributor, an assumed weight. Re-crunch after the snapshot worker runs.</p>
+      </div>
+      <div>
+        <h3><span class="chip chip--fail">fail</span></h3>
+        <p>A hard threshold failed. It loses money, nobody buys it, or the competition is already too deep.</p>
+      </div>
+    </div>
+
+    <p>Three outcomes rather than two, because a binary pass/fail throws away the most interesting rows. Something that clears every profit threshold but has unknown demand isn't a failure — it's a row where the snapshot database hasn't run long enough yet, and it should come back next week. <span class="chip chip--watch">watch</span> is also the queue that tells the snapshot worker which listings are worth polling.</p>
+
+    <h3>Ranking: velocity beats margin</h3>
+
+    <p>Rows sort by <strong>annualized ROI</strong> — not margin, not raw monthly profit. For a capital-constrained buyer the scarce resource is cash, and what matters is how many times a year that cash comes back with a profit attached.</p>
+
+    <div class="note">
+      <p style="font-family: var(--mono); font-size: 14px; color: var(--ink);">annualized_roi&nbsp;=&nbsp;roi_pct&nbsp;×&nbsp;365&nbsp;÷&nbsp;(days_to_sell_through&nbsp;+&nbsp;reorder_lead_time)</p>
+      <p>A 60% margin turning over twice a year is a worse use of a purchase order than 22% turning over eleven times. The second earns more on the same dollar, with less shelf risk, less price-war exposure, and less chance of holding dead stock into Q4 storage rates.</p>
+    </div>
+
+    <p><strong>Lead time in the denominator is not a detail.</strong> Capital doesn't redeploy when the last unit ships — it redeploys when the next case lands. An item that clears in six days on a three-week reorder cycle turns over about 14 times a year, not 60. Building the metric without lead time produced four-figure percentages on every fast mover in testing and reordered the whole list on an artifact of the formula.</p>
+
+    <h3>Default thresholds</h3>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Gate</th><th class="num">Default</th><th>Kind</th><th>Rationale</th></tr></thead>
+        <tbody>
+          <tr><td>Days to sell through</td><td class="num">≤ 90</td><td>hard</td><td><strong>The velocity gate.</strong> Fails regardless of margin</td></tr>
+          <tr><td>Annualized ROI</td><td class="num">150%</td><td>hard</td><td>25% ROI on a 90-day turn is ~101% annualized — so clearing the per-order bar is necessary but not sufficient when the item is slow</td></tr>
+          <tr><td>Reorder lead time</td><td class="num">14 days</td><td>input</td><td>Part of the turn cycle. Overseas sourcing is 45–90</td></tr>
+          <tr><td>Net profit / unit</td><td class="num">$3.00</td><td>hard</td><td>Below this, returns and shrink eat it</td></tr>
+          <tr><td>ROI per turn</td><td class="num">25%</td><td>hard</td><td>Absorbs the unmodelled costs</td></tr>
+          <tr><td>Monthly unit share</td><td class="num">30</td><td>hard</td><td>Below this it isn't worth the SKU slot</td></tr>
+          <tr><td>Price stability</td><td class="num">CV ≤ 0.15</td><td>hard</td><td>A 30% swing is a price war you'd be joining</td></tr>
+          <tr><td>Capital per SKU</td><td class="num">optional</td><td>hard</td><td>A great ratio needing a $9k pallet isn't a candidate on a $5k budget</td></tr>
+          <tr><td>Brand access</td><td class="num">—</td><td>soft</td><td>Restricted brands are demoted, never hidden</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>The slider</h3>
+
+    <p><code>velocity_bias</code> is a continuous 0.0–1.0 dial, not a mode switch. Drag it and the list reorders between the two things a buyer might mean by "best".</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th class="num">Bias</th><th>Ranks by</th><th>Who wants this</th></tr></thead>
+        <tbody>
+          <tr><td class="num">0.00</td><td>Net dollars per unit</td><td>Storage is free, cash isn't tight, you'd rather touch fewer units</td></tr>
+          <tr><td class="num">0.50</td><td>Geometric mean of both</td><td>A row has to be genuinely decent on both axes</td></tr>
+          <tr><td class="num">0.75</td><td>Weighted toward turns <em>(default)</em></td><td>Capital-constrained, reordering regularly</td></tr>
+          <tr><td class="num">1.00</td><td>Annualized ROI</td><td>Pure velocity — churn the cash as fast as it will go</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <p><strong>The blend is a weighted geometric mean, not arithmetic.</strong> Arithmetic lets one axis rescue a zero on the other — a 900%-annualized row making $0.02 a unit would still place well at "balanced", which is not what balanced means to anyone. Geometric requires a row to be decent on <em>both</em> axes to score in the middle, which is the intuition the dial is supposed to express.</p>
+      <p>Both axes are normalized against the visible list before blending, so the dial behaves identically on a list of $4 consumables and a list of $400 tools. The margin axis is <strong>dollars per unit, not margin percent</strong> — a 90% margin on a $2 item isn't what someone dragging toward "margin" is asking for.</p>
+    </div>
+
+    <div class="term">
+      <div class="term__bar">blend_score(velocity, margin, bias) — crossover lands exactly at 0.5</div>
+<pre>                        fast-thin row      slow-fat row      winner
+  bias 0.00  (margin)       0.100              <span class="p">0.900</span>          fat
+  bias 0.25                 0.173              <span class="p">0.520</span>          fat
+  bias 0.50  (balanced)     0.300              0.300          tie
+  bias 0.75  (default)      <span class="p">0.520</span>              0.173          fast
+  bias 1.00  (velocity)     <span class="p">0.900</span>              0.100          fast</pre>
+    </div>
+
+    <p>Verdict tier remains the primary sort key at every position on the dial, so no amount of blended score floats a <span class="chip chip--fail">fail</span> above a <span class="chip chip--pass">pass</span>. <strong>Reorder lead time is per-product</strong> — the supplier who ships a case in four days is not the one who takes nine weeks on a container, and a single global number flattens exactly the difference that decides between two otherwise equal rows.</p>
+
+    <p>Each channel also reports a <strong>breakeven sale price</strong>: the lowest price that still clears zero, holding fixed fees constant. When five sellers are racing each other down, that's a far more actionable number than the current buy box.</p>
+
+    <p>And on the part software can't automate — whether an authorized distributor will actually sell to you, and whether the brand is gated on your seller account — <code>brand_access</code> keeps a per-brand ledger and candidates on unknown brands auto-generate a distributor inquiry draft. Restricted brands are <em>demoted, not hidden</em>: knowing there's a $9/unit spread behind a gate is exactly what tells you which gating application to file.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s8b">
+    <span class="sheetnum">Sheet S-08b</span>
+    <h2>Projected vs. actual — the loop that makes it converge</h2>
+
+    <p>Every demand number the scanner produces is an estimate with a known error profile. BSR curves run 20–40% off. Review velocity rests on a 2% constant that varies by category. Depletion is good but samples one offer. Right now those errors are <em>unmeasured</em>, which means they're unmanaged.</p>
+
+    <p>The fix is boring and powerful: write down every prediction at the moment it's made, then compare it against what actually sold. <strong>Both marketplaces expose first-party seller APIs for this</strong> — no scraping, no approval gauntlet, because it's your own data.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Channel</th><th>API</th><th>Gives</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="3">Walmart</td><td>Orders API</td><td>Shipped units per SKU per window</td></tr>
+          <tr><td>Reports API — reconciliation</td><td>Realized revenue and every fee. Already parsed by <code>recon.py</code></td></tr>
+          <tr><td>Insights API</td><td>Listing-level performance and listing quality</td></tr>
+          <tr><td rowspan="3">eBay</td><td>Sell Fulfillment <code>getOrders</code></td><td>Actual units sold</td></tr>
+          <tr><td>Sell Finances <code>getTransactions</code></td><td>Exact realized fees, per order</td></tr>
+          <tr><td>Sell Analytics <code>getTrafficReport</code></td><td>Impressions, listing views, <strong>sales conversion rate</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <p><strong>The eBay traffic report is a genuine bonus.</strong> Conversion rate is the missing term in every demand estimate — knowing a listing got 4,000 impressions and converted at 1.2% explains a miss in a way a units number never can. It separates "nobody wants this" from "nobody saw this", and those call for opposite responses.</p>
+      <p>Worth noting the contrast with Sheet S-07: eBay's <em>Marketplace Insights</em> API (competitor sold data) is effectively closed, but the <em>Sell</em> APIs covering your own account are open to any seller with a dev key. The hard data to get is other people's; your own is available.</p>
+    </div>
+
+    <h3>Three reports, three different numbers, all correct</h3>
+
+    <p>The first real export of all three Walmart reports for one SKU produced this — and the disagreement is the useful part:</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Report</th><th>Window</th><th class="num">Units</th><th>What it actually measures</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">orders.xlsx</td><td>26 days</td><td class="num">14</td><td><strong>Demand</strong> — what customers asked for</td></tr>
+          <tr><td class="mono">inventoryReconciliation.csv</td><td>29 days</td><td class="num">12</td><td><strong>Fulfilled</strong> — what left the warehouse</td></tr>
+          <tr><td class="mono">settlement.csv</td><td>30 days</td><td class="num">12</td><td><strong>Billed</strong> — what Walmart charged you for</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="term">
+      <div class="term__bar">cross_check() — same SKU, three sources reconciled</div>
+<pre>  ordered_units          14      <span class="c">11 DELIVERED + 3 ACKNOWLEDGED</span>
+  in_flight_units         3
+  sold_units             12
+  billed_units           12
+  shipped_vs_billed_gap   0      <span class="p">clean — no lost or unbilled units</span>
+
+  demand_rate_monthly  16.2      <span class="c">from orders — the right number for reordering</span>
+  units_on_hand          37
+  months_of_cover       3.0</pre>
+    </div>
+
+    <div class="note note--warn">
+      <p><strong>Using the billed count as a demand estimate under-reads demand by the entire in-flight backlog</strong> — here 3 of 14 units, or 21%. That's not noise, it's a systematic downward bias, and it biases every reorder decision in the same direction. Orders for demand, billed for cash. The scanner now models them as separate estimators for exactly this reason.</p>
+    </div>
+
+    <p>The inventory reconciliation report is also the depletion signal <em>without the inference</em>. For SKUs you already own, Walmart reports units shipped directly, with Lost / Found / Removed / Transferred broken into their own columns — so the restock detection and outlier guarding that the cart-quantity estimator has to do is simply handled at the source. Cart scraping is what that <em>approximates</em> for prospective items you don't own yet.</p>
+
+    <h3>What the loop learns</h3>
+
+    <p>Pairing matches each actual to the latest forecast made <em>before</em> the window opened — a prediction made after the sales it's judged on isn't a prediction. Two things fall out:</p>
+
+    <div class="term">
+      <div class="term__bar">simulated: BSR runs hot in Pet Supplies, depletion is accurate</div>
+<pre>  SCOREBOARD
+    comparisons          12
+    median_ratio         0.805      <span class="c">actual / predicted</span>
+    mape                 20.2%
+    within_25_pct        50.0%
+    over_predicted_pct   66.7%      <span class="c">the direction that buys dead stock</span>
+
+  LEARNED CORRECTIONS
+    <span class="c">tier</span> observed              n=6   ratio <span class="p">1.01</span>   mape  <span class="p">3.0%</span>   -> apply 1.01
+    <span class="c">tier</span> rank                  n=6   ratio <span class="w">0.625</span>  mape <span class="w">37.5%</span>   -> apply 0.625
+    <span class="c">net per unit bias</span>          n=12  ratio 0.942          <span class="c">-> points at fees, not demand</span>
+
+  APPLIED TO A FRESH ESTIMATE
+    rank / Pet Supplies   200 units -> <b>125</b>  (tier+category_n6)
+    observed / Automotive 200 units -> <b>202</b>  (tier+category_n6)
+    rank / Toys (unseen)  200 units -> <b>125</b>  (tier_n6, falls back to the tier)</pre>
+    </div>
+
+    <ul>
+      <li><strong>Per-tier bias.</strong> If <code>rank</code> consistently predicts 1.6× what you sell in Pet Supplies, that's a correction factor, not noise. The more specific <code>(tier, category)</code> key wins when it has samples; otherwise it falls back to the tier.</li>
+      <li><strong>Honest confidence.</strong> A tier within 15% across 40 SKUs deserves to promote a row to <span class="chip chip--pass">pass</span>. A tier that's been off by 3× deserves <span class="chip chip--watch">watch</span> no matter how good the margin looks.</li>
+    </ul>
+
+    <div class="note note--warn">
+      <p><strong>Three guards keep the loop from learning the wrong lesson.</strong> Corrections are <em>reported</em> below five paired samples but not <em>applied</em> — two data points can produce a 0.4× factor that's pure chance, and a premature correction moves every row while looking authoritative. Factors are clamped to 0.25×–4×, because anything outside that almost always means a mis-paired SKU rather than genuinely 6×-off demand. And medians, not means, so one viral week can't permanently reset the model.</p>
+      <p>The <code>net_per_unit</code> bias is tracked separately on purpose. Running below 1.0 means the <em>fee and landed-cost</em> model is optimistic — a <code>recon.py</code> problem, not a demand problem. Saying which one is wrong saves an afternoon of tuning the wrong thing.</p>
+    </div>
+
+    <p>Forecasts are recorded only for rows you actually purchase. A prediction for something never bought has no actual to compare against, so storing it would add noise to the accuracy numbers without adding information. Each row carries the <code>fee_schedule_version</code> and thresholds that produced it, so a forecast made under an old rate card isn't silently judged against actuals from a new one.</p>
+
+    <p>Like the snapshot table, this can't be bought or borrowed — it depends on your categories, your price points, your listings. It starts compounding the first time you buy something the tool recommended.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s09">
+    <span class="sheetnum">Sheet S-09</span>
+    <h2>Live run</h2>
+
+    <p>Verbatim output of <code>python3 sourcing/demo_crunch.py</code> against a deliberately dirty 9-row fixture. Channel responses are canned; every other stage is the real code path.</p>
+
+    <div class="term">
+      <div class="term__bar">$ python3 sourcing/demo_crunch.py — ingest + normalize</div>
+<pre>  header row       : 4
+  columns mapped   : {'upc': 1, 'case_pack': 4, 'case_cost': 3, 'moq': 5,
+                      'msrp': 6, 'brand': 2, 'description': 0}
+  rows             : 9 (0 skipped)
+  UPCs usable      : 7/9 (77.8%)
+  ! Skipped 4 row(s) above the header (letterhead or notes).
+
+  <span class="p">[ok ]</span> 195949036323      -> 00195949036323  search=195949036323  clean
+  <span class="p">[ok ]</span> 0812345678901     -> 00812345678901  search=812345678901  clean
+  <span class="p">[ok ]</span> 7.7768100005E+11  -> 00777681000055  search=777681000055  <span class="c">SCIENTIFIC,CHECK_RECOVERED</span>
+  <span class="p">[ok ]</span> 88381675681       -> 00883816756817  search=883816756817  <span class="c">CHECK_DIGIT_APPENDED</span>
+  <span class="p">[ok ]</span> 04963406          -> 00049000006346  search=049000006346  <span class="c">UPCE_EXPANDED</span>
+  <span class="p">[ok ]</span> 10195949036320    -> 10195949036320  search=195949036323  <span class="c">CASE_GTIN</span>
+  <span class="f">[DROP]</span> 1.95949E+11      -> —               search=—             <span class="c">PRECISION_LOST</span>
+  <span class="f">[DROP]</span> 999              -> —               search=—             <span class="c">TOO_SHORT</span>
+  <span class="p">[ok ]</span> 036000291452      -> 00036000291452  search=036000291452  clean</pre>
+    </div>
+
+    <div class="term">
+      <div class="term__bar">verdict — landed cost @ 3% return reserve, no store plans, signal tier per row</div>
+<pre>  #  ITEM                       CH          INV    LAND    SELL    NET   ROI   /MO  DAYS    ANN  SIGNAL     VERDICT
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  1  Stainless Steel French Pr  ebay      12.00   14.88   42.50  12.19   82%   124     6  1510%  <span class="p">observed</span>   <span class="p">PASS</span>
+  2  Bluetooth Earbuds Pro      walmart   40.00   44.58   69.99  16.28   37%   120     6   666%  <span class="p">observed</span>   <span class="w">WATCH</span>
+  3  Dog Chew Toy Variety 5-pa  ebay       4.00    5.24   21.99   5.86  112%     2   939    43%  <span class="c">rank</span>       <span class="f">FAIL</span>
+  4  Air Purifier HEPA Medium   walmart  180.00  202.62  249.99  -0.36   -0%     4   120    -0%  <span class="p">observed</span>   <span class="f">FAIL</span>
+  5  Silicone Baking Mat Set    —                                                                <span class="c">unknown</span>    <span class="f">FAIL</span>
+  6  Discontinued - do not ord  —                                                                <span class="c">unknown</span>    <span class="f">FAIL</span>
+  7  Ceramic Nonstick Fry Pan   walmart   45.00   51.28   54.00 -11.37  -22%     4   389   -20%  <span class="c">rank</span>       <span class="f">FAIL</span>
+  8  Cordless Drill 20V Kit     walmart  330.00  364.12  379.00 -51.08  -14%   275     1  -341%  <span class="c">velocity</span>   <span class="f">FAIL</span>
+  9  LED Desk Lamp with USB-C   walmart   23.00   27.14   26.94  -9.77  -36%    50     7  -620%  <span class="c">velocity</span>   <span class="f">FAIL</span></pre>
+    </div>
+
+    <p><strong>Row 4 is the case the whole tool exists for.</strong> On invoice cost the air purifier showed $22.26/unit — <em>more raw profit than the winner</em> — and a margin-sorted spreadsheet puts it near the top. Costing $5.88 of freight onto a 14 lb item takes it to <strong>$9.78 at 5% ROI</strong>, which fails. It was never a winner; at invoice cost it just looked like one, and no ranking cleverness would have caught that. This is the argument for landed cost in one row.</p>
+
+    <p><strong>Row 3 is the argument for velocity-first.</strong> The dog toys have the best ROI on the board at 112% — better than the winner's 82% — and under the old profit-ranked ordering they placed second. But BSR says the item moves about 2 units/month to you, so the minimum order takes <strong>939 days</strong> to clear. Annualized, that 112% is 43%. It fails, correctly, on a threshold that raw margin cannot see.</p>
+
+    <p>Rows 1 and 2 both carry the <span class="chip chip--pass">observed</span> tier — real stock depletion, not a review-rate guess. The earbuds series includes a restock (180 → 60 → 140) that the estimator correctly excludes rather than counting as negative sales. Row 2 stays <span class="chip chip--watch">watch</span> despite the strongest economics on the list, because the brand has no confirmed distributor: the number is real but unreachable until that's resolved.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s10">
+    <span class="sheetnum">Sheet S-10</span>
+    <h2>Data model</h2>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Table</th><th>Grain</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">sourcing_lists</td><td>One uploaded price list</td><td>Column mapping + normalization stats + thresholds + verdict summary, all JSONB</td></tr>
+          <tr><td class="mono">sourcing_rows</td><td>One distributor line</td><td><code>match</code> (what the APIs said) and <code>channels</code> (what we concluded) stored separately</td></tr>
+          <tr><td class="mono">listing_snapshots</td><td>One observation</td><td>TimescaleDB hypertable on <code>captured_at</code>, PK <code>(channel, listing_key, captured_at)</code></td></tr>
+          <tr><td class="mono">sourcing_forecasts</td><td>One prediction</td><td>Written only for rows you actually buy. Carries the fee-schedule version that produced it</td></tr>
+          <tr><td class="mono">sourcing_actuals</td><td>One SKU, one window</td><td>Units + net proceeds from the seller APIs. Unique on the window so re-imports update rather than fake confidence</td></tr>
+          <tr><td class="mono">brand_access</td><td>One brand, per user</td><td>authorized / restricted / pending / unknown + distributor contact</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <p><strong>Why match and score are separate columns.</strong> Re-scoring on new thresholds reads <code>match</code> and rewrites <code>channels</code> — no refetch, no rate-limit exposure, instant. "What if I dropped my ROI bar to 20%" should cost zero API calls, and a fee-schedule correction should be replayable over every historical list.</p>
+      <p><strong>Why sourcing rows never write to <code>products</code>.</strong> A distributor list is 3,000 speculative UPCs, most of which will never be bought and many of which won't resolve. Writing them into Barkain's consumer <code>products</code> table would pollute Recently Sniffed, dilute the pg_trgm search index, and blow out the resolve cache with rows nobody asked for.</p>
+      <p><strong>Why snapshots are keyed on the channel's listing, not the sourcing row.</strong> Snapshots outlive the list that created them — that's the entire point. History survives list deletion and is shared across every user who ever sources the same item. On eBay the key is GTIN-scoped rather than item-scoped, because individual listings end and relist under new IDs; the <em>market</em> for a GTIN is the thing with continuity.</p>
+    </div>
+
+    <p>Migration <code>0013</code> is written and staged at <code>sourcing/migrations/</code> but deliberately not dropped into <code>infrastructure/migrations/versions/</code> — moving it there is what arms it. Constraints are mirrored in <code>__table_args__</code> so <code>Base.metadata.create_all</code> matches Alembic, following the parity pattern from migrations 0003 / 0006 / 0009–0012.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s11">
+    <span class="sheetnum">Sheet S-11</span>
+    <h2>What came from Barkain</h2>
+
+    <p>The reason to build this inside Barkain rather than greenfield: roughly 60% of the hard parts already exist and are proven against live retailers.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Component</th><th>Reuse</th></tr></thead>
+        <tbody>
+          <tr><td>eBay Browse adapter</td><td>OAuth token cache, 2h TTL with refresh buffer, condition-ID buckets, normalized listing mapping. M15 adds a <code>gtin=</code> path on the same token.</td></tr>
+          <tr><td>Walmart HTTP adapter</td><td>Decodo residential proxy + PerimeterX retry budget. The fallback leg, and the only path that yields review counts and the "bought yesterday" badge.</td></tr>
+          <tr><td>UPCitemdb client</td><td>Weight and dimensions when the retailer APIs don't return them — directly feeds the fee tier.</td></tr>
+          <tr><td>SSE plumbing</td><td><code>sse_event()</code> + the iOS byte-level splitter. A 3,000-row crunch is exactly the shape SSE was built for.</td></tr>
+          <tr><td>Auth, rate limiting, error envelope</td><td>Clerk JWT, per-tier Redis buckets, the canonical <code>{detail:{error:{code,message}}}</code> shape.</td></tr>
+          <tr><td>SQS workers</td><td>The snapshot cron is a worker subcommand, not new infrastructure.</td></tr>
+          <tr><td>TimescaleDB</td><td><code>price_history</code> already establishes the hypertable pattern, including the composite-PK lesson from migration 0002.</td></tr>
+          <tr><td>M6 recommendation engine</td><td>Precedent, not code: deterministic, zero-LLM, gather-then-pure-math. The verdict scorer is the same shape.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The relevance gates that dominate Barkain's consumer path — brand-bleed, token overlap, model-number matching — mostly stop mattering here, because sourcing matches by exact UPC. They come back only for the fallback title-search path when a UPC has no listing.</p>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s12">
+    <span class="sheetnum">Sheet S-12</span>
+    <h2>Built vs. not built</h2>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Piece</th><th>State</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td>UPC normalization</td><td><span class="chip chip--pass">done</span></td><td>Verified against 15 dirty-input cases</td></tr>
+          <tr><td>CSV / TSV ingest</td><td><span class="chip chip--pass">done</span></td><td>Header detection + column mapping verified</td></tr>
+          <tr><td>XLSX ingest</td><td><span class="chip chip--watch">untested</span></td><td>Code written; needs <code>openpyxl</code> and a real workbook</td></tr>
+          <tr><td>Fee engines (WMT/eBay)</td><td><span class="chip chip--pass">done</span></td><td>Plan-aware, calibration-aware, verified against real orders to the cent</td></tr>
+          <tr><td>Settlement import</td><td><span class="chip chip--pass">done</span></td><td>Reconciliation + settlement + inventory + orders. Four formats</td></tr>
+          <tr><td>Cross-check</td><td><span class="chip chip--pass">done</span></td><td>Reconciles ordered / shipped / billed across the three reports</td></tr>
+          <tr><td>Velocity/margin slider</td><td><span class="chip chip--pass">done</span></td><td>Continuous 0–1, geometric blend, list-normalized</td></tr>
+          <tr><td>Forecast vs actual engine</td><td><span class="chip chip--pass">done</span></td><td>Pairing, per-tier bias, guards. Tables + migration staged</td></tr>
+          <tr><td>Seller-API collectors</td><td><span class="chip chip--todo">not built</span></td><td>Walmart Orders/Insights, eBay Fulfillment/Finances/Analytics</td></tr>
+          <tr><td>Landed-cost model</td><td><span class="chip chip--pass">done</span></td><td>Freight, prep, packaging, duty, shrink, returns</td></tr>
+          <tr><td>Selling-plan model</td><td><span class="chip chip--pass">done</span></td><td>eBay Stores, Amazon plans, breakeven volumes</td></tr>
+          <tr><td>Demand + stability</td><td><span class="chip chip--pass">done</span></td><td>All 7 tiers incl. depletion + BSR</td></tr>
+          <tr><td>Velocity-first scoring</td><td><span class="chip chip--pass">done</span></td><td>Annualized ROI w/ lead time; sell-through gate</td></tr>
+          <tr><td>Depletion <em>collector</em></td><td><span class="chip chip--todo">not built</span></td><td>The estimator reads it; nothing writes it yet — this is the highest-value next build</td></tr>
+          <tr><td>Terapeak import</td><td><span class="chip chip--todo">not built</span></td><td>Schema field exists; authenticated session path not written</td></tr>
+          <tr><td>Amazon channel adapter</td><td><span class="chip chip--todo">not built</span></td><td>BSR curves + normalization done; no fetch path</td></tr>
+          <tr><td>Amazon fee tables</td><td><span class="chip chip--todo">not built</span></td><td>Referral + FBA tiers still to encode</td></tr>
+          <tr><td>Verdict scoring + ranking</td><td><span class="chip chip--pass">done</span></td><td>Demonstrated end to end</td></tr>
+          <tr><td>Inquiry drafts</td><td><span class="chip chip--pass">done</span></td><td>Template, no LLM</td></tr>
+          <tr><td>Walmart.io adapter</td><td><span class="chip chip--watch">unverified</span></td><td>Signing logic written; never run against live credentials</td></tr>
+          <tr><td>eBay GTIN adapter</td><td><span class="chip chip--watch">unverified</span></td><td>Same — needs a live keyset</td></tr>
+          <tr><td>Service orchestration</td><td><span class="chip chip--watch">unverified</span></td><td>Written; no DB available in this environment to exercise it</td></tr>
+          <tr><td>Migration 0013</td><td><span class="chip chip--watch">staged</span></td><td>Not in <code>versions/</code> — moving it arms it</td></tr>
+          <tr><td>REST router + schemas</td><td><span class="chip chip--todo">not built</span></td><td>Stopped here on your instruction</td></tr>
+          <tr><td>Test suite</td><td><span class="chip chip--todo">not built</span></td><td>~60 cases planned across the pure modules</td></tr>
+          <tr><td>Snapshot cron worker</td><td><span class="chip chip--todo">not built</span></td><td>Schema and read path exist; the writer loop doesn't</td></tr>
+          <tr><td>iOS surface</td><td><span class="chip chip--todo">not built</span></td><td>Not started</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note note--warn">
+      <p><strong>Nothing here has touched a live API.</strong> The pure pipeline is demonstrated and its numbers are real; the two adapters are written against documented request shapes but have never been run with credentials. Walmart.io's RSA signing in particular is the kind of thing that returns an unhelpful 401 until every byte of the canonical string is right — which is why <code>canonical_string()</code> is factored out as its own testable function rather than inlined.</p>
+    </div>
+
+    <h3>To activate</h3>
+    <ul>
+      <li><code>cp -r sourcing/m15_sourcing backend/modules/</code></li>
+      <li><code>cp sourcing/migrations/0013_sourcing_tables.py infrastructure/migrations/versions/</code></li>
+      <li>Register the four models in <code>backend/app/models.py</code></li>
+      <li>Add the router to <code>backend/app/main.py</code> (once it's written)</li>
+      <li>Update the drift marker in <code>tests/conftest.py::_ensure_schema</code> to probe <code>sourcing_lists</code></li>
+    </ul>
+  </section>
+
+  <!-- ────────────────────────────────────────────────────────── -->
+  <section id="s13">
+    <span class="sheetnum">Sheet S-13</span>
+    <h2>Open questions</h2>
+
+    <p>Four of the previous round's questions are now answered and built in: freight is estimated from weight, returns are reserved at 3% against a measured sub-1%, lead time is per-product, and no store plans are held (so plan breakevens read as a live decision, not a sunk cost). Walmart affiliate access isn't available, so the Walmart leg now defaults to the residential-proxy scrape — which is the better path anyway, since it's the only one that yields review counts, the bought-yesterday badge, and the cart quantity that feeds depletion.</p>
+    <p>What's left:</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Question</th><th>Why it matters</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Exports covering more SKUs</strong>, especially above and below the $10 line and in other categories.</td><td>The current set is one SKU at one price point. It found the Under-$10 schedule; a second price band would confirm where the weight tiers take over, and other categories would validate the referral table beyond Automotive.</td></tr>
+          <tr><td>Whatever is sitting in inventory at <strong>451+ days</strong>.</td><td>The settlement shows a $2.84 long-term storage charge at that age band. That's the exact cost velocity-first ranking exists to prevent, and it's worth seeing which SKU is generating it.</td></tr>
+          <tr><td>Freight $/lb into your prep centre, and prep + polybag per unit.</td><td>The demo uses $0.42/lb and $0.83 combined as placeholders. These move verdicts more than anything else on the sheet.</td></tr>
+          <tr><td>Walmart Marketplace + eBay developer keys for the Sell APIs.</td><td>Unlocks the actuals half of Sheet S-08b. Both are your own account data, so neither needs an approval gauntlet.</td></tr>
+          <tr><td>Is Amazon a third channel, and on which plan?</td><td>Keepa is already on the Phase 4 roadmap. Adding it later is a new adapter plus a fee table; designing for it now costs nothing.</td></tr>
+          <tr><td>Single seller, or multi-tenant?</td><td><code>brand_access</code> is currently scoped per user. Thresholds are per list. Both assumptions get expensive to change after data exists.</td></tr>
+          <tr><td>Web dashboard or iOS?</td><td>A 3,000-row ranked table wants a wide screen and CSV export. The existing iOS app is the wrong shape for this workflow — the phone is for the store aisle, not the price list.</td></tr>
+          <tr><td>What are your actual thresholds?</td><td>The $3 / 25% / 30-units defaults are the common ones, but they should be yours.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <span>Barkain M15 · Wholesale Sourcing Scanner</span>
+    <span>Build print rev. E · 2026-07-26</span>
+    <span>branch claude/wholesale-sourcing-scanner-83n3ch</span>
+  </footer>
+
+</div>
