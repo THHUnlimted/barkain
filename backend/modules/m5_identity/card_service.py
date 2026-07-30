@@ -330,20 +330,44 @@ class CardService:
         card_program_ids = [program.id for _, program in user_rows]
         today = date.today()
 
-        rotating_rows = (
+        # Fetch every rotating row for these programs, then partition on the
+        # date window in Python rather than in SQL. Same single round trip, but
+        # it lets us tell "this card has no rotating categories at all" apart
+        # from "this card has rotating categories and every one of them has
+        # lapsed" — a distinction the date-filtered query erased.
+        #
+        # The second case is the 2026-07-01 defect: seed data stopped at
+        # 2026-Q2, the filter matched nothing, and every 5x bonus quietly
+        # became the base rate for four weeks. Nothing raised, nothing logged,
+        # no test went red. The recommendation was simply worse. This warning
+        # is the tripwire that was missing — see
+        # scripts/check_catalog_freshness.py for the pre-deploy version.
+        all_rotating_rows = (
             await self.db.execute(
                 select(RotatingCategory).where(
-                    and_(
-                        RotatingCategory.card_program_id.in_(card_program_ids),
-                        RotatingCategory.effective_from <= today,
-                        RotatingCategory.effective_until >= today,
-                    )
+                    RotatingCategory.card_program_id.in_(card_program_ids)
                 )
             )
         ).scalars().all()
+
         rotating_by_card: dict[UUID, list[RotatingCategory]] = {}
-        for r in rotating_rows:
-            rotating_by_card.setdefault(r.card_program_id, []).append(r)
+        lapsed_program_ids: set[UUID] = set()
+        for r in all_rotating_rows:
+            if r.effective_from <= today <= r.effective_until:
+                rotating_by_card.setdefault(r.card_program_id, []).append(r)
+            else:
+                lapsed_program_ids.add(r.card_program_id)
+
+        stale_program_ids = lapsed_program_ids - set(rotating_by_card)
+        if stale_program_ids:
+            logger.warning(
+                "rotating_categories_all_expired program_ids=%s today=%s — "
+                "these cards have rotating categories on file but none are "
+                "effective today, so they are falling back to their base rate. "
+                "Reseed via scripts/seed_rotating_categories.py.",
+                sorted(str(pid) for pid in stale_program_ids),
+                today,
+            )
 
         selection_rows = (
             await self.db.execute(

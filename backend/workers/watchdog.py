@@ -17,7 +17,9 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote_plus
 
+import httpx
 import redis.asyncio as aioredis
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +34,16 @@ from app.core_models import RetailerHealth, WatchdogEvent
 from modules.m2_prices.container_client import ContainerClient
 from modules.m2_prices.health_monitor import HealthMonitorService
 
+# Reused rather than reimplemented on purpose. The proxy URL assembly encodes
+# non-obvious rules — the `user-` prefix, the `-country-us` suffix that keeps
+# the pool out of Peru, the explicit :7000 port — and a second copy would drift
+# from the one that production traffic exercises daily.
+from modules.m2_prices.adapters.walmart_http import (  # noqa: E402
+    _CHROME_HEADERS,
+    _build_proxy_url,
+    DecodoNotConfiguredError,
+)
+
 logger = logging.getLogger("barkain.watchdog")
 
 # `parents[2]` escapes backend/ → repo root, where containers/ actually lives.
@@ -42,6 +54,20 @@ logger = logging.getLogger("barkain.watchdog")
 CONTAINERS_ROOT = Path(__file__).resolve().parents[2] / "containers"
 MAX_TRANSIENT_RETRIES = 3
 TRANSIENT_RETRY_DELAY = 5.0  # seconds base delay
+
+# Heal-path page fetch. Longer than the m2 scrape budget because this runs
+# nightly on one retailer at a time, not in a user-facing fan-out.
+HEAL_FETCH_TIMEOUT_SECONDS = 45
+
+# Substituted into the prompt's page_html slot when the fetch fails. Phrased as
+# an explicit statement of absence so Opus treats it as missing evidence rather
+# than as page source — see `_fetch_page_html`.
+_NO_HTML_MARKER = (
+    "[PAGE HTML UNAVAILABLE — {reason}]\n\n"
+    "The live page could not be retrieved for this heal attempt. Do NOT invent "
+    "selectors. Reason only from the existing extract.js and the error details "
+    "below, and lower your reported confidence accordingly."
+)
 
 
 class WatchdogSupervisor:
@@ -201,6 +227,76 @@ class WatchdogSupervisor:
             "error_details": error_msg,
         }
 
+    async def _fetch_page_html(self, retailer_id: str, config_json: str) -> str:
+        """Fetch the retailer's live search page for the heal prompt.
+
+        Selector drift is, by definition, a mismatch between `extract.js` and
+        the page's *current* markup. Healing without that markup asks Opus to
+        infer the new DOM from the stale selectors — the one input guaranteed
+        to be wrong. This routes through the Decodo residential proxy when it
+        is configured, because the retailers that drift are the same ones that
+        fingerprint datacenter IPs.
+
+        Never raises. On any failure it returns an explicit marker string
+        rather than a plausible-looking substitute: an honest "unavailable"
+        makes Opus reason conservatively from `extract.js`, whereas silently
+        passing the error text (the 2i-d-L4 bug) reads to the model as though
+        it were the page source.
+        """
+        try:
+            config = json.loads(config_json)
+        except json.JSONDecodeError:
+            config = {}
+
+        template = config.get("search_url_template")
+        if not template:
+            logger.warning(
+                "No search_url_template in config.json for %s — healing without "
+                "page HTML", retailer_id,
+            )
+            return _NO_HTML_MARKER.format(
+                reason=f"no search_url_template in containers/{retailer_id}/config.json"
+            )
+
+        query = quote_plus(settings.WATCHDOG_TEST_QUERY)
+        # Most configs end the template at `?q=` for plain concatenation, but
+        # a `{query}` placeholder is supported so a retailer needing the term
+        # mid-path isn't forced into a second code path.
+        url = template.format(query=query) if "{query}" in template else f"{template}{query}"
+
+        proxy_url: str | None = None
+        try:
+            proxy_url = _build_proxy_url(settings)
+        except DecodoNotConfiguredError:
+            # Direct fetch still beats no HTML for retailers without hard
+            # anti-bot (target, home_depot). Log so a CHALLENGE-looking heal
+            # can be traced back to the missing proxy.
+            logger.info(
+                "Decodo not configured — fetching %s heal HTML directly", retailer_id,
+            )
+
+        try:
+            async with httpx.AsyncClient(
+                proxy=proxy_url,
+                timeout=HEAL_FETCH_TIMEOUT_SECONDS,
+                follow_redirects=True,
+            ) as client:
+                resp = await client.get(url, headers=_CHROME_HEADERS)
+                resp.raise_for_status()
+                html = resp.text
+        except Exception as exc:  # noqa: BLE001 — heal must survive any fetch failure
+            logger.warning(
+                "Heal HTML fetch failed for %s (%s): %s",
+                retailer_id, url, exc,
+            )
+            return _NO_HTML_MARKER.format(reason=f"fetch failed: {type(exc).__name__}: {exc}")
+
+        logger.info(
+            "Fetched %d bytes of heal HTML for %s via %s",
+            len(html), retailer_id, "proxy" if proxy_url else "direct",
+        )
+        return html
+
     async def _handle_selector_drift(self, retailer_id: str, response) -> dict:
         """Attempt self-healing via Claude Opus for selector drift."""
         # Check heal attempts
@@ -243,12 +339,20 @@ class WatchdogSupervisor:
             if response.error.details:
                 error_details += f"\nDetails: {json.dumps(response.error.details)[:2000]}"
 
+        # Fetch the live search page so Opus can see the markup it is being
+        # asked to write selectors against (2i-d-L4). Before this, page_html
+        # was passed `error_details` — the same string already occupying the
+        # error slot — so every heal asked Opus to repair CSS selectors with
+        # zero page markup in context. It could only guess from the old
+        # extract.js, which is precisely the artifact known to be stale.
+        page_html = await self._fetch_page_html(retailer_id, config_json)
+
         # Call Claude Opus for healing
         try:
             heal_prompt = build_watchdog_heal_prompt(
                 retailer_id=retailer_id,
                 current_extract_js=current_extract_js,
-                page_html=error_details,  # Using error details as context
+                page_html=page_html,
                 error_details=error_details,
                 config_json=config_json,
             )

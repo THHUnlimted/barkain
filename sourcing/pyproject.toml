@@ -1,0 +1,23 @@
+# Ruff configuration for the M15 sourcing tree.
+#
+# Ruff resolves config by walking up from each file to the nearest pyproject.toml
+# containing a [tool.ruff] table. `backend/pyproject.toml` only governs
+# `backend/`, so before this file existed `sourcing/` silently fell back to
+# ruff's built-in defaults — line-length 88 instead of the repo's 99, and a
+# different rule set. Harmless under the current pin, but it meant `ruff check .`
+# from the repo root held two halves of the tree to two different standards.
+#
+# Values are kept byte-identical to backend/pyproject.toml's [tool.ruff] on
+# purpose. If you change one, change both — or hoist them to a root config.
+#
+# Deliberately NO [tool.pytest.ini_options] here. The sourcing suite has zero
+# async tests, so it needs neither asyncio_mode nor the pytest-asyncio warning
+# filters backend/ carries, and adding a pytest table would change rootdir
+# resolution for a suite that currently runs clean from `sourcing/`.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 99
+
+[tool.ruff.lint]
+extend-select = ["E741"]

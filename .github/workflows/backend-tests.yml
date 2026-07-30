@@ -131,6 +131,14 @@ jobs:
           are pure functions with zero unit coverage — only the offline smoke above guards them."
           fi
 
+      # Runs before Lint because it is the cheapest possible check and needs
+      # no dependencies at all — `ast` only, no imports of app.config, no .env,
+      # no Postgres. Guards the drift that left DECODO_SCRAPER_API_AUTH
+      # undocumented, where a fresh environment lost Amazon pricing entirely
+      # with no error and no log line.
+      - name: Env example completeness
+        run: python3 scripts/check_env_example.py
+
       - name: Lint
         run: |
           # PINNED deliberately. `pip install ruff` resolves to whatever is

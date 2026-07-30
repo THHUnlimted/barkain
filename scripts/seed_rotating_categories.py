@@ -1,4 +1,4 @@
-"""Seed the rotating_categories table with Q2 2026 issuer-defined bonuses.
+"""Seed the rotating_categories table with issuer-defined quarterly bonuses.
 
 Step 2e: populates rotating 5%/5x categories for cards whose issuers publish
 fixed quarterly lists (Chase Freedom Flex, Discover it Cash Back). Cards with
@@ -9,6 +9,14 @@ table.
 
 Runs AFTER seed_card_catalog.py — it looks up card_reward_programs by
 (card_issuer, card_product) to resolve the FK.
+
+⚠️  THIS DATA EXPIRES. `CardService._recommendations` filters on
+`effective_from <= date.today() <= effective_until`, so a quarter that rolls
+over without a reseed means every rotating bonus silently returns the card's
+base rate — no error, no log line, just a worse card winning. That is exactly
+what happened between 2026-07-01 and 2026-07-30. Run
+`python3 scripts/check_catalog_freshness.py` to detect it; that script exits
+non-zero once the newest seeded quarter is inside its final 14 days.
 
 Usage:
     python3 scripts/seed_rotating_categories.py
@@ -29,14 +37,27 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
 )
 
 
-# MARK: - Q2 2026 Rotating Categories
+# MARK: - Rotating Categories
 #
-# Source: docs/CARD_REWARDS.md § "Q2 2026 Rotating Categories"
+# Source: docs/CARD_REWARDS.md § "Rotating Categories"
 # Only cards with issuer-defined rotating lists are seeded. Cash+ / Customized
 # Cash / Custom Cash remain user-picked and are resolved through
 # user_category_selections at query time.
+#
+# Category slugs are matched against `_RETAILER_CATEGORY_TAGS` in
+# modules/m5_identity/card_service.py. A slug with no counterpart there is
+# inert-but-honest: it records what the issuer actually published, and simply
+# never wins a recommendation. Several Q3 2026 categories (gas, transit,
+# flights) are inert for exactly this reason — Barkain does not shop those
+# verticals. Do NOT "fix" that by omitting them; the row's presence is what
+# keeps the freshness checker green and proves the quarter was reviewed.
+#
+# Older quarters are retained rather than deleted. They are correctly filtered
+# out at query time, and keeping them makes a fresh-DB reseed reproduce
+# history. ON CONFLICT keys on (card_program_id, quarter), so quarters coexist.
 
 ROTATING_CATEGORIES: list[dict] = [
+    # ── 2026-Q2 (historical — expired 2026-06-30) ──────────────────────
     {
         "card_issuer": "chase",
         "card_product": "freedom_flex",
@@ -61,6 +82,75 @@ ROTATING_CATEGORIES: list[dict] = [
         "effective_from": date(2026, 4, 1),
         "effective_until": date(2026, 6, 30),
     },
+    # ── 2026-Q3 (current) ──────────────────────────────────────────────
+    # Chase: gas stations + EV charging, public transit, select live
+    # entertainment, United Way donations. Registration open through
+    # 2026-09-14. Source: media.chase.com/news/chase-freedom-2026-q3-categories
+    #
+    # NOTE: none of these slugs map to a Barkain retailer tag, so Freedom Flex
+    # correctly falls to its base rate at every retailer we compare this
+    # quarter. That is the right answer, not a gap.
+    {
+        "card_issuer": "chase",
+        "card_product": "freedom_flex",
+        "quarter": "2026-Q3",
+        "categories": [
+            "gas_stations",
+            "ev_charging",
+            "public_transit",
+            "live_entertainment",
+            "united_way",
+        ],
+        "bonus_rate": 5.0,
+        "activation_required": True,
+        "activation_url": "https://www.chase.com/personal/credit-cards/freedom-flex",
+        "cap_amount": 1500,
+        "effective_from": date(2026, 7, 1),
+        "effective_until": date(2026, 9, 30),
+    },
+    # Discover: gas stations + EV charging, public transportation, flights,
+    # drugstores. Activation window 2026-06-01 → 2026-09-30. Flights appear
+    # for the first time. Same inert-slug note as Chase above.
+    {
+        "card_issuer": "discover",
+        "card_product": "it_cash_back",
+        "quarter": "2026-Q3",
+        "categories": [
+            "gas_stations",
+            "ev_charging",
+            "public_transit",
+            "flights",
+            "drugstores",
+        ],
+        "bonus_rate": 5.0,
+        "activation_required": True,
+        "activation_url": "https://www.discover.com/credit-cards/cash-back/cashback-bonus.html",
+        "cap_amount": 1500,
+        "effective_from": date(2026, 7, 1),
+        "effective_until": date(2026, 9, 30),
+    },
+    # ── 2026-Q4 (PENDING CONFIRMATION — DO NOT UNCOMMENT UNVERIFIED) ────
+    # Q4 is the quarter this bug actually costs money. Secondary sources
+    # report Discover's Q4 2026 categories as **Amazon and Target** — both
+    # first-class Barkain retailers — so from 2026-10-01 an unseeded Q4 means
+    # every Discover holder shopping Amazon or Target is told to use a worse
+    # card. Discover publishes officially ~September; Chase announces Q4
+    # separately, also ~September.
+    #
+    # ACTION: in early September 2026, confirm both lists against the issuers'
+    # own pages (not aggregators), fill in Chase, and uncomment.
+    # {
+    #     "card_issuer": "discover",
+    #     "card_product": "it_cash_back",
+    #     "quarter": "2026-Q4",
+    #     "categories": ["amazon", "target", "online_shopping"],
+    #     "bonus_rate": 5.0,
+    #     "activation_required": True,
+    #     "activation_url": "https://www.discover.com/credit-cards/cash-back/cashback-bonus.html",
+    #     "cap_amount": 1500,
+    #     "effective_from": date(2026, 10, 1),
+    #     "effective_until": date(2026, 12, 31),
+    # },
 ]
 
 
@@ -139,7 +229,8 @@ async def main() -> None:
     async with async_session() as session:
         count = await seed_rotating(session)
         await session.commit()
-        print(f"Seeded {count} rotating category rows for Q2 2026.")
+        quarters = sorted({row["quarter"] for row in ROTATING_CATEGORIES})
+        print(f"Seeded {count} rotating category rows across {', '.join(quarters)}.")
 
     await engine.dispose()
 

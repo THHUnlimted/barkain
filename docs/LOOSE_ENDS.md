@@ -1,6 +1,10 @@
 # Loose Ends
 
 > **Audited:** 2026-07-27, against `main` @ `28002c9`.
+> **Revised:** 2026-07-30 — `.env.example` drift, the `sourcing/` ruff split,
+> and `2i-d-L4` are closed and their entries deleted. The rotating-category
+> entry is rewritten: Q3 is seeded, and the impact analysis turned out to be
+> materially different from what the first audit assumed.
 > **Scope:** things that are wired but not working, or not wired at all. Distinct
 > from `CLAUDE.md`'s Known Issues table, which tracks *code defects*. Most of
 > what's below is not a bug — it's a credential nobody has obtained, a flag
@@ -14,58 +18,63 @@
 
 ## P0 — Live, user-facing, silently wrong
 
-### Rotating card categories expired 2026-06-30
+### Rotating card categories — Q3 seeded, Q4 is the real deadline
 
-`scripts/seed_rotating_categories.py:39-64` seeds exactly two rows, both
-`quarter="2026-Q2"` (lines 43, 55) with `effective_until=date(2026, 6, 30)`
-(lines 50, 62):
+**Status 2026-07-30:** Q3 2026 is now seeded for both cards and the dev DB is
+current (2 rows effective today, previously 0). What remains is Q4.
 
-| Card | Categories | Rate |
-|---|---|---|
-| Chase Freedom Flex | amazon, chase_travel, feeding_america | 5.0 |
-| Discover it Cash Back | restaurants, home_depot, lowes, home_improvement | 5.0 |
+The original finding stands mechanically: `CardService._recommendations`
+filters on `effective_from <= date.today() <= effective_until`, seed data
+stopped at `2026-Q2`, and from 2026-07-01 the query matched nothing. But the
+**impact assessment was wrong**, and the correction matters for prioritisation.
 
-`CardService._recommendations` (`backend/modules/m5_identity/card_service.py:331-339`)
-filters on `effective_from <= date.today() <= effective_until`. Since
-2026-07-01 neither row matches, so **every rotating 5x bonus in the app has
-been silently returning the card's base rate for four weeks.** No error, no
-log line — the query just returns nothing and a lesser card wins the
-recommendation.
+Q3 2026's actual categories are:
 
-This is the single highest-value item on this page: it's live reward math
-giving users wrong answers, on the feature the product is named for.
-
-**What unblocks it:** the Q3 2026 category lists from Chase and Discover.
-That's catalog data from the issuers, not something a helper can derive — which
-is why the fix wasn't attempted when the expiry was found.
-
-**How it was found:** it broke `test_recommendations_rotating_bonus_wins` and
-`test_recommendations_user_selected_wins`, which had been red since 2026-07-01
-and went unnoticed because no backend-touching PR ran CI between 2026-05-01 and
-2026-07-27. Those fixtures are now time-invariant (PR #98) — the *tests* are
-fixed, the *seed data* is not.
-
-### `.env.example` is missing 26 of 63 settings
-
-`backend/app/config.py` declares 63 settings; `.env.example` documents 37. The
-consequential omissions:
-
-| Missing key | Consequence of not knowing about it |
+| Card | Q3 2026 categories |
 |---|---|
-| `DECODO_SCRAPER_API_AUTH` | **Amazon pricing silently absent.** This is the Decodo Scraper API adapter — a new environment built from `.env.example` loses Amazon entirely with no error |
-| `MISC_RETAILER_ADAPTER` | M14 misc-retailer slot invisible |
-| `PROVISIONAL_RESOLVE_ENABLED` | Provisional-resolve path undiscoverable |
-| `SEARCH_THUMBNAIL_FALLBACK` | Thumbnail cascade undiscoverable |
-| `WALMART_AFFILIATE_ID` | Affiliate attribution silently off |
-| `WATCHDOG_SLACK_WEBHOOK` | Watchdog alerts silently discarded |
-| `DEMO_MODE` | Auth-bypass switch undocumented |
+| Chase Freedom Flex | gas stations, EV charging, public transit, select live entertainment, United Way |
+| Discover it Cash Back | gas stations, EV charging, public transportation, flights, drugstores |
 
-The remaining 19 are infra tunables with sane defaults (`RATE_LIMIT_*`,
-`CONTAINER_*`, `LOG_LEVEL`, …) — worth adding for completeness, but they don't
-break anything by being absent.
+None of those intersect `_RETAILER_CATEGORY_TAGS`
+(`card_service.py:37-75`), whose vocabulary is entirely shopping-oriented —
+amazon, best_buy, walmart, target, home_depot, lowes, ebay, sams_club,
+online_shopping, electronics_stores, department_stores, wholesale_clubs,
+home_improvement, apple, electronics. Barkain does not compare prices on gas,
+transit, or flights.
 
-**What unblocks it:** an hour appending the keys with comments. No external
-dependency.
+So for Q3 specifically, **a correctly-seeded table and an empty one produce
+the same recommendation**: both cards fall to their base rate at every
+retailer we shop. The four weeks of "silently wrong" reward math were, by
+coincidence, silently right. Q2 *was* genuinely wrong while it was live
+(`amazon` and `home_depot` are both categories and Barkain retailers), and
+Q4 will be wrong again.
+
+**Q4 2026 is the deadline that costs money.** Secondary sources report
+Discover's Q4 categories as **Amazon and Target** — both first-class Barkain
+retailers. From 2026-10-01, an unseeded Q4 means every Discover holder
+shopping Amazon or Target is told to use a worse card, on the product's
+headline feature. A commented-out Q4 block is staged in
+`seed_rotating_categories.py` with that reasoning inline.
+
+**What unblocks it:** the Q4 lists confirmed against the issuers' own pages —
+not aggregators. Discover publishes officially ~September; Chase announces Q4
+separately, also ~September. Uncomment, fill in Chase, reseed.
+
+**Now detectable rather than silent.** Two tripwires were added, because the
+root cause was never the stale data — it was that stale data made no sound:
+
+- `scripts/check_catalog_freshness.py` — reads the seed file (not the DB, so
+  it needs no Postgres and runs in CI), exits non-zero once the newest quarter
+  is inside its final 14 days. Verified against the historical failure: at a
+  simulated 2026-07-15 with only Q2 seeded it reports both cards EXPIRED.
+- `card_service.py` now partitions rotating rows in Python instead of
+  filtering them in SQL — same single round trip — so it can distinguish "no
+  rotating categories" from "all rotating categories lapsed" and log
+  `rotating_categories_all_expired` for the latter.
+
+Deliberately **not** a pytest case: PR #98 made these fixtures time-invariant
+precisely so a date rollover stops turning unrelated PRs red. A check that
+fails on its own schedule belongs in cron, not in the blocking suite.
 
 ---
 
@@ -107,16 +116,30 @@ works (~3.3s). The `firecrawl` option is 100% CHALLENGE'd and kept only as a
 selectable value — so the documented fallback is not actually a fallback. Either
 fix it or drop the option so the config doesn't imply resilience it lacks.
 
-**`sourcing/` lints against ruff defaults, not the repo's config.**
-`backend/pyproject.toml` only governs `backend/`, so `sourcing/` gets
-line-length 88 instead of the repo's 99, and a different rule set. Harmless
-under the current pin; a `sourcing/pyproject.toml` would hold the tree to one
-standard.
+**Ruff is pinned to 0.15.9** (`.github/workflows/backend-tests.yml`). Re-measured
+2026-07-30 against `ruff 0.16.0` over `backend/ scripts/ sourcing/`: **642
+findings, 495 auto-fixable with `--fix`**, 26 more behind `--unsafe-fixes`,
+leaving ~121 for manual review. Concentrated in a few rules, so the diff is
+mechanical rather than sprawling:
 
-**Ruff is pinned to 0.15.9** (`.github/workflows/backend-tests.yml`). 0.16.0
-widened the default rule set to 642 findings repo-wide — 313 in `backend/`, 94
-in `scripts/`. Bumping the pin is a standalone PR with the resulting fixes, not
-collateral on whatever unrelated PR runs first after a release.
+| Count | Rule | Auto? |
+|---|---|:-:|
+| 163 | `UP045` non-pep604-annotation-optional (`Optional[X]` → `X \| None`) | ✅ |
+| 141 | `FURB157` verbose-decimal-constructor | ✅ |
+| 78 | `I001` unsorted-imports | ✅ |
+| 78 | `RUF100` unused-noqa | ✅ |
+| 71 | `B008` function-call-in-default-argument | ❌ FastAPI `Depends()` — expect to suppress |
+| 22 | `BLE001` blind-except | ❌ needs per-site judgement |
+| 13 | `EXE001` shebang-not-executable | ❌ chmod or drop shebang |
+
+Two notes for whoever takes it. `B008` at 71 is almost entirely FastAPI's
+`Depends()`/`Query()` idiom and should be suppressed wholesale rather than
+"fixed". And `DTZ011 call-date-today` (4 hits) is worth reading rather than
+autofixing — `date.today()` is exactly the call at the centre of the
+rotating-category expiry above.
+
+Still a standalone PR, not collateral on whatever unrelated branch runs first
+after a release.
 
 ---
 
@@ -151,9 +174,17 @@ Covered by 291 tests as of PR #98 — pure modules only (`upc`, `ingest`, `fees`
 
 ## P5 — Carried forward
 
-- **`2i-d-L4`** (MEDIUM, the only entry in CLAUDE.md's Known Issues table) —
-  watchdog heal at `workers/watchdog.py:251` passes `page_html=error_details`;
-  needs a real browser fetch in the heal path.
+- **Local Postgres shadows the Docker one** (found 2026-07-30). A host-installed
+  Postgres holds `127.0.0.1:5432` and `[::1]:5432`; the `barkain-db` container
+  binds `*:5432`. The loopback-specific bind wins, so anything resolving
+  `localhost:5432` — every seed script, via `scripts/_db_url.py`'s
+  `DEFAULT_DEV_DB_URL` — talks to the host Postgres and fails with
+  `role "app" does not exist`. The backend suite is unaffected because it uses
+  port **5433** (`barkain-db-test`), which is why this stayed invisible.
+  Workaround used to reseed: `DATABASE_URL=postgresql+asyncpg://app:localdev@$(ipconfig getifaddr en0):5432/barkain`.
+  Real fixes: stop the host Postgres, or move the container to a free port and
+  update `DEFAULT_DEV_DB_URL`. Worth doing — the failure mode is a seed script
+  that appears to run against the app DB and does not.
 - **Physical-iPhone p50** ~3s, target ~1.5s.
 - **iOS snapshot baselines** need re-recording — `StackingReceiptViewSnapshotTests`,
   `UnresolvedProductViewSnapshotTests`, `ConfirmationPromptViewSnapshotTests`,

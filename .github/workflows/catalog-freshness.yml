@@ -1,0 +1,48 @@
+name: Catalog Freshness
+
+# Rotating card categories expire on a schedule nobody is watching. When
+# `2026-Q2` lapsed on 2026-07-01, `CardService` simply stopped matching: no
+# exception, no log line, no red test — a lesser card just quietly won every
+# recommendation for four weeks, on the feature the product is named for.
+#
+# Deliberately NOT part of the `test` job:
+#   * It fails on the calendar, not on a diff. Wiring a date-dependent check
+#     into the PR gate turns unrelated branches red and trains people to
+#     ignore the signal — the opposite of what it is for. PR #98 made the
+#     card fixtures time-invariant for exactly this reason.
+#   * It has no `pull_request` trigger, so it never reports a PR status check
+#     and cannot disturb the "exactly one `test` status" invariant that
+#     backend-tests.yml and its docs-skip companion maintain.
+#
+# A failure here means "go get the next quarter's categories from the
+# issuers' own pages", and blocks nothing in the meantime. GitHub emails the
+# repo owner when a scheduled workflow fails, which is the intended alarm.
+
+on:
+  schedule:
+    # Mondays 14:00 UTC. Weekly is ample against a quarterly cadence and a
+    # 14-day warning window — the first failing Monday still leaves ~2 weeks.
+    - cron: '0 14 * * 1'
+  workflow_dispatch:
+  # Also run when the seed data itself changes, so a bad edit is caught at
+  # authoring time rather than on the following Monday.
+  pull_request:
+    paths:
+      - 'scripts/seed_rotating_categories.py'
+      - 'scripts/check_catalog_freshness.py'
+      - '.github/workflows/catalog-freshness.yml'
+
+jobs:
+  catalog-freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # No pip install: the checker reads the seed file rather than the
+      # database precisely so it needs neither Postgres nor any dependency.
+      - name: Check rotating category freshness
+        run: python3 scripts/check_catalog_freshness.py
