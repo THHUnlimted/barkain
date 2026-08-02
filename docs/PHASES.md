@@ -1,4 +1,17 @@
-# Barkain — Phase Roadmap
+# Barkain — Phase Roadmap (ABANDONED)
+
+> # ⛔ THIS ROADMAP WAS ABANDONED. BARKAIN IS RETIRED (2026-08-01).
+>
+> Phases 1 and 2 shipped (`v0.1.0`, `v0.2.0`). **Phase 3 stopped mid-flight and
+> Phases 4 and 5 never started.** Every `⬜` below is permanent — 3h Vision,
+> 3i receipts, 3k savings, 3l coupons, 3m hardening, App Store submission,
+> APNs, Android: none of it will be built.
+>
+> Do not treat any row here as available work. Successor project:
+> **Sourcely** — `~/Sourcely`, `github.com/THHUnlimted/sourcely`, which has its
+> own build order in `~/Sourcely/README.md` § 10.
+
+---
 
 > Source: Project Planning Questionnaire + Architecture Sessions, March–April 2026
 > Scope: All planned phases, current position, infrastructure dependencies

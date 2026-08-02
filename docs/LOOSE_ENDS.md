@@ -1,4 +1,26 @@
-# Loose Ends
+# Loose Ends — ARCHIVED
+
+> # ⛔ NOT A BACKLOG. BARKAIN IS RETIRED (2026-08-01).
+>
+> Every item below is now a **historical record of what was left undone**, not
+> a list of work to pick up. Do not close these. Do not obtain the credentials,
+> flip the flags, or seed the catalogs.
+>
+> Two entries are actively misleading if read as tasks:
+>
+> - **`rotating-cat-q4`** is marked HIGH and warns that from 2026-10-01 every
+>   Discover holder gets steered to a worse card. That only matters if the app
+>   is serving users. It is not, and will not be. **Disable the
+>   `catalog-freshness` cron rather than seeding Q4** — otherwise it emails a
+>   failure every Monday forever about a retired product.
+> - **P1 — "Built, verified, never switched on"** lists four feature flags. They
+>   stay off permanently.
+>
+> Successor: **Sourcely** — `~/Sourcely`, `github.com/THHUnlimted/sourcely`.
+> It has its own outstanding list in `~/Sourcely/README.md` § "Still
+> outstanding". That one is real.
+
+---
 
 > **Audited:** 2026-07-27, against `main` @ `28002c9`.
 > **Revised:** 2026-07-30 — `.env.example` drift, the `sourcing/` ruff split,

@@ -1,4 +1,46 @@
-# CLAUDE.md — Barkain
+# CLAUDE.md — Barkain (RETIRED)
+
+> # ⛔ BARKAIN IS PERMANENTLY RETIRED
+>
+> **Retired 2026-08-01. Not maintained. No further work will be done on it.**
+>
+> **Successor: Sourcely** — `github.com/THHUnlimted/sourcely`, local checkout at
+> **`~/Sourcely`** (NOT under `~/Desktop` — macOS blocks scheduled agents from
+> executing there, and `cd`-ing into it hangs the process).
+>
+> ## If you are an agent, read this before anything else
+>
+> **Do not implement anything in this repository.** Everything below the banner
+> is an archive. Specifically:
+>
+> - **Do not resume Phase 3.** Steps 3h (Vision), 3i (receipts), 3k (savings),
+>   3l (coupons), and 3m (hardening) were never started and never will be.
+>   `v0.3.0` will never be tagged.
+> - **`docs/LOOSE_ENDS.md` is not a backlog.** It is a record of what was built
+>   and never switched on. Do not close its items.
+> - **The Known Issues table below is not a queue.** `rotating-cat-q4` will
+>   never be seeded; the catalog-freshness cron should be disabled rather than
+>   satisfied.
+> - **"What's Next" describes an abandoned plan.** See that section.
+> - Open branches and open PRs (including `fix/loose-ends-sweep` / PR #100) are
+>   abandoned in place. Do not continue them.
+>
+> If you were asked to "continue where we left off," the work is in
+> **`~/Sourcely`**, not here. Read `~/Sourcely/README.md` — it is the live
+> orientation document and carries its own build order and outstanding list.
+>
+> Barkain optimizes a **consumer's** out-of-pocket price. Sourcely optimizes a
+> **reseller's** net profit on inventory they buy. They share an EC2 host and a
+> lineage, and nothing else.
+>
+> The only live descendant of this codebase is `sourcing/` (M15), extracted
+> 2026-07-30 into its own repo. The copy here is provenance, not source of
+> truth — edit Sourcely, never this.
+
+---
+
+> **Historical orientation below this line.** Accurate as of 2026-05-01, kept
+> for archaeology. Every forward-looking statement in it is void.
 
 > **Purpose:** Root orientation for AI coding agents. This file alone should let a new session understand the project, find anything, and follow conventions.
 > **Last updated:** 2026-05-01 (v5.51 — `fix/3o-C-L1-token-overlap-gate` (open). Closes `3o-C-L1-fabricated-upc-tap` after live re-diagnosis. `_resolved_matches_query` gains a 3rd check (token-overlap floor) on top of brand + strict-spec — when query has ≥2 meaningful tokens (≥3 chars, non-stopword), require ≥2 substring-hits in the resolved haystack. Defends against in-brand cross-category drift the brand-keyword check alone misses. Live-confirmed against `Apple Watch Ultra 2 49mm Natural Titanium GPS Cellular`: pre-fix returned MacBook Air rows ($769–$830) via real-but-wrong-product UPC `195949036323`; post-fix (a) invalidates the bad cached UPC + 404s on cache-hit, (b) falls cleanly to provisional on fresh-upstream → 4 real Apple Watch prices ($341.96–$650) in M2 + 3 in M14. +2 BE tests (815→817). v5.50 — `feat/provisional-resolve` (open). Adds a dark-launched fallback path on `POST /resolve-from-search`: when both Gemini device→UPC AND UPCitemdb keyword search return null, instead of raising `UPC_NOT_FOUND_FOR_PRODUCT` we persist a best-effort `Product` with `upc=NULL`, `source="provisional"`, `source_raw["provisional"]=True` + `["search_query"]` (and Gemini's stated reason when present). Gated by new `PROVISIONAL_RESOLVE_ENABLED: bool = False` flag — schema + property changes ship safely with behavior unchanged until the flag flips. New `Product.match_quality` JSONB-derived `@property` (`"exact" | "provisional"`) surfaces on `ProductResponse` so iOS can branch. M2 `get_prices` + `stream_prices` auto-inject `query_override = product.name` for provisional rows so the bare-name cache scope, container query, and per-container product_name hint all key off the user's intent rather than a generic SKU title (relevance gates do the rest). M6 `recommendation_skip_cache_write` log line generalized: now fires for both inflight + provisional payloads (provisional snapshot would mask a future canonical-UPC backfill). 7-day dedup window on `(name, brand, source='provisional')` keeps re-tapped dead-end queries pinned to one row. Wire-through: new `query: String?` on `ResolveFromSearchRequest`; `Endpoint.resolveFromSearch` + `APIClientProtocol.resolveProductFromSearch` + `MockAPIClient` + `BarePreviewAPIClient` all gain it (Swift protocol default-args don't propagate through protocol-typed call sites — every conformer + holder passes explicitly). iOS `Product` gains `matchQuality: String?` + `isProvisional` convenience; `RecommendationHero` renders a soft "Best results for \"<query>\"" banner above the card and downgrades the gold BEST BARKAIN eyebrow to muted "APPROXIMATE MATCH" when provisional; `SearchView`'s `recentlyScanned.record` skips provisional rows so the rail stays canonical. Tests +9 backend (806→815) + new hero snapshot baseline. Live-verified: Festool TS 60 KEBQ-Plus 577419 (yesterday's 404 sweep) now persists provisional, M2 stream returns FB Marketplace $700 used listing while other retailers correctly `no_match` at the relevance-gate level. **`feat/search-thumbnail-fallback` (#94)** still open from 2026-04-30. Known Issues unchanged at 1 open (`2i-d-L4` MED).)
@@ -243,10 +285,26 @@ Two-tier AI workflow: **Planner** (Claude Opus via claude.ai) authors prompt pac
 
 ## What's Next
 
-1. **Phase 2 CLOSED** — `v0.2.0` tagged (2026-04-16).
-2. **Phase 3:** category-expansion trilogy + dark-mode + thumbnail-fallback shipped. **Active follow-ups:** physical-iPhone p50 (~3s → ~1.5s); 3n misc-retailer canary ($50 Starter Serper → bench → flip `MISC_RETAILER_ADAPTER=serper_shopping` 5→50→100%); weekly bench cron; AppIcon PNGs; prod FB seed; eBay-Tier-2 graduation; snapshot baseline re-record; F#1c portal-Continue. **Remaining:** 3h Vision · 3i receipts · 3k savings · 3l coupons · 3m hardening → `v0.3.0`
-3. **Phase 4 — Production Optimization:** Keepa API, App Store submission, Sentry
-4. **Phase 5 — Growth:** APNs, web dashboard, Android (KMP)
+**Nothing. Barkain is retired as of 2026-08-01.** Work continues in
+**`~/Sourcely`** (`github.com/THHUnlimted/sourcely`).
+
+The plan that used to live here is void and is preserved below only so the
+retirement point is legible. None of it will be built.
+
+> ~~1. **Phase 2 CLOSED** — `v0.2.0` tagged (2026-04-16).~~
+> ~~2. **Phase 3:** category-expansion trilogy + dark-mode + thumbnail-fallback shipped. **Active follow-ups:** physical-iPhone p50 (~3s → ~1.5s); 3n misc-retailer canary ($50 Starter Serper → bench → flip `MISC_RETAILER_ADAPTER=serper_shopping` 5→50→100%); weekly bench cron; AppIcon PNGs; prod FB seed; eBay-Tier-2 graduation; snapshot baseline re-record; F#1c portal-Continue. **Remaining:** 3h Vision · 3i receipts · 3k savings · 3l coupons · 3m hardening → `v0.3.0`~~
+> ~~3. **Phase 4 — Production Optimization:** Keepa API, App Store submission, Sentry~~
+> ~~4. **Phase 5 — Growth:** APNs, web dashboard, Android (KMP)~~
+
+**Where each strand actually ended up:**
+
+| Strand | Fate |
+|---|---|
+| Phase 1 + 2 (price comparison, identity, cards, billing) | Shipped, tagged, now frozen |
+| Phase 3 (recommendation intelligence) | Abandoned mid-flight |
+| M15 sourcing | **Extracted to Sourcely 2026-07-30 — the live successor** |
+| EC2 host | Still running, now serving Sourcely at `/sourcely` behind the same Caddy |
+| Everything consumer-facing (discounts, portals, affiliate, RevenueCat) | Ends here; Sourcely deliberately has no logins and no monetization |
 
 ---
 

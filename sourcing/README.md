@@ -1,8 +1,31 @@
-# Wholesale Sourcing Scanner — Capability Canvas + Build Plan
+# Wholesale Sourcing Scanner — SUPERSEDED
+
+> # ⛔ THIS COPY IS A FORK POINT, NOT THE SOURCE OF TRUTH.
+>
+> M15 was extracted on 2026-07-30 into its own repository and product:
+> **Sourcely** — `github.com/THHUnlimted/sourcely`, local checkout at
+> **`~/Sourcely`**.
+>
+> **Edit Sourcely. Never edit this copy.** It is frozen at the fork point and
+> kept only so Barkain's history stays readable. Anything you change here is
+> invisible to the running product.
+>
+> Sourcely has since moved well past this snapshot — it has a live FastAPI app,
+> an iOS scan-to-verdict surface, an EC2 deployment behind Caddy, a scheduled
+> snapshot worker, landed-cost wiring, and a forecast/recon calibration loop.
+> Its test suite is **464 tests, ~0.4 s, no DB and no network**. The "4-step
+> activation" this document describes was overtaken by the extraction and no
+> longer applies.
+>
+> The rest of this file is the original capability canvas and build plan, which
+> remains the best explanation of *why* the module is shaped the way it is.
+> `~/Sourcely/README.md` is its living successor.
+
+---
 
 > **Status:** M15 core complete, unwired. Rev E — fee engine validated against
 > real settlements across 4 SKUs / 3 categories / both fulfillment types.
-> **Last updated:** 2026-07-26
+> **Last updated:** 2026-07-26 (frozen — superseded 2026-07-30)
 
 ---
 

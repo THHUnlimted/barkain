@@ -20,11 +20,22 @@ name: Catalog Freshness
 # issuers' own pages", and blocks nothing in the meantime. GitHub emails the
 # repo owner when a scheduled workflow fails, which is the intended alarm.
 
+# ── RETIRED 2026-08-01 ────────────────────────────────────────────────────
+# The weekly schedule is disabled because Barkain is retired. Left as-is it
+# would start failing on 2026-09-16 (14 days before Q3 2026 lapses) and email
+# a failure every Monday thereafter, forever, about a product with no users
+# and no one to seed Q4 for.
+#
+# This is the alarm working correctly and the thing it guards no longer
+# mattering — the correct response to which is to turn the alarm off, not to
+# keep feeding it. `workflow_dispatch` stays so the check can still be run by
+# hand if anyone ever wants to know the answer.
+#
+#   schedule:
+#     # Mondays 14:00 UTC. Weekly is ample against a quarterly cadence and a
+#     # 14-day warning window — the first failing Monday still leaves ~2 weeks.
+#     - cron: '0 14 * * 1'
 on:
-  schedule:
-    # Mondays 14:00 UTC. Weekly is ample against a quarterly cadence and a
-    # 14-day warning window — the first failing Monday still leaves ~2 weeks.
-    - cron: '0 14 * * 1'
   workflow_dispatch:
   # Also run when the seed data itself changes, so a bad edit is caught at
   # authoring time rather than on the following Monday.
