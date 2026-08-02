@@ -11,7 +11,19 @@ nonisolated enum AppConfig {
             return url
         }
         #if DEBUG
-        return URL(string: "http://localhost:8000")!
+        #if targetEnvironment(simulator)
+        // 127.0.0.1, NOT localhost — the simulator otherwise tries IPv6 (::1)
+        // first and the connection hangs / fails on hosts where IPv6 loopback
+        // isn't routable to the FastAPI bind. Documented in CLAUDE.md as
+        // L-sim-localhost-ipv4.
+        return URL(string: "http://127.0.0.1:8000")!
+        #else
+        // Physical device on dev — must use the Mac's LAN IP and the backend
+        // must be bound to 0.0.0.0 (run uvicorn with --host 0.0.0.0). Update
+        // this when the dev Mac's LAN IP changes, or set API_BASE_URL via
+        // Info.plist / xcconfig so this fallback never fires.
+        return URL(string: "http://192.168.1.194:8000")!
+        #endif
         #else
         return URL(string: "https://api.barkain.ai")!
         #endif

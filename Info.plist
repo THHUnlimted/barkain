@@ -7,6 +7,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Barkain connects to your Mac's local backend during development. The first time the app launches, iOS will ask permission for this — accept to use the dev build. Production builds connect to api.barkain.ai and don't trigger this prompt.</string>
 	<key>API_BASE_URL</key>
 	<string>$(API_BASE_URL)</string>
 	<key>REVENUECAT_API_KEY</key>
