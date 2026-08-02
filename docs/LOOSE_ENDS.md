@@ -141,6 +141,45 @@ rotating-category expiry above.
 Still a standalone PR, not collateral on whatever unrelated branch runs first
 after a release.
 
+**The two `test` workflows are not mutually exclusive** (found 2026-08-01, on
+PR #100). `backend-tests-docs-skip.yml` carries a comment asserting that
+mirroring its `paths-ignore` against `backend-tests.yml`'s `paths` keeps
+"exactly one `test` check reporting". It does not, because of how GitHub
+evaluates the two filters:
+
+- `paths-ignore` skips a workflow only when **every** changed file matches.
+  One non-backend file — a doc, a script, anything under `Barkain/` — is
+  enough to make the no-op run.
+- `paths` runs a workflow when **any** changed file matches.
+
+So a PR touching backend code *and* anything else fires both, and both emit a
+check context named `test`. That is most PRs. Verified on `6ac8f41`: the no-op
+reported success in ~3 seconds while the real suite was still running, and
+`gh run list` shows both genuinely executed on the same SHA. The sweep commit
+`1283fd4` did it too.
+
+Nothing has actually merged unverified since #97 — the real suite ran and
+passed on both of those commits. But the guard is not doing what it claims,
+and the failure it was written to prevent is the one that let #97 through on a
+3-second green. Mirroring the path lists more carefully cannot fix this; the
+premise that PRs touch one directory is what is wrong.
+
+Three shapes, differing mainly in what they cost:
+
+1. Give the no-op a distinct job name and require **both** contexts in branch
+   protection. Cleanest, but needs a repo-settings change, not just a commit.
+2. Have the no-op check out the diff and exit early if any backend path is
+   present. Keeps one context, no settings change, but the no-op now has logic
+   that can itself be wrong.
+3. Collapse to one workflow that decides internally whether to run pytest.
+   Most robust, largest rewrite, and the required context stops depending on
+   which workflow won a race.
+
+Worth doing before the next large merge. **The general shape is that a check's
+trustworthiness is a property of its trigger, not its script** — this one and
+the freshness checker below both passed review with correct-looking bodies and
+wrong assumptions about when they run.
+
 ---
 
 ## P4 — M15 sourcing (merged dark, PR #97)
