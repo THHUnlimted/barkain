@@ -18,6 +18,15 @@ for reasons that are nobody's fault (fresh checkout, wiped volume), and we do
 not want those to look like the same problem. It also means this runs in CI
 with no Postgres.
 
+That imposes a contract on `seed_rotating_categories.py`: it must import for
+its data alone with **no third-party dependencies at module level**, because
+the `catalog-freshness` job runs no `pip install`. It has already broken once
+— a top-level `from sqlalchemy import text` turned this alarm into a
+ModuleNotFoundError traceback on a PR whose data was 60 days from expiry, and
+an alarm that only ever screams about itself is how tripwires get muted.
+`backend/tests/scripts/test_check_catalog_freshness.py` pins both scripts'
+module-level import surface to the standard library via `ast`.
+
 Deliberately NOT a pytest case. PR #98 made the card fixtures time-invariant on
 purpose, because a date-dependent test turns every unrelated PR red and trains
 people to ignore it. This is a standalone check you can wire to a cron or a

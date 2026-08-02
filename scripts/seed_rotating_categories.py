@@ -22,19 +22,24 @@ Usage:
     python3 scripts/seed_rotating_categories.py
 """
 
+from __future__ import annotations
+
 import asyncio
 import sys
 from datetime import date
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from sqlalchemy import text  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+# SQLAlchemy is imported inside the seeding functions, NOT at module level.
+# `scripts/check_catalog_freshness.py` imports this module purely for
+# ROTATING_CATEGORIES, and its whole premise is that it runs in a bare CI
+# checkout with no `pip install` — a top-level `from sqlalchemy import text`
+# made that checker die with ModuleNotFoundError instead of reporting on the
+# data, which is a freshness alarm that only ever screams about itself.
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 # MARK: - Rotating Categories
@@ -157,6 +162,8 @@ ROTATING_CATEGORIES: list[dict] = [
 # MARK: - Seeding
 
 async def seed_rotating(session: AsyncSession) -> int:
+    from sqlalchemy import text
+
     count = 0
     for row in ROTATING_CATEGORIES:
         result = await session.execute(
@@ -218,6 +225,7 @@ async def seed_rotating(session: AsyncSession) -> int:
 
 async def main() -> None:
     from dotenv import load_dotenv
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 

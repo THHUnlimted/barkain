@@ -10,9 +10,11 @@ name: Catalog Freshness
 #     into the PR gate turns unrelated branches red and trains people to
 #     ignore the signal — the opposite of what it is for. PR #98 made the
 #     card fixtures time-invariant for exactly this reason.
-#   * It has no `pull_request` trigger, so it never reports a PR status check
-#     and cannot disturb the "exactly one `test` status" invariant that
-#     backend-tests.yml and its docs-skip companion maintain.
+#   * Its `pull_request` trigger is path-filtered to the seed data and this
+#     workflow, so it reports on the PRs that edit them and stays silent
+#     everywhere else. It reports under the context name `catalog-freshness`,
+#     never `test`, so it cannot disturb the "exactly one `test` status"
+#     invariant that backend-tests.yml and its docs-skip companion maintain.
 #
 # A failure here means "go get the next quarter's categories from the
 # issuers' own pages", and blocks nothing in the meantime. GitHub emails the
@@ -44,5 +46,10 @@ jobs:
 
       # No pip install: the checker reads the seed file rather than the
       # database precisely so it needs neither Postgres nor any dependency.
+      # This step is load-bearing and has already broken once — the seed module
+      # imported SQLAlchemy at module level, so the checker died with
+      # ModuleNotFoundError and reported red on a PR whose catalog data was
+      # perfectly current. `test_check_catalog_freshness.py` now pins the seed
+      # module's top-level imports to the standard library so it cannot recur.
       - name: Check rotating category freshness
         run: python3 scripts/check_catalog_freshness.py

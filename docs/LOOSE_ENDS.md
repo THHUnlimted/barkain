@@ -209,3 +209,15 @@ status reports.
 The general lesson is worth keeping: **a green check is only evidence if you
 know which job produced it.** PR #97 merged 9,851 lines on a 3-second green
 that came from a no-op job.
+
+The converse showed up immediately, on the very PR that added the tripwires.
+`catalog-freshness` went red on PR #100 — not because the catalog was stale
+(Q3 has until 2026-09-30) but because `check_catalog_freshness.py` imports
+`seed_rotating_categories.py`, which imported SQLAlchemy at module level, in a
+job that deliberately runs no `pip install`. A red check nobody can act on
+mutes a tripwire just as thoroughly as a green one nobody can trace, and it
+does it faster. Fixed by deferring the SQLAlchemy imports into the seeding
+functions and pinning both scripts' module-level import surface to the standard
+library with `ast`, the way `check_env_example.py` already reads `config.py`.
+**A checker that parses its source has no dependency surface to break; one that
+imports its source inherits every dependency that source ever grows.**
